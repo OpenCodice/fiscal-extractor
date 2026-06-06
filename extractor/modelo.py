@@ -99,3 +99,30 @@ class Regla:
     def etiqueta(self) -> str:
         base = f"Regla {self.numero}."
         return f"{base} {self.titulo_regla}" if self.titulo_regla else base
+
+
+@dataclass
+class Criterio:
+    """Un criterio del SAT (normativo, Anexo 7; o no vinculativo, Anexo 3).
+
+    Se identifica por 'N/LEY/TIPO' (p. ej. '10/IVA/N', '25/ISR/NV', '1/CFF/PI')
+    y trae un rubro (título) + el texto del criterio. Su contexto es la sección
+    por ley ('I. Criterios del CFF') y el estado (vigente/derogado).
+    """
+    numero: str                      # "10/IVA/N"
+    ley: str                         # "IVA"
+    tipo: str                        # "N" (normativo) | "NV" (no vinculativo) | "PI"
+    rubro: str = ""                  # título del criterio
+    cuerpo: str = ""
+    seccion: str = ""                # "III. Criterios de la Ley del IVA"
+    estado: str = "vigente"          # "vigente" | "derogado"
+
+    @property
+    def clave(self) -> str:
+        """Identificador estable apto para archivo: '10/IVA/N' → '10-iva-n'."""
+        return self.numero.replace("/", "-").lower()
+
+    @property
+    def etiqueta(self) -> str:
+        base = f"Criterio {self.numero}"
+        return f"{base} — {self.rubro}" if self.rubro else base

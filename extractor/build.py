@@ -17,11 +17,12 @@ from pathlib import Path
 
 import re
 
-from .modelo import Regla, Unidad
+from .modelo import Criterio, Regla, Unidad
 from .normalize import normalize_body
 from .parsers import resolver
-from .parsers.articulado import fecha_version, texto_limpio as _texto_articulado
+from .parsers.articulado import fecha_version
 from .parsers.reglas import fecha_publicacion, reglas_y_anomalias, texto_limpio as _texto_reglas
+from .parsers import criterios as _criterios
 from .registro import Documento, POR_CLAVE, activos
 
 
@@ -179,9 +180,61 @@ def _escribir_anomalias(anomalias: list[dict], doc: Documento, data_repo: str) -
                    ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+# ----------------------------- criterios ----------------------------------- #
+def render_criterio_markdown(c: Criterio) -> str:
+    body = normalize_body(c.cuerpo, c.etiqueta)
+    return f"# {c.etiqueta}\n\n{body}\n"
+
+
+def escribir_criterios_texto(crits: list[Criterio], doc: Documento, data_repo: str) -> None:
+    dirp = Path(data_repo) / doc.clave
+    dirp.mkdir(parents=True, exist_ok=True)
+    for old in dirp.glob("*.md"):
+        old.unlink()
+    for c in crits:
+        (dirp / f"{c.clave}.md").write_text(render_criterio_markdown(c), encoding="utf-8")
+
+
+def escribir_criterios_metadata(crits: list[Criterio], doc: Documento, data_repo: str,
+                                version: str | None) -> None:
+    meta_dir = Path(data_repo) / "metadata" / doc.clave
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    anio = (version or "")[:4]
+    desde = f"{anio}-01-01" if anio else None
+    hasta = f"{anio}-12-31" if anio else None
+    indice = [
+        {
+            "clave": c.clave, "numero": c.numero, "ley": c.ley, "tipo": c.tipo,
+            "estado": c.estado, "etiqueta": c.etiqueta, "rubro": c.rubro,
+            "cita": f"Criterio {c.numero}", "seccion": c.seccion,
+            "vigente_desde": desde, "vigente_hasta": hasta,
+            "archivo": f"{doc.clave}/{c.clave}.md",
+        }
+        for c in crits
+    ]
+    doc_idx = {
+        "documento": doc.clave, "etiqueta": doc.etiqueta, "sigla": doc.sigla,
+        "tipo": doc.tipo, "fuente": doc.url, "version": version,
+        "vigente_desde": desde, "vigente_hasta": hasta,
+        "num_articulos": len(crits), "criterios": indice,
+    }
+    (meta_dir / "articulos.json").write_text(
+        json.dumps(doc_idx, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (meta_dir / "reformas.json").write_text("{}\n", encoding="utf-8")
+
+
 def build_documento(doc: Documento, pdf_path: str, data_repo: str,
                     what: str = "all") -> list:
     """Parsea un documento y materializa las capas pedidas. Devuelve sus unidades."""
+    if doc.parser == "criterios":
+        crits = _criterios.parse(pdf_path, doc)
+        v = _criterios.fecha_publicacion(pdf_path)
+        version = v.isoformat() if v else None
+        if what in ("all", "text"):
+            escribir_criterios_texto(crits, doc, data_repo)
+        if what in ("all", "metadata"):
+            escribir_criterios_metadata(crits, doc, data_repo, version=version)
+        return crits
     if doc.parser == "reglas":
         unidades, anomalias = reglas_y_anomalias(_texto_reglas(pdf_path))
         v = fecha_publicacion(pdf_path)

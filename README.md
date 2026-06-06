@@ -21,7 +21,8 @@ registro.py          DOCUMENTOS[]: qué se extrae (clave, sigla, tipo, parser, u
 modelo.py            Unidad: artículo + sufijos ricos (14-A, 17-H Bis, 32-B Quáter)
 parsers/articulado.py  leyes/códigos/reglamentos (port de la CPEUM, generalizado)
 parsers/reglas.py    RMF — reglas jerárquicas N.N.N.N (Título→Capítulo→Sección)
-parsers/criterios.py criterios normativos        ← pendiente (Fase 4)
+parsers/criterios.py criterios del SAT — N/LEY/TIPO (Anexos 7 y 3 de la RMF)
+validate.py          invariantes por tipo (gate de CI): `extractor validar`
 normalize.py         cuerpo crudo → párrafos, notas de reforma en cursiva
 build.py             itera el registro → <clave>/NNN.md + metadata/<clave>/*.json
 ```
@@ -56,6 +57,7 @@ regresión barato.
 | 1 | Refactor + leyes/códigos (CFF piloto) | ✅ CFF: 421 unidades, art. 1–263 |
 | 2 | Resto de leyes + reglamentos | ✅ 13 docs, ~2 510 art., suite de pruebas verde |
 | 3 | RMF (`parsers/reglas.py`) + vigencia anual | ✅ RMF 2026: 1208 reglas |
-| 4 | Criterios normativos y no vinculativos | pendiente |
-| 5 | Validador de invariantes + CI de vigilancia (DOF) | pendiente |
+| 4 | Criterios normativos y no vinculativos | ✅ 153 + 81 criterios (Anexos 7 y 3) |
+| 5 | Validador de invariantes (`extractor validar`) | ✅ 16 docs: TODO OK |
+| 5b | CI de vigilancia (DOF/SAT) | pendiente |
 | — | Capa de ingesta RAG (segmentos + pasajes.jsonl) | pendiente |

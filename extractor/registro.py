@@ -76,9 +76,17 @@ DOCUMENTOS: list[Documento] = [
               tipo="rmf", parser="reglas",
               url="https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/"
                   "documentos2026/rmf/rmf/RMF_2026-DOF-28122025.pdf"),
-    # --- Criterios (parser de fase posterior) -------------------------------
-    Documento("criterios-normativos", "Criterios Normativos del SAT", "Criterio Normativo",
-              tipo="criterios", parser="criterios", activo=False),
+    # --- Criterios del SAT (anexos de la RMF) -------------------------------
+    Documento("criterios-normativos",
+              "Compilación de criterios normativos fiscales (Anexo 7 RMF 2026)",
+              "Criterio Normativo", tipo="criterios", parser="criterios",
+              url="https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/"
+                  "documentos2026/rmf/anexos/Anexo_7_RMF2026-09012026.pdf"),
+    Documento("criterios-no-vinculativos",
+              "Compilación de criterios sobre prácticas fiscales indebidas (Anexo 3 RMF 2026)",
+              "Criterio No Vinculativo", tipo="criterios", parser="criterios",
+              url="https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/"
+                  "documentos2026/rmf/anexos/Anexo_3_RMF2026-09012026.pdf"),
 ]
 
 POR_CLAVE = {d.clave: d for d in DOCUMENTOS}

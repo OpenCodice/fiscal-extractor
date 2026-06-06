@@ -26,7 +26,7 @@ MIN_BODY_CHARS = 8
 
 
 def _items(idx: dict) -> list[dict]:
-    return idx.get("articulos") or idx.get("reglas") or []
+    return idx.get("articulos") or idx.get("reglas") or idx.get("criterios") or []
 
 
 def _cuerpo(md_text: str) -> str:
@@ -74,10 +74,21 @@ def validar(data_repo: str) -> tuple[bool, list[tuple[bool, str, str]]]:
         # --- específicos por tipo ------------------------------------------
         if tipo == "rmf":
             _validar_reglas(clave, idx, items, repo, chk)
+        elif tipo == "criterios":
+            _validar_criterios(clave, items, chk)
         else:
             _validar_articulado(clave, items, chk)
 
     return all(c[0] for c in checks), checks
+
+
+def _validar_criterios(clave: str, items: list[dict], chk) -> None:
+    # El número 'N/LEY/TIPO' debe ser coherente con los campos ley/tipo.
+    malos = [c["numero"] for c in items
+             if c["numero"] != f"{c['numero'].split('/')[0]}/{c['ley']}/{c['tipo']}"]
+    chk(not malos, f"[{clave}] número coherente con ley/tipo", ", ".join(malos[:6]))
+    raros = [c["numero"] for c in items if c.get("estado") not in ("vigente", "derogado")]
+    chk(not raros, f"[{clave}] estado válido (vigente/derogado)", ", ".join(raros[:6]))
 
 
 def _validar_articulado(clave: str, items: list[dict], chk) -> None:
