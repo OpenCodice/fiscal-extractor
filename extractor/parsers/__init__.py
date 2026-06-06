@@ -6,10 +6,11 @@ reglamentos); `reglas` (RMF) y `criterios` llegan en fases posteriores.
 """
 from __future__ import annotations
 
-from . import articulado
+from . import articulado, reglas
 
 PARSERS = {
     "articulado": articulado.parse,
+    "reglas": reglas.parse,
 }
 
 

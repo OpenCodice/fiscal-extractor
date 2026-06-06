@@ -15,10 +15,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .modelo import Unidad
+import re
+
+from .modelo import Regla, Unidad
 from .normalize import normalize_body
 from .parsers import resolver
 from .parsers.articulado import fecha_version
+from .parsers.reglas import fecha_publicacion
 from .registro import Documento, POR_CLAVE, activos
 
 
@@ -103,14 +106,81 @@ def escribir_indice_maestro(data_repo: str) -> None:
         encoding="utf-8")
 
 
+# ----------------------------- reglas (RMF) -------------------------------- #
+def render_regla_markdown(r: Regla) -> str:
+    """Texto de la regla: encabezado (número + título) + cuerpo en párrafos."""
+    body = normalize_body(r.cuerpo, r.etiqueta)
+    return f"# {r.etiqueta}\n\n{body}\n"
+
+
+def _vigencia_anual(clave: str) -> tuple[str | None, str | None]:
+    """De 'rmf-2026' → ('2026-01-01', '2026-12-31'). La RMF rige el ejercicio."""
+    m = re.search(r"(\d{4})", clave)
+    if not m:
+        return None, None
+    y = m.group(1)
+    return f"{y}-01-01", f"{y}-12-31"
+
+
+def escribir_reglas_texto(reglas: list[Regla], doc: Documento, data_repo: str) -> None:
+    dirp = Path(data_repo) / doc.clave
+    dirp.mkdir(parents=True, exist_ok=True)
+    for old in dirp.glob("*.md"):
+        old.unlink()
+    for r in reglas:
+        (dirp / f"{r.clave}.md").write_text(render_regla_markdown(r), encoding="utf-8")
+
+
+def escribir_reglas_metadata(reglas: list[Regla], doc: Documento, data_repo: str,
+                             version: str | None) -> None:
+    meta_dir = Path(data_repo) / "metadata" / doc.clave
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    desde, hasta = _vigencia_anual(doc.clave)
+    indice = [
+        {
+            "clave": r.clave,
+            "numero": r.numero,
+            "nivel": r.nivel,
+            "etiqueta": r.etiqueta,
+            "cita": f"Regla {r.numero}. {doc.sigla}",
+            "titulo_regla": r.titulo_regla,
+            "titulo": r.titulo,
+            "capitulo": r.capitulo,
+            "seccion": r.seccion,
+            "referencias": r.referencias,
+            "vigente_desde": desde,
+            "vigente_hasta": hasta,
+            "archivo": f"{doc.clave}/{r.clave}.md",
+        }
+        for r in reglas
+    ]
+    doc_idx = {
+        "documento": doc.clave, "etiqueta": doc.etiqueta, "sigla": doc.sigla,
+        "tipo": doc.tipo, "fuente": doc.url, "version": version,
+        "vigente_desde": desde, "vigente_hasta": hasta,
+        "num_articulos": len(reglas), "reglas": indice,
+    }
+    (meta_dir / "articulos.json").write_text(
+        json.dumps(doc_idx, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # reformas.json vacío: la RMF anual no anota reforma por regla (se sustituye entera).
+    (meta_dir / "reformas.json").write_text("{}\n", encoding="utf-8")
+
+
 def build_documento(doc: Documento, pdf_path: str, data_repo: str,
-                    what: str = "all") -> list[Unidad]:
+                    what: str = "all") -> list:
     """Parsea un documento y materializa las capas pedidas. Devuelve sus unidades."""
     unidades = resolver(doc.parser)(pdf_path, doc)
-    version = None
-    if doc.parser == "articulado":
-        v = fecha_version(pdf_path)
+    if doc.parser == "reglas":
+        v = fecha_publicacion(pdf_path)
         version = v.isoformat() if v else None
+        if what in ("all", "text"):
+            escribir_reglas_texto(unidades, doc, data_repo)
+        if what in ("all", "metadata"):
+            escribir_reglas_metadata(unidades, doc, data_repo, version=version)
+        return unidades
+    # articulado
+    v = fecha_version(pdf_path)
+    version = v.isoformat() if v else None
     if what in ("all", "text"):
         escribir_texto(unidades, doc, data_repo)
     if what in ("all", "metadata"):

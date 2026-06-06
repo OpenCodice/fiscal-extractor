@@ -71,9 +71,12 @@ DOCUMENTOS: list[Documento] = [
          "Reg_LIVA_250914.pdf", tipo="reglamento"),
     _ley("rlieps", "Reglamento de la Ley del IEPS", "RLIEPS",
          "Reg_LIEPS.pdf", tipo="reglamento"),
-    # --- RMF y criterios (parsers de fases posteriores) ---------------------
-    Documento("rmf-2026", "Resolución Miscelánea Fiscal 2026", "RMF 2026",
-              tipo="rmf", parser="reglas", activo=False),
+    # --- RMF (reglas) -------------------------------------------------------
+    Documento("rmf-2026", "Resolución Miscelánea Fiscal para 2026", "RMF 2026",
+              tipo="rmf", parser="reglas",
+              url="https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/"
+                  "documentos2026/rmf/rmf/RMF_2026-DOF-28122025.pdf"),
+    # --- Criterios (parser de fase posterior) -------------------------------
     Documento("criterios-normativos", "Criterios Normativos del SAT", "Criterio Normativo",
               tipo="criterios", parser="criterios", activo=False),
 ]

@@ -67,3 +67,35 @@ class Unidad:
     @property
     def ultima_reforma(self) -> date | None:
         return max(self.fechas_reforma) if self.fechas_reforma else None
+
+
+@dataclass
+class Regla:
+    """Una regla de la RMF (Resolución Miscelánea Fiscal).
+
+    A diferencia de un artículo, la regla se identifica por una numeración
+    jerárquica con puntos ('2.7.1.21') y trae un título descriptivo propio
+    ('Devolución de saldos a favor del IVA'). Su contexto estructural es
+    Título → Capítulo → Sección.
+    """
+    numero: str                      # "2.7.1.21"
+    titulo_regla: str = ""           # descripción de la regla
+    titulo: str = ""                 # "Título 2. Código Fiscal de la Federación"
+    capitulo: str = ""               # "Capítulo 2.7. De los CFDI..."
+    seccion: str = ""                # "Sección 2.7.1. Disposiciones generales"
+    cuerpo: str = ""
+    referencias: list[str] = field(default_factory=list)  # fundamentos: "CFF 69"
+
+    @property
+    def clave(self) -> str:
+        """Identificador estable = el número de la regla: '2.7.1.21'."""
+        return self.numero
+
+    @property
+    def nivel(self) -> int:
+        return self.numero.count(".") + 1
+
+    @property
+    def etiqueta(self) -> str:
+        base = f"Regla {self.numero}."
+        return f"{base} {self.titulo_regla}" if self.titulo_regla else base
