@@ -49,6 +49,11 @@ MESES = {m: i for i, m in enumerate(
 PUB_RE = re.compile(r"(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})")
 
 
+def es_ruido(texto: str) -> bool:
+    """Línea de encabezado/pie del DOF (para alinear pasajes en locate.py)."""
+    return bool(DOF_HEADER_RE.match(texto) or PAGE_NUM_RE.match(texto))
+
+
 def fecha_publicacion(pdf_path: str) -> date | None:
     with pdfplumber.open(pdf_path) as pdf:
         head = pdf.pages[0].extract_text() or ""

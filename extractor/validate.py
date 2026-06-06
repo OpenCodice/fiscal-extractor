@@ -71,6 +71,16 @@ def validar(data_repo: str) -> tuple[bool, list[tuple[bool, str, str]]]:
         malas = [f for f in ref if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", f)]
         chk(not malas, f"[{clave}] fechas de reforma ISO", ", ".join(malas[:4]))
 
+        # --- pasajes con ubicación en el PDF (si existen) ------------------
+        pas_path = repo / "metadata" / clave / "pasajes.jsonl"
+        if pas_path.exists():
+            pas = [json.loads(l) for l in pas_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            loc = sum(1 for p in pas if p.get("coordenadas"))
+            pct = (100 * loc // len(pas)) if pas else 0
+            # < 50% localizado delata un filtro de encabezado roto, no best-effort.
+            chk(not pas or pct >= 50, f"[{clave}] pasajes ubicados en el PDF",
+                f"{loc}/{len(pas)} ({pct}%)")
+
         # --- específicos por tipo ------------------------------------------
         if tipo == "rmf":
             _validar_reglas(clave, idx, items, repo, chk)

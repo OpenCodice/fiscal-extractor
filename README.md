@@ -22,6 +22,8 @@ modelo.py            Unidad: artículo + sufijos ricos (14-A, 17-H Bis, 32-B Qu�
 parsers/articulado.py  leyes/códigos/reglamentos (port de la CPEUM, generalizado)
 parsers/reglas.py    RMF — reglas jerárquicas N.N.N.N (Título→Capítulo→Sección)
 parsers/criterios.py criterios del SAT — N/LEY/TIPO (Anexos 7 y 3 de la RMF)
+pasajes.py           párrafos citables por unidad (id, cita, texto)
+locate.py            alinea cada pasaje contra el PDF → página + rects (resaltado)
 validate.py          invariantes por tipo (gate de CI): `extractor validar`
 normalize.py         cuerpo crudo → párrafos, notas de reforma en cursiva
 build.py             itera el registro → <clave>/NNN.md + metadata/<clave>/*.json

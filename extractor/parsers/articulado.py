@@ -128,6 +128,20 @@ def texto_limpio(pdf_path: str, doc: Documento) -> str:
     return "\n".join(_quitar_encabezados(t, fuera) for t in paginas)
 
 
+def es_ruido_factory(pdf_path: str, doc: Documento):
+    """Predicado 'línea es encabezado/pie' para alinear pasajes contra el PDF
+    (locate.py). Replica `_quitar_encabezados`: prefijos de la Cámara, pie
+    'N de M' y el título corrido del documento."""
+    with pdfplumber.open(pdf_path) as pdf:
+        paginas = [p.extract_text() or "" for p in pdf.pages]
+    titulos = set(doc.titulos_encabezado) | set(_titulo_corrido(paginas))
+
+    def es_ruido(texto: str) -> bool:
+        return (texto.startswith(HEADER_PREFIXES) or bool(PAGE_FOOTER_RE.match(texto))
+                or texto in titulos)
+    return es_ruido
+
+
 def fecha_version(pdf_path: str) -> date | None:
     """Fecha de la última reforma incorporada al PDF = versión del snapshot."""
     with pdfplumber.open(pdf_path) as pdf:

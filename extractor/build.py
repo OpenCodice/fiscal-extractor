@@ -19,10 +19,12 @@ import re
 
 from .modelo import Criterio, Regla, Unidad
 from .normalize import normalize_body
+from .locate import annotate
+from .pasajes import todos_los_pasajes
 from .parsers import resolver
 from .parsers.articulado import fecha_version
 from .parsers.reglas import fecha_publicacion, reglas_y_anomalias, texto_limpio as _texto_reglas
-from .parsers import criterios as _criterios
+from .parsers import articulado as _articulado, reglas as _reglas, criterios as _criterios
 from .registro import Documento, POR_CLAVE, activos
 
 
@@ -223,6 +225,26 @@ def escribir_criterios_metadata(crits: list[Criterio], doc: Documento, data_repo
     (meta_dir / "reformas.json").write_text("{}\n", encoding="utf-8")
 
 
+# --------------------- pasajes con ubicación en el PDF --------------------- #
+def escribir_pasajes(unidades: list, doc: Documento, pdf_path: str,
+                     data_repo: str) -> tuple[int, int]:
+    """metadata/<clave>/pasajes.jsonl: párrafos citables + página/rects del PDF.
+
+    Devuelve (total, localizados). El filtrado de encabezado para alinear depende
+    de la fuente (Cámara de Diputados vs SAT/DOF).
+    """
+    pasajes = todos_los_pasajes(unidades, doc)
+    es_ruido = (_articulado.es_ruido_factory(pdf_path, doc)
+                if doc.parser == "articulado" else _reglas.es_ruido)
+    annotate(pasajes, pdf_path, es_ruido)
+    meta_dir = Path(data_repo) / "metadata" / doc.clave
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    with (meta_dir / "pasajes.jsonl").open("w", encoding="utf-8") as fh:
+        for p in pasajes:
+            fh.write(json.dumps(p, ensure_ascii=False) + "\n")
+    return len(pasajes), sum(1 for p in pasajes if p.get("coordenadas"))
+
+
 def build_documento(doc: Documento, pdf_path: str, data_repo: str,
                     what: str = "all") -> list:
     """Parsea un documento y materializa las capas pedidas. Devuelve sus unidades."""
@@ -234,6 +256,7 @@ def build_documento(doc: Documento, pdf_path: str, data_repo: str,
             escribir_criterios_texto(crits, doc, data_repo)
         if what in ("all", "metadata"):
             escribir_criterios_metadata(crits, doc, data_repo, version=version)
+            escribir_pasajes(crits, doc, pdf_path, data_repo)
         return crits
     if doc.parser == "reglas":
         unidades, anomalias = reglas_y_anomalias(_texto_reglas(pdf_path))
@@ -244,6 +267,7 @@ def build_documento(doc: Documento, pdf_path: str, data_repo: str,
         if what in ("all", "metadata"):
             escribir_reglas_metadata(unidades, doc, data_repo, version=version)
             _escribir_anomalias(anomalias, doc, data_repo)
+            escribir_pasajes(unidades, doc, pdf_path, data_repo)
         return unidades
     unidades = resolver(doc.parser)(pdf_path, doc)
     # articulado
@@ -253,6 +277,7 @@ def build_documento(doc: Documento, pdf_path: str, data_repo: str,
         escribir_texto(unidades, doc, data_repo)
     if what in ("all", "metadata"):
         escribir_metadata(unidades, doc, data_repo, version=version)
+        escribir_pasajes(unidades, doc, pdf_path, data_repo)
     return unidades
 
 
