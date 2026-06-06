@@ -13,6 +13,7 @@ from collections import Counter
 from .build import build, build_documento
 from .parsers.articulado import fecha_version
 from .registro import DOCUMENTOS, POR_CLAVE, activos
+from .validate import format_report, validar
 
 
 def _cmd_listar(_a) -> int:
@@ -63,6 +64,13 @@ def _cmd_build(a) -> int:
     return 0
 
 
+def _cmd_validar(a) -> int:
+    ok, checks = validar(a.out)
+    print(format_report(checks))
+    print("\n" + ("✓ TODO OK" if ok else "✗ HAY FALLAS"))
+    return 0 if ok else 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="extractor", description="Extractor del corpus fiscal")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -74,6 +82,10 @@ def main(argv=None) -> int:
     sp.add_argument("--doc", required=True)
     sp.add_argument("--pdf", required=True)
     sp.set_defaults(fn=_cmd_stats)
+
+    sp = sub.add_parser("validar", help="corre los invariantes sobre el repo de datos")
+    sp.add_argument("--out", required=True, help="repo de datos a validar")
+    sp.set_defaults(fn=_cmd_validar)
 
     sp = sub.add_parser("build", help="parsea y materializa texto + metadata")
     sp.add_argument("--doc", action="append", help="clave(s) a construir; omitir = todos los activos")

@@ -20,8 +20,8 @@ import re
 from .modelo import Regla, Unidad
 from .normalize import normalize_body
 from .parsers import resolver
-from .parsers.articulado import fecha_version
-from .parsers.reglas import fecha_publicacion
+from .parsers.articulado import fecha_version, texto_limpio as _texto_articulado
+from .parsers.reglas import fecha_publicacion, reglas_y_anomalias, texto_limpio as _texto_reglas
 from .registro import Documento, POR_CLAVE, activos
 
 
@@ -166,18 +166,33 @@ def escribir_reglas_metadata(reglas: list[Regla], doc: Documento, data_repo: str
     (meta_dir / "reformas.json").write_text("{}\n", encoding="utf-8")
 
 
+def _escribir_anomalias(anomalias: list[dict], doc: Documento, data_repo: str) -> None:
+    """Líneas ambiguas que el parser de reglas NO tomó como regla (auditoría).
+
+    No es la fuente de verdad; es el registro de lo descartado para que el
+    validador / un humano confirmen que ninguna era una regla real perdida.
+    """
+    meta_dir = Path(data_repo) / "metadata" / doc.clave
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    (meta_dir / "anomalias.json").write_text(
+        json.dumps({"documento": doc.clave, "anomalias": anomalias},
+                   ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def build_documento(doc: Documento, pdf_path: str, data_repo: str,
                     what: str = "all") -> list:
     """Parsea un documento y materializa las capas pedidas. Devuelve sus unidades."""
-    unidades = resolver(doc.parser)(pdf_path, doc)
     if doc.parser == "reglas":
+        unidades, anomalias = reglas_y_anomalias(_texto_reglas(pdf_path))
         v = fecha_publicacion(pdf_path)
         version = v.isoformat() if v else None
         if what in ("all", "text"):
             escribir_reglas_texto(unidades, doc, data_repo)
         if what in ("all", "metadata"):
             escribir_reglas_metadata(unidades, doc, data_repo, version=version)
+            _escribir_anomalias(anomalias, doc, data_repo)
         return unidades
+    unidades = resolver(doc.parser)(pdf_path, doc)
     # articulado
     v = fecha_version(pdf_path)
     version = v.isoformat() if v else None
