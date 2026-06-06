@@ -1,19 +1,33 @@
 """CLI del extractor fiscal.
 
-    python -m extractor build  --doc cff --pdf CFF.pdf --out ../fiscal-mexicano
-    python -m extractor stats  --doc cff --pdf CFF.pdf
+    python -m extractor build      --doc cff --pdf CFF.pdf --out ../fiscal-mexicano
+    python -m extractor actualizar --out ../fiscal-mexicano   # descarga + reconstruye
+    python -m extractor validar    --out ../fiscal-mexicano
+    python -m extractor stats      --doc cff --pdf CFF.pdf
     python -m extractor listar
 """
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
+import tempfile
+import urllib.request
 from collections import Counter
+from pathlib import Path
 
 from .build import build, build_documento
 from .parsers.articulado import fecha_version
 from .registro import DOCUMENTOS, POR_CLAVE, activos
 from .validate import format_report, validar
+
+UA = "Mozilla/5.0 (fiscal-extractor; vigilancia de reformas)"
+
+
+def _descargar(url: str, dest: str) -> None:
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=180) as r, open(dest, "wb") as f:
+        shutil.copyfileobj(r, f)
 
 
 def _cmd_listar(_a) -> int:
@@ -64,6 +78,35 @@ def _cmd_build(a) -> int:
     return 0
 
 
+def _cmd_actualizar(a) -> int:
+    """Descarga las fuentes del registro y reconstruye el repo de datos.
+
+    Pensado para correr en CI: git detecta los cambios; un fallo de descarga de
+    un documento no tumba a los demás.
+    """
+    docs = [POR_CLAVE[c] for c in a.doc] if a.doc else activos()
+    with tempfile.TemporaryDirectory() as td:
+        pdf_por_clave: dict[str, str] = {}
+        for d in docs:
+            if not d.url:
+                print(f"· {d.clave}: sin URL, se omite")
+                continue
+            dest = str(Path(td) / f"{d.clave}.pdf")
+            try:
+                _descargar(d.url, dest)
+                pdf_por_clave[d.clave] = dest
+                print(f"↓ {d.clave}")
+            except Exception as e:                       # noqa: BLE001 — CI robusto
+                print(f"✗ {d.clave}: error al descargar — {e}")
+        if not pdf_por_clave:
+            print("Nada que construir.")
+            return 1
+        salida = build(list(pdf_por_clave), pdf_por_clave, a.out, what="all")
+    for clave, u in salida.items():
+        print(f"✓ {clave}: {len(u)} unidades")
+    return 0
+
+
 def _cmd_validar(a) -> int:
     ok, checks = validar(a.out)
     print(format_report(checks))
@@ -82,6 +125,12 @@ def main(argv=None) -> int:
     sp.add_argument("--doc", required=True)
     sp.add_argument("--pdf", required=True)
     sp.set_defaults(fn=_cmd_stats)
+
+    sp = sub.add_parser("actualizar",
+                        help="descarga las fuentes del registro y reconstruye el repo")
+    sp.add_argument("--doc", action="append", help="clave(s); omitir = todos los activos")
+    sp.add_argument("--out", required=True, help="repo de datos de salida")
+    sp.set_defaults(fn=_cmd_actualizar)
 
     sp = sub.add_parser("validar", help="corre los invariantes sobre el repo de datos")
     sp.add_argument("--out", required=True, help="repo de datos a validar")

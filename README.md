@@ -36,6 +36,12 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 curl -L -o CFF.pdf https://www.diputados.gob.mx/LeyesBiblio/pdf/CFF.pdf
 .venv/bin/python -m extractor build --doc cff --pdf CFF.pdf --out ../fiscal-mexicano
 
+# Descargar TODAS las fuentes del registro y reconstruir (lo que corre la CI)
+.venv/bin/python -m extractor actualizar --out ../fiscal-mexicano
+
+# Validar invariantes (gate de CI)
+.venv/bin/python -m extractor validar --out ../fiscal-mexicano
+
 # Diagnóstico de parseo (no escribe)
 .venv/bin/python -m extractor stats --doc cff --pdf CFF.pdf
 
@@ -59,5 +65,5 @@ regresión barato.
 | 3 | RMF (`parsers/reglas.py`) + vigencia anual | ✅ RMF 2026: 1208 reglas |
 | 4 | Criterios normativos y no vinculativos | ✅ 153 + 81 criterios (Anexos 7 y 3) |
 | 5 | Validador de invariantes (`extractor validar`) | ✅ 16 docs: TODO OK |
-| 5b | CI de vigilancia (DOF/SAT) | pendiente |
+| 5b | CI de vigilancia (DOF/SAT) | ✅ `vigilar-fiscal.yml` + `extractor actualizar` |
 | — | Capa de ingesta RAG (segmentos + pasajes.jsonl) | pendiente |
