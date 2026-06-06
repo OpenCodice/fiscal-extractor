@@ -1,5 +1,5 @@
 """Pruebas del parser de reglas (RMF), con casos para romperlo."""
-from extractor.parsers.reglas import parse_texto, DOF_HEADER_RE
+from extractor.parsers.reglas import parse_texto, reglas_y_anomalias, DOF_HEADER_RE
 
 
 def numeros(texto):
@@ -62,6 +62,35 @@ def test_seccion_resetea_en_nuevo_capitulo():
     assert r1.seccion == "Sección 2.6.1. Disposiciones generales"
     assert r2.capitulo == "Capítulo 2.7. CFDI"
     assert r2.seccion == "", "la sección debe resetearse al cambiar de capítulo"
+
+
+def test_cita_otra_rama_capitalizada_se_descarta():
+    # La señal robusta: aunque la cita venga CAPITALIZADA, si su número no cae
+    # bajo el contexto estructural vigente, no es regla (la mayúscula sola la
+    # habría aceptado por error).
+    texto = (
+        "Sección 2.7.1. Disposiciones generales\n"
+        "Comprobantes con el público en general\n"
+        "2.7.1.1. Para los efectos de esta RMF, conforme a la regla\n"
+        "3.1.5. El contribuyente deberá observar lo dispuesto en la materia."
+    )
+    rs, anom = reglas_y_anomalias(texto)
+    assert [r.numero for r in rs] == ["2.7.1.1"]
+    assert any(a["numero"] == "3.1.5" and a["motivo"] == "cita_otra_rama_capitalizada"
+               for a in anom), "la cita de otra rama debe registrarse como anomalía"
+
+
+def test_cita_misma_rama_minuscula_se_descarta_y_registra():
+    texto = (
+        "Sección 2.7.6. Proveedores\n"
+        "Título de regla\n"
+        "2.7.6.3. Para los efectos de esta RMF, conforme a la regla\n"
+        "2.7.6.4. y, en su caso, la regla siguiente."
+    )
+    rs, anom = reglas_y_anomalias(texto)
+    assert [r.numero for r in rs] == ["2.7.6.3"]
+    assert any(a["numero"] == "2.7.6.4" and a["motivo"] == "consistente_minuscula"
+               for a in anom)
 
 
 def test_encabezado_dof_se_reconoce():

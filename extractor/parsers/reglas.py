@@ -30,9 +30,12 @@ DOF_HEADER_RE = re.compile(
 # Pie con número de página: "123" sola, o "(Primera Sección)" etc. (best-effort).
 PAGE_NUM_RE = re.compile(r"^\d{1,4}$")
 
-# Una regla: número jerárquico (≥2 niveles) + cuerpo que EMPIEZA con mayúscula.
-# La mayúscula descarta las citas a media oración ("2.3.4. y la ficha…").
-REGLA_RE = re.compile(r"^(\d+(?:\.\d+)+)\.\s+([A-ZÁÉÍÓÚÑ¿«“].*)$")
+# Candidata a regla: número jerárquico (≥2 niveles) + lo que siga.
+REGLA_NUM_RE = re.compile(r"^(\d+(?:\.\d+)+)\.\s+(.*)$")
+# Una regla real empieza el cuerpo con mayúscula (o signo de apertura). La
+# minúscula delata una cita a media oración ("2.3.4. y la ficha…").
+EMPIEZA_MAYUS_RE = re.compile(r"^[A-ZÁÉÍÓÚÑ¿«“(]")
+NUM_CTX_RE = re.compile(r"(\d+(?:\.\d+)*)")
 
 # Encabezados estructurales.
 TITULO_RE = re.compile(r"^Título\s+(\d+)\.\s*(.*)$")
@@ -74,17 +77,45 @@ def parse(pdf_path: str, doc: Documento) -> list[Regla]:
     return parse_texto(texto_limpio(pdf_path))
 
 
+def _ctx_prefijo(*campos: str) -> str:
+    """Número del contexto estructural más específico disponible (sección>cap>tít)."""
+    for campo in campos:
+        if campo:
+            m = NUM_CTX_RE.search(campo)
+            if m:
+                return m.group(1)
+    return ""
+
+
+def _consistente(numero: str, prefijo: str) -> bool:
+    """¿El número de la regla cae bajo el contexto estructural actual?"""
+    return not prefijo or numero == prefijo or numero.startswith(prefijo + ".")
+
+
 def parse_texto(clean_text: str) -> list[Regla]:
+    """Reglas de la RMF. Atajo de `reglas_y_anomalias` que descarta el reporte."""
+    return reglas_y_anomalias(clean_text)[0]
+
+
+def reglas_y_anomalias(clean_text: str) -> tuple[list[Regla], list[dict]]:
+    """Segmenta en reglas y devuelve también las líneas ambiguas (para auditar).
+
+    Una línea `N.N.N. …` se acepta como regla SOLO si (a) su número concuerda
+    con el contexto estructural vigente y (b) el cuerpo empieza en mayúscula. Las
+    dos señales juntas son mucho más robustas que la mayúscula sola: el contexto
+    descarta citas de otra rama aunque vengan capitalizadas, y la mayúscula
+    descarta citas de la misma rama. Lo que no entra se registra como anomalía,
+    para no descartar nada en silencio (lo revisa el validador / CI).
+    """
     lineas = clean_text.splitlines()
     reglas: list[Regla] = []
+    anomalias: list[dict] = []
     actual: Regla | None = None
     buf: list[str] = []
     cur_titulo = cur_capitulo = cur_seccion = ""
 
     def flush() -> None:
         if actual is not None:
-            # La última línea del buffer es el título de la SIGUIENTE regla; se
-            # extrae fuera. Aquí el buffer ya viene sin ella.
             actual.cuerpo = "\n".join(buf).strip()
             reglas.append(actual)
 
@@ -113,25 +144,45 @@ def parse_texto(clean_text: str) -> list[Regla]:
             cur_seccion = f"Sección {ms.group(1)}. {ms.group(2)}".strip()
             continue
 
-        mr = REGLA_RE.match(s)
+        mr = REGLA_NUM_RE.match(s)
         if mr:
-            # El título descriptivo es la última línea no vacía del buffer actual.
-            titulo_regla = ""
-            while buf and not buf[-1].strip():
-                buf.pop()
-            if buf:
-                titulo_regla = buf.pop().strip()
-            flush()
-            actual = Regla(
-                numero=mr.group(1), titulo_regla=titulo_regla,
-                titulo=cur_titulo, capitulo=cur_capitulo, seccion=cur_seccion,
-            )
-            buf = [mr.group(2)]                 # cuerpo sin el número (ya retirado)
-            continue
+            numero, resto = mr.group(1), mr.group(2)
+            prefijo = _ctx_prefijo(cur_seccion, cur_capitulo, cur_titulo)
+            consistente = _consistente(numero, prefijo)
+            mayus = bool(EMPIEZA_MAYUS_RE.match(resto))
+            if consistente and mayus:
+                titulo_regla = ""
+                while buf and not buf[-1].strip():
+                    buf.pop()
+                if buf:
+                    titulo_regla = buf.pop().strip()
+                flush()
+                actual = Regla(
+                    numero=numero, titulo_regla=titulo_regla,
+                    titulo=cur_titulo, capitulo=cur_capitulo, seccion=cur_seccion,
+                )
+                buf = [resto]
+                continue
+            # No es encabezado de regla: es cita (lo común) o un caso ambiguo.
+            # Se registra y la línea sigue como cuerpo de la regla en curso.
+            if mayus and not consistente:
+                # Cita de OTRA rama capitalizada: la mayúscula sola la habría
+                # aceptado por error. El contexto la atrapa.
+                motivo = "cita_otra_rama_capitalizada"
+            elif consistente and not mayus:
+                # Concuerda con el contexto pero empieza en minúscula: casi
+                # siempre cita de la misma rama; vigilar por si fuera regla real.
+                motivo = "consistente_minuscula"
+            else:
+                motivo = "cita"
+            anomalias.append({
+                "numero": numero, "motivo": motivo, "contexto": prefijo,
+                "texto": resto[:60],
+            })
 
         # Se bufferea siempre (aun sin regla activa): así la línea-título que
         # sigue a un encabezado estructural no se pierde antes de la 1ª regla.
         buf.append(line)
 
     flush()
-    return reglas
+    return reglas, anomalias
