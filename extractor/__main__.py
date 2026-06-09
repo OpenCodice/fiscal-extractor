@@ -9,26 +9,17 @@
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
 import tempfile
-import urllib.request
 from collections import Counter
 from pathlib import Path
 
 from .build import build, build_documento
 from .enrich import DEFAULT_MODELS, caller_for, run_enrichment
+from .fuentes import descargar, url_vigente
 from .parsers.articulado import fecha_version
 from .registro import DOCUMENTOS, POR_CLAVE, activos
 from .validate import format_report, validar
-
-UA = "Mozilla/5.0 (fiscal-extractor; vigilancia de reformas)"
-
-
-def _descargar(url: str, dest: str) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=180) as r, open(dest, "wb") as f:
-        shutil.copyfileobj(r, f)
 
 
 def _cmd_listar(_a) -> int:
@@ -83,28 +74,35 @@ def _cmd_actualizar(a) -> int:
     """Descarga las fuentes del registro y reconstruye el repo de datos.
 
     Pensado para correr en CI: git detecta los cambios; un fallo de descarga de
-    un documento no tumba a los demás.
+    un documento no tumba a los demás, pero sí se reporta con exit code 3 para
+    que el workflow alerte (una URL muerta no debe pasar inadvertida).
     """
     docs = [POR_CLAVE[c] for c in a.doc] if a.doc else activos()
+    fallidos: list[str] = []
     with tempfile.TemporaryDirectory() as td:
         pdf_por_clave: dict[str, str] = {}
         for d in docs:
-            if not d.url:
+            if not d.url and not d.indice:
                 print(f"· {d.clave}: sin URL, se omite")
                 continue
             dest = str(Path(td) / f"{d.clave}.pdf")
             try:
-                _descargar(d.url, dest)
+                url = url_vigente(d)
+                descargar(url, dest)
                 pdf_por_clave[d.clave] = dest
-                print(f"↓ {d.clave}")
+                print(f"↓ {d.clave} ← {url}")
             except Exception as e:                       # noqa: BLE001 — CI robusto
-                print(f"✗ {d.clave}: error al descargar — {e}")
+                fallidos.append(d.clave)
+                print(f"✗ {d.clave}: error al resolver/descargar — {e}")
         if not pdf_por_clave:
             print("Nada que construir.")
             return 1
         salida = build(list(pdf_por_clave), pdf_por_clave, a.out, what="all")
     for clave, u in salida.items():
         print(f"✓ {clave}: {len(u)} unidades")
+    if fallidos:
+        print(f"\n✗ Fuentes fallidas: {', '.join(fallidos)}")
+        return 3
     return 0
 
 
@@ -143,14 +141,14 @@ def _cmd_enriquecer(a) -> int:
     total = {"generados": 0, "omitidos": 0, "fallidos": 0}
     with tempfile.TemporaryDirectory() as td:
         for d in docs:
-            if not d.url:
+            if not d.url and not d.indice:
                 print(f"· {d.clave}: sin URL, se omite")
                 continue
             dest = str(Path(td) / f"{d.clave}.pdf")
             try:
-                _descargar(d.url, dest)
+                descargar(url_vigente(d), dest)
             except Exception as e:                       # noqa: BLE001 — CI robusto
-                print(f"✗ {d.clave}: error al descargar — {e}")
+                print(f"✗ {d.clave}: error al resolver/descargar — {e}")
                 continue
             try:
                 stats = _enriquecer_doc(d, dest, a.out, call, modelo, force=a.force)

@@ -15,6 +15,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 BASE_DIPUTADOS = "https://www.diputados.gob.mx/LeyesBiblio"
+# Página índice de la normatividad RMF del SAT. Los PDF del SAT llevan la fecha
+# en el nombre (RMF_2026-DOF-28122025.pdf), así que la URL directa muere con
+# cada nueva versión: la vigente se resuelve contra esta página (ver fuentes.py).
+INDICE_SAT_RMF = ("https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/"
+                  "normatividad_rmf_rgce2026.html")
 
 
 @dataclass(frozen=True)
@@ -25,6 +30,10 @@ class Documento:
     tipo: str                        # "ley" | "reglamento" | "rmf" | "criterios"
     parser: str                      # "articulado" | "reglas" | "criterios"
     url: str | None = None           # fuente oficial (PDF) para descargar/vigilar
+    # Resolución dinámica (fuentes del SAT): página índice + regex sobre los
+    # href; gana el PDF de fecha más reciente. `url` queda como última conocida.
+    indice: str | None = None
+    patron: str | None = None
     # Líneas de encabezado que se repiten en cada página del PDF y deben quitarse
     # (además de las genéricas de la Cámara). Suele ser el título del documento.
     titulos_encabezado: tuple[str, ...] = field(default_factory=tuple)
@@ -75,18 +84,24 @@ DOCUMENTOS: list[Documento] = [
     Documento("rmf-2026", "Resolución Miscelánea Fiscal para 2026", "RMF 2026",
               tipo="rmf", parser="reglas",
               url="https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/"
-                  "documentos2026/rmf/rmf/RMF_2026-DOF-28122025.pdf"),
+                  "documentos2026/rmf/rmf/RMF_2026-DOF-28122025.pdf",
+              indice=INDICE_SAT_RMF,
+              patron=r"documentos2026/rmf/rmf/RMF_2026.*\.pdf$"),
     # --- Criterios del SAT (anexos de la RMF) -------------------------------
     Documento("criterios-normativos",
               "Compilación de criterios normativos fiscales (Anexo 7 RMF 2026)",
               "Criterio Normativo", tipo="criterios", parser="criterios",
               url="https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/"
-                  "documentos2026/rmf/anexos/Anexo_7_RMF2026-09012026.pdf"),
+                  "documentos2026/rmf/anexos/Anexo_7_RMF2026-09012026.pdf",
+              indice=INDICE_SAT_RMF,
+              patron=r"documentos2026/rmf/anexos/Anexo_7_RMF2026.*\.pdf$"),
     Documento("criterios-no-vinculativos",
               "Compilación de criterios sobre prácticas fiscales indebidas (Anexo 3 RMF 2026)",
               "Criterio No Vinculativo", tipo="criterios", parser="criterios",
               url="https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/"
-                  "documentos2026/rmf/anexos/Anexo_3_RMF2026-09012026.pdf"),
+                  "documentos2026/rmf/anexos/Anexo_3_RMF2026-09012026.pdf",
+              indice=INDICE_SAT_RMF,
+              patron=r"documentos2026/rmf/anexos/Anexo_3_RMF2026.*\.pdf$"),
 ]
 
 POR_CLAVE = {d.clave: d for d in DOCUMENTOS}
