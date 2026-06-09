@@ -108,16 +108,59 @@ def _cmd_actualizar(a) -> int:
     return 0
 
 
-def _cmd_enriquecer(a) -> int:
-    doc = POR_CLAVE[a.doc]
-    unidades = build_documento(doc, a.pdf, data_repo="/dev/null", what="none")
-    modelo = a.modelo or DEFAULT_MODELS[a.proveedor]
-    call = caller_for(a.proveedor, modelo)
-    stats = run_enrichment(unidades, doc, a.out, call, modelo, force=a.force)
+def _enriquecer_doc(doc, pdf: str, out: str, call, modelo: str, force: bool) -> dict:
+    unidades = build_documento(doc, pdf, data_repo="/dev/null", what="none")
+    stats = run_enrichment(unidades, doc, out, call, modelo, force=force)
     print(f"{doc.clave} ({modelo}): generados={stats['generados']} "
           f"omitidos={stats['omitidos']} fallidos={stats['fallidos']}")
     for e in stats["errores"][:5]:
         print(f"  ✗ {e}")
+    return stats
+
+
+def _cmd_enriquecer(a) -> int:
+    """Genera la capa de búsqueda (LLM) en metadata/<clave>/generado/.
+
+    Sin --doc procesa todos los documentos activos; sin --pdf descarga cada
+    fuente del registro (igual que `actualizar`). Un fallo de descarga o de un
+    documento no tumba a los demás. `--doc X --pdf Y` (un solo doc) sigue válido.
+    """
+    docs = [POR_CLAVE[c] for c in a.doc] if a.doc else activos()
+    # Validar el uso ANTES de construir el caller (que exige API key).
+    if a.pdf and len(docs) != 1:
+        print("✗ --pdf solo es válido con un único --doc; "
+              "omítelo para descargar las fuentes del registro.")
+        return 1
+
+    modelo = a.modelo or DEFAULT_MODELS[a.proveedor]
+    call = caller_for(a.proveedor, modelo)
+
+    # PDF explícito: un único documento, sin descargas.
+    if a.pdf:
+        _enriquecer_doc(docs[0], a.pdf, a.out, call, modelo, force=a.force)
+        return 0
+
+    total = {"generados": 0, "omitidos": 0, "fallidos": 0}
+    with tempfile.TemporaryDirectory() as td:
+        for d in docs:
+            if not d.url:
+                print(f"· {d.clave}: sin URL, se omite")
+                continue
+            dest = str(Path(td) / f"{d.clave}.pdf")
+            try:
+                _descargar(d.url, dest)
+            except Exception as e:                       # noqa: BLE001 — CI robusto
+                print(f"✗ {d.clave}: error al descargar — {e}")
+                continue
+            try:
+                stats = _enriquecer_doc(d, dest, a.out, call, modelo, force=a.force)
+            except Exception as e:                       # noqa: BLE001 — CI robusto
+                print(f"✗ {d.clave}: error al enriquecer — {e}")
+                continue
+            for k in total:
+                total[k] += stats[k]
+    print(f"\nTotal: generados={total['generados']} "
+          f"omitidos={total['omitidos']} fallidos={total['fallidos']}")
     return 0
 
 
@@ -148,8 +191,9 @@ def main(argv=None) -> int:
 
     sp = sub.add_parser("enriquecer",
                         help="genera la capa de búsqueda (LLM) en metadata/<clave>/generado/")
-    sp.add_argument("--doc", required=True)
-    sp.add_argument("--pdf", required=True)
+    sp.add_argument("--doc", action="append", help="clave(s); omitir = todos los activos")
+    sp.add_argument("--pdf", help="PDF local (solo válido con un único --doc); "
+                                  "omitir = descargar las fuentes del registro")
     sp.add_argument("--out", required=True, help="repo de datos de salida")
     sp.add_argument("--proveedor", choices=["anthropic", "openai"], default="anthropic")
     sp.add_argument("--modelo", default=None, help="override del modelo por defecto")

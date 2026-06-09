@@ -45,6 +45,51 @@ def test_validate_rechaza_campos_faltantes():
         enrich.validate({"denominacion_comun": "x"})       # faltan listas
 
 
+def test_clean_list_normaliza_salida_sucia():
+    assert enrich._clean_list("residencia") == ["residencia"]   # string suelto
+    assert enrich._clean_list(["  a ", "", None, "b", 3]) == ["a", "b", "3"]
+    assert enrich._clean_list(None) == []
+    assert enrich._clean_list({"x": 1}) == []                   # no-lista → vacío
+    assert enrich._clean_list([True, "ok"]) == ["ok"]           # bool no es número
+
+
+def test_validate_tolera_una_lista_vacia():
+    # temas vacío pero las otras listas tienen contenido → válido (aporta recall).
+    data = {
+        "denominacion_comun": "Artículo derogado",
+        "resumen": "El artículo fue derogado.",
+        "temas": [],
+        "terminos_coloquiales": ["artículo 70 bis derogado"],
+        "preguntas_ejemplo": ["¿sigue vigente el 70 bis?"],
+    }
+    enrich.validate(data)                                       # no lanza
+
+
+def test_validate_rechaza_todas_las_listas_vacias():
+    data = {
+        "denominacion_comun": "x", "resumen": "y",
+        "temas": [], "terminos_coloquiales": [], "preguntas_ejemplo": [],
+    }
+    with pytest.raises(ValueError):
+        enrich.validate(data)
+
+
+def test_assemble_normaliza_temas_no_lista():
+    # Reproduce el fallo real: el LLM devuelve `temas` como string + entradas
+    # sucias. assemble normaliza y NO descarta la unidad.
+    data = {
+        "denominacion_comun": "  Residencia fiscal ",
+        "temas": "residencia",                                 # string, no lista
+        "terminos_coloquiales": ["  dónde pago ", ""],
+        "resumen": " Define la residencia. ",
+        "preguntas_ejemplo": ["¿soy residente?"],
+    }
+    rec = enrich.assemble(_unidad(), CFF, "texto", data, "m")
+    assert rec["temas"] == ["residencia"]
+    assert rec["terminos_coloquiales"] == ["dónde pago"]
+    assert rec["denominacion_comun"] == "Residencia fiscal"
+
+
 def test_needs_refresh_por_hash():
     u = _unidad()
     rec = enrich.enrich_unit(u, CFF, _call, "m")
@@ -70,3 +115,14 @@ def test_run_enrichment_best_effort_salta_fallos(tmp_path):
     s = enrich.run_enrichment([_unidad()], CFF, str(tmp_path),
                               lambda _p: "inválido", "m", reintentos=1)
     assert s["fallidos"] == 1 and s["generados"] == 0       # no aborta
+
+
+def test_cli_pdf_con_multidoc_es_error(tmp_path):
+    """--pdf solo vale con un único --doc; el guard corre ANTES de construir el
+    caller (no exige API key) y devuelve código 1."""
+    from extractor.__main__ import main
+    # Sin --doc el default son todos los activos (>1) → --pdf es inválido.
+    rc = main(["enriquecer", "--pdf", "CFF.pdf", "--out", str(tmp_path),
+               "--proveedor", "openai"])
+    assert rc == 1
+    assert not (tmp_path / "metadata").exists()             # no escribió nada

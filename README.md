@@ -44,6 +44,12 @@ curl -L -o CFF.pdf https://www.diputados.gob.mx/LeyesBiblio/pdf/CFF.pdf
 # Validar invariantes (gate de CI)
 .venv/bin/python -m extractor validar --out ../fiscal-mexicano
 
+# Enriquecer (capa de búsqueda LLM, mejora recall) — TODO el corpus en un comando.
+# Sin --doc procesa los activos; sin --pdf descarga las fuentes del registro.
+# Incremental por hash; --force regenera. Requiere OPENAI_API_KEY (o ANTHROPIC_API_KEY).
+OPENAI_API_KEY=... .venv/bin/python -m extractor enriquecer \
+  --out ../fiscal-mexicano --proveedor openai
+
 # Diagnóstico de parseo (no escribe)
 .venv/bin/python -m extractor stats --doc cff --pdf CFF.pdf
 
@@ -68,4 +74,4 @@ regresión barato.
 | 4 | Criterios normativos y no vinculativos | ✅ 153 + 81 criterios (Anexos 7 y 3) |
 | 5 | Validador de invariantes (`extractor validar`) | ✅ 16 docs: TODO OK |
 | 5b | CI de vigilancia (DOF/SAT) | ✅ `vigilar-fiscal.yml` + `extractor actualizar` |
-| — | Capa de ingesta RAG (segmentos + pasajes.jsonl) | pendiente |
+| 6 | Enriquecimiento LLM (recall) — `extractor enriquecer` | ✅ corpus completo en un comando (autodescarga) + CI `enriquecer.yml` |

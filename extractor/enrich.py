@@ -65,6 +65,9 @@ esta disposición cuando pregunte con palabras coloquiales:
 Reglas estrictas:
 - Apégate al contenido del texto; no inventes obligaciones que no aparezcan.
 - No cites fechas ni números de reforma.
+- Todas las claves de lista deben ser arreglos de strings, nunca null. Si el
+  texto es muy corto o está derogado, devuelve igual arreglos (pueden tener
+  pocos elementos) usando el tema o número del artículo.
 - Devuelve únicamente el JSON.
 
 Texto:
@@ -80,17 +83,58 @@ def _extract_json(raw: str) -> dict:
     return json.loads(m.group(0))
 
 
+def _clean_list(v) -> list[str]:
+    """Coerce la salida del LLM a una lista de strings limpios (tolerante).
+
+    El modelo a veces devuelve un string suelto, números, o entradas vacías
+    para artículos cortos/derogados. En vez de tirar todo el registro,
+    normalizamos: string→[string], se descartan no-strings/vacíos, se hace strip.
+    """
+    if isinstance(v, str):
+        v = [v]
+    if not isinstance(v, list):
+        return []
+    out: list[str] = []
+    for x in v:
+        if isinstance(x, str) and x.strip():
+            out.append(x.strip())
+        elif isinstance(x, (int, float)) and not isinstance(x, bool):
+            out.append(str(x))
+    return out
+
+
+def _normalize(data: dict) -> dict:
+    """Limpia in-place las listas y los textos antes de validar/ensamblar."""
+    for k in CAMPOS_LISTA:
+        data[k] = _clean_list(data.get(k))
+    for k in CAMPOS_TEXTO:
+        if isinstance(data.get(k), str):
+            data[k] = data[k].strip()
+    return data
+
+
 def validate(data: dict) -> None:
+    """Valida un registro YA normalizado (ver `_normalize`).
+
+    Los campos de texto (la denominación y el resumen) anclan el registro y son
+    obligatorios. Las listas de búsqueda pueden quedar vacías individualmente
+    (un artículo corto puede no dar 4-10 temas), pero al menos UNA debe tener
+    contenido para que el enriquecimiento aporte recall; si no, no vale la pena
+    guardarlo (la unidad se indexa por su texto de todas formas).
+    """
     for k in CAMPOS_TEXTO:
         if not isinstance(data.get(k), str) or not data[k].strip():
             raise ValueError(f"campo '{k}' debe ser texto no vacío")
     for k in CAMPOS_LISTA:
         v = data.get(k)
-        if not isinstance(v, list) or not v or not all(isinstance(x, str) for x in v):
-            raise ValueError(f"campo '{k}' debe ser lista de strings no vacía")
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            raise ValueError(f"campo '{k}' debe ser lista de strings")
+    if not any(data.get(k) for k in CAMPOS_LISTA):
+        raise ValueError("ninguna lista de búsqueda tiene contenido")
 
 
 def assemble(unidad, doc: Documento, plain_text: str, data: dict, modelo: str) -> dict:
+    _normalize(data)
     validate(data)
     return {
         "clave": unidad.clave,
@@ -100,11 +144,11 @@ def assemble(unidad, doc: Documento, plain_text: str, data: dict, modelo: str) -
             "modelo": modelo, "schema": SCHEMA_VERSION,
             "hash_texto": text_hash(plain_text), "advertencia": ADVERTENCIA,
         },
-        "denominacion_comun": data["denominacion_comun"].strip(),
-        "temas": [t.strip() for t in data["temas"]],
-        "terminos_coloquiales": [t.strip() for t in data["terminos_coloquiales"]],
-        "resumen": data["resumen"].strip(),
-        "preguntas_ejemplo": [q.strip() for q in data["preguntas_ejemplo"]],
+        "denominacion_comun": data["denominacion_comun"],
+        "temas": data["temas"],
+        "terminos_coloquiales": data["terminos_coloquiales"],
+        "resumen": data["resumen"],
+        "preguntas_ejemplo": data["preguntas_ejemplo"],
     }
 
 
