@@ -17,6 +17,7 @@ from collections import Counter
 from pathlib import Path
 
 from .build import build, build_documento
+from .enrich import DEFAULT_MODELS, caller_for, run_enrichment
 from .parsers.articulado import fecha_version
 from .registro import DOCUMENTOS, POR_CLAVE, activos
 from .validate import format_report, validar
@@ -107,6 +108,19 @@ def _cmd_actualizar(a) -> int:
     return 0
 
 
+def _cmd_enriquecer(a) -> int:
+    doc = POR_CLAVE[a.doc]
+    unidades = build_documento(doc, a.pdf, data_repo="/dev/null", what="none")
+    modelo = a.modelo or DEFAULT_MODELS[a.proveedor]
+    call = caller_for(a.proveedor, modelo)
+    stats = run_enrichment(unidades, doc, a.out, call, modelo, force=a.force)
+    print(f"{doc.clave} ({modelo}): generados={stats['generados']} "
+          f"omitidos={stats['omitidos']} fallidos={stats['fallidos']}")
+    for e in stats["errores"][:5]:
+        print(f"  ✗ {e}")
+    return 0
+
+
 def _cmd_validar(a) -> int:
     ok, checks = validar(a.out)
     print(format_report(checks))
@@ -131,6 +145,16 @@ def main(argv=None) -> int:
     sp.add_argument("--doc", action="append", help="clave(s); omitir = todos los activos")
     sp.add_argument("--out", required=True, help="repo de datos de salida")
     sp.set_defaults(fn=_cmd_actualizar)
+
+    sp = sub.add_parser("enriquecer",
+                        help="genera la capa de búsqueda (LLM) en metadata/<clave>/generado/")
+    sp.add_argument("--doc", required=True)
+    sp.add_argument("--pdf", required=True)
+    sp.add_argument("--out", required=True, help="repo de datos de salida")
+    sp.add_argument("--proveedor", choices=["anthropic", "openai"], default="anthropic")
+    sp.add_argument("--modelo", default=None, help="override del modelo por defecto")
+    sp.add_argument("--force", action="store_true", help="regenerar aunque no cambie el texto")
+    sp.set_defaults(fn=_cmd_enriquecer)
 
     sp = sub.add_parser("validar", help="corre los invariantes sobre el repo de datos")
     sp.add_argument("--out", required=True, help="repo de datos a validar")
