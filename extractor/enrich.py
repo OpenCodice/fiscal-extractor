@@ -18,7 +18,10 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import random
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .pasajes import _bloques
@@ -220,32 +223,59 @@ ni fuente de cita.** La verdad está en el `.md` de la unidad; las citas, en
 """
 
 
+def con_backoff(fn, recuperable, intentos: int = 6, base: float = 5.0,
+                tope: float = 120.0, dormir=time.sleep):
+    """Reintenta `fn` ante errores recuperables con backoff exponencial y
+    jitter completo (espera uniforme en [0, min(tope, base·2^intento)]).
+
+    División de trabajo con el SDK: el cliente ya reintenta los 429/5xx
+    transitorios con su propio backoff corto; esta capa cubre la saturación
+    SOSTENIDA (TPM agotado por minutos), que con un pool de hilos golpea a
+    todos los workers a la vez — el jitter los desfasa para que no vuelvan
+    a embestir en sincronía. Los errores no recuperables se relanzan."""
+    for intento in range(intentos):
+        try:
+            return fn()
+        except Exception as e:                           # noqa: BLE001 — clasifica `recuperable`
+            if not recuperable(e) or intento == intentos - 1:
+                raise
+            dormir(random.uniform(0, min(tope, base * 2 ** intento)))
+
+
 def anthropic_caller(model: str):
     """`call(prompt)->str` con la API de Anthropic (ANTHROPIC_API_KEY)."""
     import anthropic                                    # import perezoso
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(max_retries=5)
 
-    def call(prompt: str) -> str:
+    def llamada(prompt: str) -> str:
         msg = client.messages.create(
             model=model, max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
         )
         return "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
+
+    def call(prompt: str) -> str:
+        return con_backoff(lambda: llamada(prompt),
+                           lambda e: isinstance(e, anthropic.RateLimitError))
     return call
 
 
 def openai_caller(model: str):
     """`call(prompt)->str` con la API de OpenAI (OPENAI_API_KEY)."""
-    from openai import OpenAI                           # import perezoso
-    client = OpenAI()
+    from openai import OpenAI, RateLimitError           # import perezoso
+    client = OpenAI(max_retries=5)
 
-    def call(prompt: str) -> str:
+    def llamada(prompt: str) -> str:
         resp = client.chat.completions.create(
             model=model, max_tokens=1500,
             response_format={"type": "json_object"},
             messages=[{"role": "user", "content": prompt}],
         )
         return resp.choices[0].message.content or ""
+
+    def call(prompt: str) -> str:
+        return con_backoff(lambda: llamada(prompt),
+                           lambda e: isinstance(e, RateLimitError))
     return call
 
 
@@ -259,42 +289,62 @@ def caller_for(proveedor: str, model: str):
 
 def run_enrichment(unidades, doc: Documento, data_repo, call, modelo: str,
                    force: bool = False, reintentos: int = 2,
-                   progreso_cada: int = 25) -> dict:
+                   progreso_cada: int = 25, hilos: int = 8) -> dict:
     """Genera/actualiza el enriquecimiento de las unidades que lo necesitan.
 
     Best-effort: si el LLM devuelve algo inválido, reintenta y, si aún falla,
-    SALTA esa unidad sin abortar (esta capa nunca es crítica). Caché por hash.
+    SALTA esa unidad sin abortar (esta capa nunca es crítica). Caché por hash
+    de texto + huella del prompt.
+
+    Las llamadas al LLM van en un pool de `hilos` (en serie, el corpus completo
+    son ~8-9 h y chocaba con el límite de 6 h por job de Actions). Solo la
+    llamada corre en el worker: las escrituras a disco, los contadores y el
+    progreso viven en el hilo principal, así que no hay estado compartido.
+    El backoff ante rate limits vive en el caller (`con_backoff`).
+
     Cada `progreso_cada` unidades procesadas (no cacheadas) imprime el avance
-    con flush: un documento grande (la RMF son ~1,200 reglas) tarda decenas de
-    minutos y sin esto el log de CI queda mudo hasta el final del documento.
+    con flush: un documento grande (la RMF son ~1,200 reglas) tarda y sin esto
+    el log de CI queda mudo hasta el final del documento.
     """
     gen_dir = Path(data_repo) / "metadata" / doc.clave / "generado"
     gen_dir.mkdir(parents=True, exist_ok=True)
     (gen_dir / "README.md").write_text(MANIFEST, encoding="utf-8")
 
-    generados = omitidos = fallidos = 0
-    errores: list[str] = []
-    total = len(unidades)
-    for i, u in enumerate(unidades, 1):
+    omitidos = 0
+    pendientes = []
+    for u in unidades:
         path = gen_dir / f"{u.clave}.json"
         existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
         if not force and not needs_refresh(u, existing):
             omitidos += 1
-            continue
-        record, ultimo = None, None
+        else:
+            pendientes.append(u)
+
+    def generar(u):
+        ultimo = None
         for _ in range(max(1, reintentos)):
             try:
-                record = enrich_unit(u, doc, call, modelo); break
+                return u, enrich_unit(u, doc, call, modelo), None
             except Exception as e:                       # LLM no-determinista: reintenta
                 ultimo = e
-        if record is None:
-            fallidos += 1; errores.append(f"{doc.clave}/{u.clave}: {ultimo}")
-        else:
-            path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-                            encoding="utf-8")
-            generados += 1
-        if progreso_cada and (generados + fallidos) % progreso_cada == 0:
-            print(f"  {doc.clave}: {i}/{total} unidades "
-                  f"(generados={generados} fallidos={fallidos})", flush=True)
+        return u, None, ultimo
+
+    generados = fallidos = 0
+    errores: list[str] = []
+    total = len(unidades)
+    with ThreadPoolExecutor(max_workers=max(1, hilos)) as pool:
+        futuros = [pool.submit(generar, u) for u in pendientes]
+        for futuro in as_completed(futuros):
+            u, record, error = futuro.result()
+            if record is None:
+                fallidos += 1; errores.append(f"{doc.clave}/{u.clave}: {error}")
+            else:
+                (gen_dir / f"{u.clave}.json").write_text(
+                    json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8")
+                generados += 1
+            if progreso_cada and (generados + fallidos) % progreso_cada == 0:
+                print(f"  {doc.clave}: {omitidos + generados + fallidos}/{total} unidades "
+                      f"(generados={generados} fallidos={fallidos})", flush=True)
     return {"generados": generados, "omitidos": omitidos,
             "fallidos": fallidos, "errores": errores}

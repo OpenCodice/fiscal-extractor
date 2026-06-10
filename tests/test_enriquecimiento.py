@@ -140,6 +140,78 @@ def test_needs_refresh_por_prompt():
     assert enrich.needs_refresh(u, viejo) is True
 
 
+class _RateLimit(Exception):
+    pass
+
+
+def test_con_backoff_reintenta_con_jitter_acotado():
+    intentos, esperas = [], []
+
+    def fn():
+        intentos.append(1)
+        if len(intentos) < 3:
+            raise _RateLimit()
+        return "ok"
+
+    out = enrich.con_backoff(fn, lambda e: isinstance(e, _RateLimit),
+                             base=5.0, tope=120.0, dormir=esperas.append)
+    assert out == "ok" and len(intentos) == 3
+    # Jitter completo: uniforme en [0, base·2^intento], creciente por intento.
+    assert len(esperas) == 2
+    assert 0 <= esperas[0] <= 5.0 and 0 <= esperas[1] <= 10.0
+
+
+def test_con_backoff_relanza_no_recuperable_sin_dormir():
+    esperas = []
+    with pytest.raises(ValueError):
+        enrich.con_backoff(lambda: (_ for _ in ()).throw(ValueError("otra cosa")),
+                           lambda e: isinstance(e, _RateLimit), dormir=esperas.append)
+    assert esperas == []
+
+
+def test_con_backoff_se_rinde_tras_agotar_intentos():
+    esperas = []
+
+    def fn():
+        raise _RateLimit()
+
+    with pytest.raises(_RateLimit):
+        enrich.con_backoff(fn, lambda e: isinstance(e, _RateLimit),
+                           intentos=4, dormir=esperas.append)
+    assert len(esperas) == 3                              # no duerme tras el último
+
+
+def test_run_enrichment_concurrente(tmp_path):
+    # Las llamadas LLM deben solaparse (pool) y los contadores/archivos quedar
+    # exactos aunque los workers terminen en cualquier orden.
+    import threading
+    import time as _time
+
+    unidades = [
+        Unidad(numero=n, cuerpo=f"Artículo {n}o.- Texto del artículo número {n}.")
+        for n in range(1, 31)
+    ]
+    lock = threading.Lock()
+    activos = pico = 0
+
+    def call(_p):
+        nonlocal activos, pico
+        with lock:
+            activos += 1
+            pico = max(pico, activos)
+        _time.sleep(0.01)
+        with lock:
+            activos -= 1
+        return RESPUESTA
+
+    stats = enrich.run_enrichment(unidades, CFF, tmp_path, call, "m",
+                                  hilos=8, progreso_cada=0)
+    assert stats["generados"] == 30 and stats["fallidos"] == 0
+    assert pico > 1                                       # hubo solape real
+    archivos = list((tmp_path / "metadata" / "cff" / "generado").glob("0*.json"))
+    assert len(archivos) == 30
+
+
 def test_run_enrichment_escribe_y_cachea(tmp_path):
     u = _unidad()
     s1 = enrich.run_enrichment([u], CFF, str(tmp_path), _call, "m")

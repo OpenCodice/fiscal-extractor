@@ -107,9 +107,10 @@ def _cmd_actualizar(a) -> int:
     return 0
 
 
-def _enriquecer_doc(doc, pdf: str, out: str, call, modelo: str, force: bool) -> dict:
+def _enriquecer_doc(doc, pdf: str, out: str, call, modelo: str, force: bool,
+                    hilos: int = 8) -> dict:
     unidades = build_documento(doc, pdf, data_repo="/dev/null", what="none")
-    stats = run_enrichment(unidades, doc, out, call, modelo, force=force)
+    stats = run_enrichment(unidades, doc, out, call, modelo, force=force, hilos=hilos)
     print(f"{doc.clave} ({modelo}): generados={stats['generados']} "
           f"omitidos={stats['omitidos']} fallidos={stats['fallidos']}", flush=True)
     for e in stats["errores"][:5]:
@@ -136,7 +137,7 @@ def _cmd_enriquecer(a) -> int:
 
     # PDF explícito: un único documento, sin descargas.
     if a.pdf:
-        _enriquecer_doc(docs[0], a.pdf, a.out, call, modelo, force=a.force)
+        _enriquecer_doc(docs[0], a.pdf, a.out, call, modelo, force=a.force, hilos=a.hilos)
         return 0
 
     total = {"generados": 0, "omitidos": 0, "fallidos": 0}
@@ -152,7 +153,8 @@ def _cmd_enriquecer(a) -> int:
                 print(f"✗ {d.clave}: error al resolver/descargar — {e}")
                 continue
             try:
-                stats = _enriquecer_doc(d, dest, a.out, call, modelo, force=a.force)
+                stats = _enriquecer_doc(d, dest, a.out, call, modelo,
+                                        force=a.force, hilos=a.hilos)
             except Exception as e:                       # noqa: BLE001 — CI robusto
                 print(f"✗ {d.clave}: error al enriquecer — {e}")
                 continue
@@ -213,6 +215,8 @@ def main(argv=None) -> int:
     sp.add_argument("--proveedor", choices=["anthropic", "openai"], default="anthropic")
     sp.add_argument("--modelo", default=None, help="override del modelo por defecto")
     sp.add_argument("--force", action="store_true", help="regenerar aunque no cambie el texto")
+    sp.add_argument("--hilos", type=int, default=8,
+                    help="llamadas LLM concurrentes (1 = en serie)")
     sp.set_defaults(fn=_cmd_enriquecer)
 
     sp = sub.add_parser("referencias",
