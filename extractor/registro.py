@@ -71,6 +71,21 @@ DOCUMENTOS: list[Documento] = [
          "LFPCA.pdf"),
     _ley("lif-2026", "Ley de Ingresos de la Federación 2026", "LIF 2026",
          "LIF_2026.pdf"),   # anual: se renueva cada ejercicio (clave con año)
+    _ley("lfdc",  "Ley Federal de los Derechos del Contribuyente", "LFDC", "LFDC.pdf"),
+    _ley("lfisan", "Ley Federal del Impuesto sobre Automóviles Nuevos", "LFISAN",
+         "LFISAN.pdf"),
+    _ley("lish",  "Ley de Ingresos sobre Hidrocarburos", "LISH", "LIH.pdf"),
+    _ley("lfpiorpi",
+         "Ley Federal para la Prevención e Identificación de Operaciones con "
+         "Recursos de Procedencia Ilícita", "LFPIORPI", "LFPIORPI.pdf"),
+    # La Ley del SAT usa el esquema viejo de LeyesBiblio: número de ley + fecha de
+    # la última reforma en el nombre (93_041218.pdf), así que la URL muere con
+    # cada reforma y se resuelve contra el índice, igual que las fuentes del SAT.
+    Documento("lsat", "Ley del Servicio de Administración Tributaria", "LSAT",
+              tipo="ley", parser="articulado",
+              url=f"{BASE_DIPUTADOS}/pdf/93_041218.pdf",
+              indice=f"{BASE_DIPUTADOS}/index.htm",
+              patron=r"pdf/93_\d{6}\.pdf$"),
     # --- Reglamentos (mismo parser articulado) ------------------------------
     _ley("rcff",  "Reglamento del Código Fiscal de la Federación", "RCFF",
          "Reg_CFF.pdf", tipo="reglamento"),
@@ -80,6 +95,10 @@ DOCUMENTOS: list[Documento] = [
          "Reg_LIVA_250914.pdf", tipo="reglamento"),
     _ley("rlieps", "Reglamento de la Ley del IEPS", "RLIEPS",
          "Reg_LIEPS.pdf", tipo="reglamento"),
+    _ley("rladua", "Reglamento de la Ley Aduanera", "RLA",
+         "Reg_LAdua.pdf", tipo="reglamento"),
+    _ley("rlfpiorpi", "Reglamento de la LFPIORPI", "RLFPIORPI",
+         "Reg_LFPIORPI.pdf", tipo="reglamento"),
     # --- RMF (reglas) -------------------------------------------------------
     Documento("rmf-2026", "Resolución Miscelánea Fiscal para 2026", "RMF 2026",
               tipo="rmf", parser="reglas",

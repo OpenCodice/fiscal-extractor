@@ -39,18 +39,38 @@ HEADER_PREFIXES = (
 # - La letra exige guion previo y NO debe ir seguida de letra: así "-A" es letra
 #   pero "-Bis"/"-BIS" no se confunde con la letra "B".
 # - El ordinal (Bis/Ter/...) admite separador espacio, punto o guion, en cualquier caja.
+# - Se tolera un punto espurio tras la palabra ("Artículo. 88.", errata del
+#   Reglamento de la Ley Aduanera): la validación de secuencia filtra falsos positivos.
 ORDINALES = "Bis|Ter|Qu[aá]ter|Quintus|Quinquies|Sexies|Septies|Octies|Nonies|Decies"
 ARTICULO_RE = re.compile(
-    r"^(?:Art[íi]culo|ART[IÍ]CULO)\s+(\d+)\s*[oº°]?\.?"  # "Artículo"/"ARTÍCULO" + número
+    r"^(?:Art[íi]culo|ART[IÍ]CULO)\.?\s+(\d+)\s*[oº°]?\.?"  # "Artículo"/"ARTÍCULO" + número
 
     r"(?:-([A-Z])(?![A-Za-z]))?"                     # letra "-A" PEGADA, una sola letra
     rf"(?:[\s.\-]+(?i:({ORDINALES}))(?:\s+(\d+))?)?"  # ordinal + numeral opcional ("Bis 1")
     r"\s*\.?-?(?:\s|$|\()"                           # separador final
 )
 
-# Encabezados de Título / Capítulo en MAYÚSCULAS (con o sin acento).
+# Encabezados de Título / Capítulo / Sección en MAYÚSCULAS (con o sin acento).
+# En los PDF de la Cámara el NÚMERO va en una línea y el NOMBRE en la siguiente:
+#     SECCIÓN IV
+#     DEL RÉGIMEN SIMPLIFICADO DE CONFIANZA
+# por eso el nombre se captura con lookahead (no como grupo de la regex).
 TITULO_RE = re.compile(r"^T[IÍ]TULO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]+){0,2}\s*$")
 CAPITULO_RE = re.compile(r"^CAP[IÍ]TULO\s+([IVXLCDM]+|[ÚU]NICO|PRIMERO|SEGUNDO)\b.*$")
+SECCION_RE = re.compile(r"^SECCI[OÓ]N\s+([IVXLCDM]+|[ÚU]NICA|PRIMERA|SEGUNDA)\b.*$")
+
+# ¿Es la línea-nombre de un encabezado? (la que sigue a "SECCIÓN IV"). Va en
+# MAYÚSCULAS y no es otro encabezado, ni un artículo, ni una nota de reforma
+# ("Sección adicionada DOF…", que va en minúsculas → la excluye el test de caja).
+def _es_nombre_encabezado(s: str) -> bool:
+    if not s or len(s) > 120:
+        return False
+    if TITULO_RE.match(s) or CAPITULO_RE.match(s) or SECCION_RE.match(s):
+        return False
+    if ARTICULO_RE.match(s) or PAGE_FOOTER_RE.match(s):
+        return False
+    letras = [c for c in s if c.isalpha()]
+    return bool(letras) and all(c.isupper() for c in letras)
 
 # Frontera del articulado permanente: el primer encabezado de Transitorios.
 TRANSITORIOS_RE = re.compile(
@@ -170,6 +190,8 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
     actual: Unidad | None = None
     cur_titulo = ""
     cur_capitulo = ""
+    cur_seccion = ""
+    pendiente: tuple[str, str] | None = None   # ('titulo'|'capitulo'|'seccion', encabezado) esperando su nombre
     esperado = start                 # número de artículo esperado (valida la secuencia)
 
     def flush(u: Unidad | None) -> None:
@@ -180,16 +202,41 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             u.derogado = bool(DEROGADO_RE.search(primer))
             unidades.append(u)
 
+    def _fijar(nivel: str, valor: str) -> None:
+        nonlocal cur_titulo, cur_capitulo, cur_seccion
+        if nivel == "titulo":
+            cur_titulo, cur_capitulo, cur_seccion = valor, "", ""   # nuevo título resetea lo inferior
+        elif nivel == "capitulo":
+            cur_capitulo, cur_seccion = valor, ""                   # nuevo capítulo resetea sección
+        else:
+            cur_seccion = valor
+
     for raw in lineas:
         line = raw.rstrip()
         stripped = line.strip()
 
+        # ¿La línea anterior fue un encabezado esperando su nombre (línea siguiente)?
+        if pendiente is not None:
+            if not stripped:
+                continue                                            # salta blancos entre número y nombre
+            nivel, encabezado = pendiente
+            pendiente = None
+            if _es_nombre_encabezado(stripped):
+                _fijar(nivel, f"{encabezado}. {stripped}")          # 'TÍTULO IV. DE LAS PERSONAS FÍSICAS'
+                continue
+            _fijar(nivel, encabezado)                               # encabezado sin nombre: solo número
+            # no 'continue': esta línea puede ser un artículo u otro encabezado
+
         if TITULO_RE.match(stripped) and (actual is None or len(stripped) < 35):
-            cur_titulo = stripped
+            pendiente = ("titulo", stripped)
             continue
 
         if CAPITULO_RE.match(stripped) and (actual is None or len(stripped) < 30):
-            cur_capitulo = stripped
+            pendiente = ("capitulo", stripped)
+            continue
+
+        if SECCION_RE.match(stripped) and (actual is None or len(stripped) < 35):
+            pendiente = ("seccion", stripped)
             continue
 
         am = ARTICULO_RE.match(stripped)
@@ -208,7 +255,7 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
                 flush(actual)
                 actual = Unidad(
                     numero=numero, letra=letra, ordinal=ordinal, ord_num=ord_num,
-                    titulo=cur_titulo, capitulo=cur_capitulo,
+                    titulo=cur_titulo, capitulo=cur_capitulo, seccion=cur_seccion,
                 )
                 actual.cuerpo = line + "\n"
                 if es_siguiente:
