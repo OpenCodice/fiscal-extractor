@@ -1,0 +1,24 @@
+# Gate de calidad en el origen: los repos de datos (fiscal-mexicano) clonan
+# este extractor en main sin pin, así que un push roto aquí rompe sus workflows
+# (vigilar-fiscal, enriquecer). Decidido no pinear mientras el proyecto se
+# mueva rápido; este CI es la contraparte de esa decisión.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - run: pip install -r requirements.txt
+
+      - run: python -m pytest -q
