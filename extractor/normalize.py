@@ -26,6 +26,11 @@ REFORM_NOTE_START_RE = re.compile(
 NOTE_COMPLETE_RE = re.compile(r"\d{2}-\d{2}-\d{4}[.)]?$")
 MAX_NOTE_CONT_LINES = 4
 
+# Nota de reforma de las compilaciones de la normateca del SAT (RISAT):
+# "(DOF 21 de diciembre de 2021)" en línea propia, siempre completa.
+NOTA_NORMATECA_RE = re.compile(
+    r"^\(DOF\s+\d{1,2}\s+de\s+[a-zá-ú]+\s+de\s+\d{4}\)$", re.IGNORECASE)
+
 # Marcadores de fracción / inciso / apartado: "I.", "a)", "1.", "A. ".
 STRUCT_MARKER_RE = re.compile(r"^(?:[IVXLCDM]+\.|[a-z]\)|\d+\.|[A-Z]\.\s)")
 SENTENCE_END_RE = re.compile(r"[.:;]$")
@@ -71,6 +76,11 @@ def normalize_body(body: str, heading_label: str) -> str:
         s = lines[i].strip()
         if not s:
             flush_buf()
+            i += 1
+            continue
+        if NOTA_NORMATECA_RE.match(s):
+            flush_buf()
+            blocks.append(f"_{s}_")
             i += 1
             continue
         if _is_reform_note(s):

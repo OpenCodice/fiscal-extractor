@@ -12,7 +12,7 @@ import pytest
 
 DATA = Path(__file__).resolve().parents[2] / "fiscal-mexicano"
 LEAK = ("CÁMARA DE DIPUTADOS", "Secretaría de Servicios")
-FOOTER_RE = re.compile(r"^\d{1,4} de \d{1,4}$", re.MULTILINE)
+FOOTER_RE = re.compile(r"^\d{1,4} (?:de|/) \d{1,4}$", re.MULTILINE)
 
 pytestmark = pytest.mark.skipif(
     not (DATA / "metadata" / "documentos.json").exists(),

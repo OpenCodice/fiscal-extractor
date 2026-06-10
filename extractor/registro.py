@@ -34,6 +34,9 @@ class Documento:
     # href; gana el PDF de fecha más reciente. `url` queda como última conocida.
     indice: str | None = None
     patron: str | None = None
+    # Resolución por texto de ancla (normateca legacy del SAT): los href son
+    # blobs opacos del CMS y lo estable es el texto del enlace ("RISAT").
+    texto_enlace: str | None = None
     # Líneas de encabezado que se repiten en cada página del PDF y deben quitarse
     # (además de las genéricas de la Cámara). Suele ser el título del documento.
     titulos_encabezado: tuple[str, ...] = field(default_factory=tuple)
@@ -99,6 +102,25 @@ DOCUMENTOS: list[Documento] = [
          "Reg_LAdua.pdf", tipo="reglamento"),
     _ley("rlfpiorpi", "Reglamento de la LFPIORPI", "RLFPIORPI",
          "Reg_LFPIORPI.pdf", tipo="reglamento"),
+    # El RISAT viene de la normateca del SAT, no de la Cámara: la Cámara solo
+    # tiene la publicación original 2015 en PDF y el SAT publica la compilación
+    # vigente (reforma DOF 21-12-2021, que movió aduanas a la ANAM). El href es
+    # un blob del CMS que cambia con cada versión; se resuelve por el texto del
+    # ancla. La leyenda al pie se repite en cada página y no es auto-detectable.
+    Documento("risat", "Reglamento Interior del Servicio de Administración Tributaria",
+              "RISAT", tipo="reglamento", parser="articulado",
+              url="https://wwwmat.sat.gob.mx/cs/Satellite?blobcol=urldata&blobkey=id"
+                  "&blobtable=MungoBlobs&blobwhere=1461176458878&ssbinary=true",
+              indice="https://wwwmat.sat.gob.mx/normatividad/43026/reglamentos",
+              texto_enlace=r"RISAT",
+              titulos_encabezado=(
+                  "Este documento es una compilación del reglamento y sus reformas "
+                  "publicadas en el Diario Oficial de la Federación, de conformidad "
+                  "con el artículo 5 de la Ley",
+                  "Federal de los Derechos del Contribuyente. Para sustentar "
+                  "legalmente actos o resoluciones se deberá consultar el Diario "
+                  "Oficial de la Federación.",
+              )),
     # --- RMF (reglas) -------------------------------------------------------
     Documento("rmf-2026", "Resolución Miscelánea Fiscal para 2026", "RMF 2026",
               tipo="rmf", parser="reglas",

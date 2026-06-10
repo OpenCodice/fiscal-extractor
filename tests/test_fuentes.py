@@ -45,3 +45,26 @@ def test_fecha_nombre_ddmmyyyy():
     assert _fecha_nombre("x/RMF_2026-DOF-28122025.pdf") == (2025, 12, 28)
     assert _fecha_nombre("x/Anexo_7_RMF2026-09012026.pdf") == (2026, 1, 9)
     assert _fecha_nombre("x/sin_fecha.pdf") == (0, 0, 0)
+
+
+# Normateca legacy del SAT: href con comillas simples, blob opaco del CMS (sin
+# .pdf ni fecha en el nombre) y el TEXTO del ancla como único discriminador.
+HTML_NORMATECA = """
+<a class="hover" href='/cs/Satellite?blobcol=urldata&blobkey=id&blobtable=MungoBlobs&blobwhere=1461176404401&ssbinary=true' onclick='reHit("x",1);'>RIANAM</a><br>
+<small>publicado el 24 de mayo de 2022</small>
+<a class="hover" href='/cs/Satellite?blobcol=urldata&blobkey=id&blobtable=MungoBlobs&blobwhere=1461176458878&ssbinary=true' onclick='reHit("x",2);'>RISAT</a><br>
+<small>publicado el 21 de diciembre de 2021</small>
+"""
+
+
+def test_texto_enlace_resuelve_blob_de_la_normateca():
+    url = url_vigente(POR_CLAVE["risat"], leer=lambda _u: HTML_NORMATECA)
+    assert url == ("https://wwwmat.sat.gob.mx/cs/Satellite?blobcol=urldata&blobkey=id"
+                   "&blobtable=MungoBlobs&blobwhere=1461176458878&ssbinary=true")
+
+
+def test_texto_enlace_no_casa_anclas_parciales():
+    # "RISAT" no debe casar "RIANAM" ni viceversa; sin coincidencia → job rojo.
+    with pytest.raises(LookupError, match="risat"):
+        url_vigente(POR_CLAVE["risat"],
+                    leer=lambda _u: "<a href='/x'>RIANAM</a><a href='/y'>RISAT viejo</a>")

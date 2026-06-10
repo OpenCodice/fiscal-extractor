@@ -12,9 +12,12 @@ import pytest
 
 from extractor.parsers.articulado import (
     ARTICULO_RE,
+    MESES,
+    PAGE_FOOTER_RE,
     fechas_reforma_en,
     parse_texto,
     NUEVO_RE,
+    VERSION_LARGA_RE,
     VERSION_RE,
 )
 
@@ -210,3 +213,82 @@ def test_version_nuevo_reglamento_fallback():
     assert VERSION_RE.search("... Nuevo Reglamento DOF 02-04-2014") is None
     m = NUEVO_RE.search("... UNIÓN Nuevo Reglamento DOF 02-04-2014")
     assert m and m.group(3) == "2014"
+
+
+# --------------------------------------------------------------------------- #
+# Formato de la normateca del SAT (compilaciones tipo RISAT)
+# --------------------------------------------------------------------------- #
+def test_fechas_reforma_en_letras():
+    # Las compilaciones de la normateca anotan "(DOF 21 de diciembre de 2021)".
+    assert fechas_reforma_en("(DOF 21 de diciembre de 2021)") == [date(2021, 12, 21)]
+    fechas = fechas_reforma_en("x DOF 24 de agosto de 2015 y DOF 09-12-2019")
+    assert fechas == [date(2015, 8, 24), date(2019, 12, 9)]
+
+
+def test_version_en_letras():
+    m = VERSION_LARGA_RE.search("Última reforma DOF 21 de diciembre de 2021")
+    assert m and (m.group(1), MESES[m.group(2).lower()], m.group(3)) == ("21", 12, "2021")
+
+
+def test_pie_de_pagina_normateca():
+    # Cámara: "1 de 377"; normateca SAT: "51 / 131". Nunca texto normal.
+    assert PAGE_FOOTER_RE.match("1 de 377")
+    assert PAGE_FOOTER_RE.match("51 / 131")
+    assert not PAGE_FOOTER_RE.match("división de poderes y 131")
+
+
+def test_jerarquia_title_case_con_nombre_envuelto():
+    # Estructura real del RISAT consolidado: encabezados Title-case, nombre del
+    # Título III envuelto en dos líneas y nota de reforma con fecha en letras.
+    texto = (
+        "Título III\n"
+        "De las Facultades previstas en la Ley Federal para la Prevención e "
+        "Identificación de Operaciones con\n"
+        "Recursos de Procedencia Ilícita\n"
+        "Capítulo I\n"
+        "De la Organización\n"
+        "(DOF 21 de diciembre de 2021)\n"
+        "Artículo 1.- Uno."
+    )
+    us = parse_texto(texto)
+    assert [u.clave for u in us] == ["001"]
+    u = us[0]
+    assert u.titulo.startswith("Título III. De las Facultades previstas")
+    assert u.titulo.endswith("Recursos de Procedencia Ilícita")
+    assert u.capitulo == "Capítulo I. De la Organización"
+    # ni el nombre envuelto ni la nota DOF se cuelan al cuerpo:
+    assert "Procedencia" not in u.cuerpo and "diciembre" not in u.cuerpo
+
+
+def test_jerarquia_title_case_con_ordinal_en_palabra():
+    # Ley Aduanera / LSAT: 'Título Segundo' y 'Sección Primera' en Title-case.
+    # Una cita con texto tras el numeral ('Título Segundo de esta Ley') no casa.
+    texto = (
+        "Título Segundo\n"
+        "Control de aduana en el despacho\n"
+        "Sección Primera\n"
+        "Disposiciones generales\n"
+        "Artículo 1o.- Uno conforme al\n"
+        "Título Segundo de esta Ley.\n"
+        "Artículo 2o.- Dos."
+    )
+    us = parse_texto(texto)
+    assert [u.clave for u in us] == ["001", "002"]
+    assert us[0].titulo == "Título Segundo. Control de aduana en el despacho"
+    assert us[0].seccion == "Sección Primera. Disposiciones generales"
+    assert "Título Segundo de esta Ley" in us[0].cuerpo
+
+
+def test_encabezado_mayusculas_no_acepta_nombre_title_case():
+    # En formato Cámara (encabezado en MAYÚSCULAS) un nombre Title-case sería
+    # una línea de cuerpo: la heurística laxa solo aplica a encabezados Title-case.
+    texto = (
+        "Artículo 1o.- Uno.\n"
+        "CAPÍTULO II\n"
+        "Las personas morales deberán calcular el impuesto.\n"
+        "Artículo 2o.- Dos."
+    )
+    us = parse_texto(texto)
+    assert [u.clave for u in us] == ["001", "002"]
+    assert us[1].capitulo == "CAPÍTULO II"
+    assert "personas morales" in us[0].cuerpo

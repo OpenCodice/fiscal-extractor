@@ -21,7 +21,7 @@ from .parsers.reglas import DOF_HEADER_RE, _ctx_prefijo, _consistente
 
 # Marcas de encabezado/pie que NUNCA deben aparecer en el texto.
 LEAK_MARKERS = ("CÁMARA DE DIPUTADOS", "Secretaría de Servicios")
-FOOTER_RE = re.compile(r"^\d{1,4} de \d{1,4}$", re.MULTILINE)
+FOOTER_RE = re.compile(r"^\d{1,4} (?:de|/) \d{1,4}$", re.MULTILINE)
 MIN_BODY_CHARS = 8
 
 

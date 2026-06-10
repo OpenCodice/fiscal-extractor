@@ -50,19 +50,36 @@ ARTICULO_RE = re.compile(
     r"\s*\.?-?(?:\s|$|\()"                           # separador final
 )
 
-# Encabezados de Título / Capítulo / Sección en MAYÚSCULAS (con o sin acento).
-# En los PDF de la Cámara el NÚMERO va en una línea y el NOMBRE en la siguiente:
+# Encabezados de Título / Capítulo / Sección. En los PDF de la Cámara van en
+# MAYÚSCULAS; las compilaciones de la normateca del SAT (RISAT) usan Title-case
+# ('Título I'). En ambos formatos el NÚMERO va en una línea y el NOMBRE en la
+# siguiente:
 #     SECCIÓN IV
 #     DEL RÉGIMEN SIMPLIFICADO DE CONFIANZA
 # por eso el nombre se captura con lookahead (no como grupo de la regex).
-TITULO_RE = re.compile(r"^T[IÍ]TULO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]+){0,2}\s*$")
-CAPITULO_RE = re.compile(r"^CAP[IÍ]TULO\s+([IVXLCDM]+|[ÚU]NICO|PRIMERO|SEGUNDO)\b.*$")
-SECCION_RE = re.compile(r"^SECCI[OÓ]N\s+([IVXLCDM]+|[ÚU]NICA|PRIMERA|SEGUNDA)\b.*$")
+# La variante Title-case exige FIN de línea tras el numeral: una cita partida
+# por el renglón ("…en los términos de la\nSección II de este Capítulo.") deja
+# "Sección II …" al inicio de línea y NO debe casar; el encabezado real es solo
+# "Sección I" / "Capítulo XI" / "Título Segundo" a línea completa. El numeral
+# puede ser romano u ordinal en palabra ('Título Noveno', 'Sección Primera'),
+# con compuesto opcional ('Décimo Primero').
+_ORDINAL_TC = (r"(?:Primer[oa]|Segund[oa]|Tercer[oa]|Cuart[oa]|Quint[oa]|"
+               r"Sext[oa]|S[ée]ptim[oa]|Octav[oa]|Noven[oa]|D[ée]cim[oa])")
+_NUMERAL_TC = rf"(?:[IVXLCDM]+|{_ORDINAL_TC}(?:\s+{_ORDINAL_TC})?)"
+TITULO_RE = re.compile(r"^T[IÍ]TULO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]+){0,2}\s*$"
+                       rf"|^T[íi]tulo\s+{_NUMERAL_TC}\s*$")
+CAPITULO_RE = re.compile(r"^CAP[IÍ]TULO\s+([IVXLCDM]+|[ÚU]NICO|PRIMERO|SEGUNDO)\b.*$"
+                         rf"|^Cap[íi]tulo\s+(?:{_NUMERAL_TC}|[ÚU]nico)\s*$")
+SECCION_RE = re.compile(r"^SECCI[OÓ]N\s+([IVXLCDM]+|[ÚU]NICA|PRIMERA|SEGUNDA)\b.*$"
+                        rf"|^Secci[óo]n\s+(?:{_NUMERAL_TC}|[ÚU]nica)\s*$")
 
-# ¿Es la línea-nombre de un encabezado? (la que sigue a "SECCIÓN IV"). Va en
-# MAYÚSCULAS y no es otro encabezado, ni un artículo, ni una nota de reforma
-# ("Sección adicionada DOF…", que va en minúsculas → la excluye el test de caja).
-def _es_nombre_encabezado(s: str) -> bool:
+# ¿Es la línea-nombre de un encabezado? (la que sigue a "SECCIÓN IV"). Con
+# `estricto` exige MAYÚSCULAS (formato Cámara): excluye notas de reforma
+# ("Sección adicionada DOF…", en minúsculas). Cuando el encabezado mismo vino en
+# Title-case (normateca SAT) basta con que inicie en mayúscula sin nota DOF ni
+# puntuación de cierre ('De las Facultades previstas en la Ley Federal…' lleva
+# minúsculas a media frase, así que exigir caja palabra por palabra no sirve).
+def _es_nombre_encabezado(s: str, estricto: bool = True) -> bool:
     if not s or len(s) > 120:
         return False
     if TITULO_RE.match(s) or CAPITULO_RE.match(s) or SECCION_RE.match(s):
@@ -70,7 +87,17 @@ def _es_nombre_encabezado(s: str) -> bool:
     if ARTICULO_RE.match(s) or PAGE_FOOTER_RE.match(s):
         return False
     letras = [c for c in s if c.isalpha()]
-    return bool(letras) and all(c.isupper() for c in letras)
+    if not letras:
+        return False
+    # Un numeral romano solo es el número de un sub-encabezado sin palabra
+    # clave ('I' bajo 'Sección Primera' en la Ley Aduanera), nunca un nombre.
+    if re.fullmatch(r"[IVXLCDM]+", s):
+        return False
+    if all(c.isupper() for c in letras):
+        return True
+    if estricto:
+        return False
+    return s[0].isupper() and "DOF" not in s and s[-1] not in ".;:,"
 
 # Frontera del articulado permanente: el primer encabezado de Transitorios.
 TRANSITORIOS_RE = re.compile(
@@ -79,18 +106,32 @@ TRANSITORIOS_RE = re.compile(
     re.MULTILINE,
 )
 
-# Pie de página: "1 de 377", "377 de 377" (número / total, total variable por doc).
-PAGE_FOOTER_RE = re.compile(r"^\d{1,4}\s+de\s+\d{1,4}$")
+# Pie de página: "1 de 377" (Cámara) o "51 / 131" (normateca SAT).
+PAGE_FOOTER_RE = re.compile(r"^\d{1,4}\s*(?:de|/)\s*\d{1,4}$")
 
 # Fechas de reforma (DOF). Una cláusula puede encadenar varias con coma.
 DOF_CLAUSE_RE = re.compile(r"DOF\s+(\d{2}-\d{2}-\d{4}(?:\s*,\s*\d{2}-\d{2}-\d{4})*)")
 DATE_RE = re.compile(r"(\d{2})-(\d{2})-(\d{4})")
+
+# Variante con la fecha en letras, usada por las compilaciones de la normateca
+# del SAT: "(DOF 21 de diciembre de 2021)".
+MESES = {"enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+         "julio": 7, "agosto": 8, "septiembre": 9, "octubre": 10,
+         "noviembre": 11, "diciembre": 12}
+DOF_LARGA_RE = re.compile(
+    r"DOF\s+(\d{1,2})\s+de\s+(" + "|".join(MESES) + r")\s+de\s+(\d{4})",
+    re.IGNORECASE,
+)
 
 # Versión del texto = fecha del snapshot. La portada trae "Última Reforma DOF
 # DD-MM-YYYY" en las leyes ya reformadas; un documento nuevo sin reformas (p. ej.
 # un reglamento reciente) trae en su lugar "Nuevo Reglamento/Código DOF DD-MM-YYYY".
 VERSION_RE = re.compile(
     r"[ÚU]ltimas?\s+[Rr]eformas?\s+(?:publicadas?\s+)?DOF\s+(\d{2})-(\d{2})-(\d{4})"
+)
+VERSION_LARGA_RE = re.compile(
+    r"[ÚU]ltimas?\s+[Rr]eformas?\s+(?:publicadas?\s+)?" + DOF_LARGA_RE.pattern,
+    re.IGNORECASE,
 )
 NUEVO_RE = re.compile(
     r"Nuev[oa]\s+(?:Código|Reglamento|Ley|Decreto|Disposición)\s+DOF\s+(\d{2})-(\d{2})-(\d{4})"
@@ -106,6 +147,8 @@ def fechas_reforma_en(texto: str) -> list[date]:
     for clausula in DOF_CLAUSE_RE.findall(texto):
         for d, mo, y in DATE_RE.findall(clausula):
             fechas.add(date(int(y), int(mo), int(d)))
+    for d, mes, y in DOF_LARGA_RE.findall(texto):
+        fechas.add(date(int(y), MESES[mes.lower()], int(d)))
     return sorted(fechas)
 
 
@@ -167,7 +210,12 @@ def fecha_version(pdf_path: str) -> date | None:
     with pdfplumber.open(pdf_path) as pdf:
         head = pdf.pages[0].extract_text() or ""
     m = VERSION_RE.search(head) or NUEVO_RE.search(head)
-    return date(int(m.group(3)), int(m.group(2)), int(m.group(1))) if m else None
+    if m:
+        return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    m = VERSION_LARGA_RE.search(head)
+    if m:
+        return date(int(m.group(3)), MESES[m.group(2).lower()], int(m.group(1)))
+    return None
 
 
 def _solo_articulado(texto: str) -> str:
@@ -191,7 +239,9 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
     cur_titulo = ""
     cur_capitulo = ""
     cur_seccion = ""
-    pendiente: tuple[str, str] | None = None   # ('titulo'|'capitulo'|'seccion', encabezado) esperando su nombre
+    # ('titulo'|'capitulo'|'seccion', encabezado, líneas-nombre acumuladas):
+    # un encabezado espera su nombre en la(s) línea(s) siguiente(s).
+    pendiente: tuple[str, str, list[str]] | None = None
     esperado = start                 # número de artículo esperado (valida la secuencia)
 
     def flush(u: Unidad | None) -> None:
@@ -219,24 +269,31 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
         if pendiente is not None:
             if not stripped:
                 continue                                            # salta blancos entre número y nombre
-            nivel, encabezado = pendiente
-            pendiente = None
-            if _es_nombre_encabezado(stripped):
-                _fijar(nivel, f"{encabezado}. {stripped}")          # 'TÍTULO IV. DE LAS PERSONAS FÍSICAS'
+            nivel, encabezado, partes = pendiente
+            # Encabezado en MAYÚSCULAS (Cámara) → nombre en MAYÚSCULAS, una línea;
+            # Title-case (normateca SAT) → nombre Title-case, hasta dos líneas
+            # (los nombres largos envuelven: 'De las Facultades previstas en…').
+            estricto = encabezado.isupper()
+            acumulable = not partes or (not estricto and len(partes) < 2)
+            if acumulable and _es_nombre_encabezado(stripped, estricto=estricto):
+                pendiente = (nivel, encabezado, partes + [stripped])
                 continue
-            _fijar(nivel, encabezado)                               # encabezado sin nombre: solo número
+            pendiente = None
+            nombre = " ".join(partes)
+            # 'TÍTULO IV. DE LAS PERSONAS FÍSICAS'; sin nombre: solo número.
+            _fijar(nivel, f"{encabezado}. {nombre}" if nombre else encabezado)
             # no 'continue': esta línea puede ser un artículo u otro encabezado
 
         if TITULO_RE.match(stripped) and (actual is None or len(stripped) < 35):
-            pendiente = ("titulo", stripped)
+            pendiente = ("titulo", stripped, [])
             continue
 
         if CAPITULO_RE.match(stripped) and (actual is None or len(stripped) < 30):
-            pendiente = ("capitulo", stripped)
+            pendiente = ("capitulo", stripped, [])
             continue
 
         if SECCION_RE.match(stripped) and (actual is None or len(stripped) < 35):
-            pendiente = ("seccion", stripped)
+            pendiente = ("seccion", stripped, [])
             continue
 
         am = ARTICULO_RE.match(stripped)
