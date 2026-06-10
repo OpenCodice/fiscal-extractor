@@ -37,10 +37,13 @@ REGLA_NUM_RE = re.compile(r"^(\d+(?:\.\d+)+)\.\s+(.*)$")
 EMPIEZA_MAYUS_RE = re.compile(r"^[A-ZÁÉÍÓÚÑ¿«“(]")
 NUM_CTX_RE = re.compile(r"(\d+(?:\.\d+)*)")
 
-# Encabezados estructurales.
-TITULO_RE = re.compile(r"^Título\s+(\d+)\.\s*(.*)$")
-CAPITULO_RE = re.compile(r"^Capítulo\s+(\d+(?:\.\d+)*)\.\s*(.*)$")
-SECCION_RE = re.compile(r"^Sección\s+(\d+(?:\.\d+)*)\.\s*(.*)$")
+# Encabezados estructurales. El punto tras el número es opcional (la RGCE trae
+# "Capítulo 1.12 Agencia Aduanal" sin punto), pero el nombre debe empezar en
+# MAYÚSCULA o no existir: así una referencia al pie de regla como
+# "Capítulo 3.6., Anexos 7, 8, 9 y 10" no envenena el contexto estructural.
+TITULO_RE = re.compile(r"^Título\s+(\d+)\.?\s*((?=[A-ZÁÉÍÓÚÑ]).*)?$")
+CAPITULO_RE = re.compile(r"^Capítulo\s+(\d+(?:\.\d+)*)\.?\s*((?=[A-ZÁÉÍÓÚÑ]).*)?$")
+SECCION_RE = re.compile(r"^Sección\s+(\d+(?:\.\d+)*)\.?\s*((?=[A-ZÁÉÍÓÚÑ]).*)?$")
 
 # Fecha de publicación en el nombre/portada: "Domingo 28 de diciembre de 2025".
 MESES = {m: i for i, m in enumerate(
@@ -134,19 +137,19 @@ def reglas_y_anomalias(clean_text: str) -> tuple[list[Regla], list[dict]]:
         mt = TITULO_RE.match(s)
         if mt:
             flush(); actual = None; buf = []
-            cur_titulo = f"Título {mt.group(1)}. {mt.group(2)}".strip()
+            cur_titulo = f"Título {mt.group(1)}. {mt.group(2) or ''}".strip()
             cur_capitulo = cur_seccion = ""
             continue
         mc = CAPITULO_RE.match(s)
         if mc:
             flush(); actual = None; buf = []
-            cur_capitulo = f"Capítulo {mc.group(1)}. {mc.group(2)}".strip()
+            cur_capitulo = f"Capítulo {mc.group(1)}. {mc.group(2) or ''}".strip()
             cur_seccion = ""
             continue
         ms = SECCION_RE.match(s)
         if ms:
             flush(); actual = None; buf = []
-            cur_seccion = f"Sección {ms.group(1)}. {ms.group(2)}".strip()
+            cur_seccion = f"Sección {ms.group(1)}. {ms.group(2) or ''}".strip()
             continue
 
         mr = REGLA_NUM_RE.match(s)

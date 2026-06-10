@@ -106,6 +106,19 @@ DOCUMENTOS: list[Documento] = [
                   "documentos2026/rmf/rmf/RMF_2026-DOF-28122025.pdf",
               indice=INDICE_SAT_RMF,
               patron=r"documentos2026/rmf/rmf/RMF_2026.*\.pdf$"),
+    # --- RGCE y RFA (mismas 'reglas' numeradas que la RMF; anuales) ---------
+    Documento("rgce-2026", "Reglas Generales de Comercio Exterior para 2026",
+              "RGCE 2026", tipo="rgce", parser="reglas",
+              url="https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/"
+                  "documentos2026/rgce/rgce/ReglasGeneralesComercioExteriorpara2026.pdf",
+              indice=INDICE_SAT_RMF,
+              patron=r"documentos2026/rgce/rgce/ReglasGenerales.*\.pdf$"),
+    Documento("rfa-2026", "Resolución de Facilidades Administrativas para 2026",
+              "RFA 2026", tipo="rfa", parser="reglas",
+              url="https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/"
+                  "documentos2026/rfa/rfa/RFA2026_17022026.pdf",
+              indice=INDICE_SAT_RMF,
+              patron=r"documentos2026/rfa/rfa/RFA2026.*\.pdf$"),
     # --- Criterios del SAT (anexos de la RMF) -------------------------------
     Documento("criterios-normativos",
               "Compilación de criterios normativos fiscales (Anexo 7 RMF 2026)",

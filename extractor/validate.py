@@ -45,7 +45,7 @@ def validar(data_repo: str) -> tuple[bool, list[tuple[bool, str, str]]]:
     chk(bool(docs), "índice maestro no vacío", f"{len(docs)} documentos")
 
     for d in docs:
-        clave, tipo = d["clave"], d["tipo"]
+        clave = d["clave"]
         idx = json.loads((repo / "metadata" / clave / "articulos.json")
                          .read_text(encoding="utf-8"))
         items = _items(idx)
@@ -81,10 +81,11 @@ def validar(data_repo: str) -> tuple[bool, list[tuple[bool, str, str]]]:
             chk(not pas or pct >= 50, f"[{clave}] pasajes ubicados en el PDF",
                 f"{loc}/{len(pas)} ({pct}%)")
 
-        # --- específicos por tipo ------------------------------------------
-        if tipo == "rmf":
+        # --- específicos por forma del índice (reglas/criterios/articulado);
+        # el tipo declarado varía más (rmf, rgce, rfa…) que la forma de los datos.
+        if "reglas" in idx:
             _validar_reglas(clave, idx, items, repo, chk)
-        elif tipo == "criterios":
+        elif "criterios" in idx:
             _validar_criterios(clave, items, chk)
         else:
             _validar_articulado(clave, items, chk)

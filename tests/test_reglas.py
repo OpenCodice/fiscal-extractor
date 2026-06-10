@@ -97,3 +97,32 @@ def test_encabezado_dof_se_reconoce():
     assert DOF_HEADER_RE.match("DIARIO OFICIAL Domingo 28 de diciembre de 2025")
     assert DOF_HEADER_RE.match("Domingo 28 de diciembre de 2025 DIARIO OFICIAL")
     assert not DOF_HEADER_RE.match("2.3.4. Para los efectos del DIARIO OFICIAL citado")
+
+
+def test_capitulo_sin_punto_fija_contexto():
+    # La RGCE trae encabezados sin punto tras el número: "Capítulo 1.12 Agencia
+    # Aduanal". Sin tolerarlo, las reglas 1.12.x se rechazan por contexto.
+    texto = (
+        "Capítulo 1.12 Agencia Aduanal\n"
+        "Título de regla\n"
+        "1.12.1. Para los efectos del artículo 167-D de la Ley, la patente."
+    )
+    rs, _ = reglas_y_anomalias(texto)
+    assert [r.numero for r in rs] == ["1.12.1"]
+    assert rs[0].capitulo == "Capítulo 1.12. Agencia Aduanal"
+
+
+def test_referencia_a_capitulo_no_envenena_contexto():
+    # Pie de regla de la RGCE: "Capítulo 3.6., Anexos 7, 8, 9 y 10" es una
+    # referencia, no un encabezado; no debe cambiar el contexto estructural.
+    texto = (
+        "Capítulo 1.3. Padrones de Importadores y Exportadores\n"
+        "Título de regla\n"
+        "1.3.1. Para los efectos del artículo 59 de la Ley, lo siguiente.\n"
+        "Capítulo 3.6., Anexos 7, 8, 9 y 10\n"
+        "Otra regla\n"
+        "1.3.2. Para los efectos del artículo 59 de la Ley, lo conducente."
+    )
+    rs, anom = reglas_y_anomalias(texto)
+    assert [r.numero for r in rs] == ["1.3.1", "1.3.2"]
+    assert all(r.capitulo.startswith("Capítulo 1.3.") for r in rs)
