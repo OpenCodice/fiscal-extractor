@@ -30,6 +30,10 @@ def _cita_base(unidad, doc: Documento) -> str:
         return f"Regla {unidad.numero} {doc.sigla}"
     if doc.parser == "criterios":
         return f"Criterio {unidad.numero}"
+    if doc.parser == "fichas":
+        return f"Ficha de trámite {unidad.numero}, {doc.sigla}"
+    if doc.parser == "apartados":
+        return f"{doc.sigla}, apartado {unidad.numero}"
     return f"{unidad.etiqueta.rstrip('.')} {doc.sigla}"          # "Artículo 27 CFF"
 
 
@@ -44,6 +48,7 @@ def pasajes_de(unidad, doc: Documento) -> list[dict]:
             "parrafo": n,
             "cita": f"{base}, párrafo {n}",
             "texto": texto,
+            "contexto": getattr(unidad, "contexto", ""),    # jerarquía (recall), no es cita
             "fuente": doc.etiqueta,
             "url_fuente": doc.url,
             "archivo_texto": f"{doc.clave}/{unidad.clave}.md",

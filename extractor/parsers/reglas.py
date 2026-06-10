@@ -24,8 +24,10 @@ from ..registro import Documento
 
 # Encabezado corrido del DOF, que alterna izquierda/derecha por paridad de página:
 #   "DIARIO OFICIAL Lunes 28 de diciembre de 2025" / "<fecha> DIARIO OFICIAL".
+# Las ediciones vespertinas anteponen o posponen "(Edición Vespertina)".
 DOF_HEADER_RE = re.compile(
-    r"^(?:DIARIO OFICIAL\b.*|(?:Lunes|Martes|Miércoles|Jueves|Viernes|Sábado|Domingo)\b.*DIARIO OFICIAL)\s*$"
+    r"^(?:\(Edición \w+\)\s+)?"
+    r"(?:DIARIO OFICIAL\b.*|(?:Lunes|Martes|Miércoles|Jueves|Viernes|Sábado|Domingo)\b.*DIARIO OFICIAL\b.*)\s*$"
 )
 # Pie con número de página: "123" sola, o "(Primera Sección)" etc. (best-effort).
 PAGE_NUM_RE = re.compile(r"^\d{1,4}$")

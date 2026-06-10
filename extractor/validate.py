@@ -26,7 +26,8 @@ MIN_BODY_CHARS = 8
 
 
 def _items(idx: dict) -> list[dict]:
-    return idx.get("articulos") or idx.get("reglas") or idx.get("criterios") or []
+    return (idx.get("articulos") or idx.get("reglas") or idx.get("criterios")
+            or idx.get("fichas") or idx.get("apartados") or [])
 
 
 def _cuerpo(md_text: str) -> str:
@@ -87,6 +88,10 @@ def validar(data_repo: str) -> tuple[bool, list[tuple[bool, str, str]]]:
             _validar_reglas(clave, idx, items, repo, chk)
         elif "criterios" in idx:
             _validar_criterios(clave, items, chk)
+        elif "fichas" in idx:
+            _validar_fichas(clave, items, chk)
+        elif "apartados" in idx:
+            _validar_apartados(clave, items, chk)
         else:
             _validar_articulado(clave, items, chk)
 
@@ -100,6 +105,21 @@ def _validar_criterios(clave: str, items: list[dict], chk) -> None:
     chk(not malos, f"[{clave}] número coherente con ley/tipo", ", ".join(malos[:6]))
     raros = [c["numero"] for c in items if c.get("estado") not in ("vigente", "derogado")]
     chk(not raros, f"[{clave}] estado válido (vigente/derogado)", ", ".join(raros[:6]))
+
+
+def _validar_fichas(clave: str, items: list[dict], chk) -> None:
+    # Identificador 'N/LEY' coherente con el campo ley, sin duplicados.
+    malos = [f["numero"] for f in items if not f["numero"].endswith(f"/{f['ley']}")]
+    chk(not malos, f"[{clave}] número coherente con ley", ", ".join(malos[:6]))
+    nums = [f["numero"] for f in items]
+    chk(len(nums) == len(set(nums)), f"[{clave}] fichas sin duplicar",
+        f"{len(nums)} fichas")
+
+
+def _validar_apartados(clave: str, items: list[dict], chk) -> None:
+    letras = [a["numero"] for a in items]
+    chk(len(letras) == len(set(letras)), f"[{clave}] apartados sin duplicar",
+        ", ".join(letras))
 
 
 def _validar_articulado(clave: str, items: list[dict], chk) -> None:

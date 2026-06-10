@@ -42,6 +42,42 @@ def test_cita_a_otro_articulo_no_inicia_unidad():
     assert claves(texto) == ["001", "002"]
 
 
+def test_jerarquia_captura_nombre_de_seccion():
+    # Estructura real de la Cámara: NÚMERO y NOMBRE del encabezado en líneas
+    # separadas; entre el nombre y el artículo puede ir una nota de reforma. El
+    # nombre del régimen vive SOLO aquí (no en el cuerpo del Art. 1).
+    texto = (
+        "TÍTULO IV\n"
+        "DE LAS PERSONAS FÍSICAS\n"
+        "CAPÍTULO II\n"
+        "DE LOS INGRESOS POR ACTIVIDADES EMPRESARIALES\n"
+        "SECCIÓN IV\n"
+        "DEL RÉGIMEN SIMPLIFICADO DE CONFIANZA\n"
+        "Sección adicionada DOF 12-11-2021\n"
+        "Artículo 1o.- Los contribuyentes personas físicas podrán optar."
+    )
+    us = parse_texto(texto)
+    assert [u.clave for u in us] == ["001"]
+    u = us[0]
+    assert u.titulo == "TÍTULO IV. DE LAS PERSONAS FÍSICAS"
+    assert u.seccion == "SECCIÓN IV. DEL RÉGIMEN SIMPLIFICADO DE CONFIANZA"
+    # el contexto (para búsqueda) trae los NOMBRES, sin los números:
+    assert "DEL RÉGIMEN SIMPLIFICADO DE CONFIANZA" in u.contexto
+    assert "TÍTULO" not in u.contexto
+    # y la nota de reforma NO se cuela en el cuerpo del artículo:
+    assert "adicionada" not in u.cuerpo
+
+
+def test_encabezado_sin_nombre_no_se_traga_el_articulo():
+    # Si un encabezado no trae línea-nombre, el siguiente artículo debe iniciar
+    # normalmente (no confundir el cuerpo con un nombre).
+    texto = "TÍTULO I\nArtículo 1o.- Uno.\nArtículo 2o.- Dos."
+    us = parse_texto(texto)
+    assert [u.clave for u in us] == ["001", "002"]
+    assert us[0].titulo == "TÍTULO I"          # solo número, sin nombre
+    assert us[0].contexto == ""                # sin nombre → no aporta contexto
+
+
 def test_articulo_derogado_conserva_secuencia():
     texto = (
         "Artículo 1o.- Uno.\n"

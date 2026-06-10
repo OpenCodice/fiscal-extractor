@@ -17,14 +17,16 @@ from pathlib import Path
 
 import re
 
-from .modelo import Criterio, Regla, Unidad
+from .modelo import Apartado, Criterio, Ficha, Regla, Unidad
 from .normalize import normalize_body
 from .locate import annotate
 from .pasajes import todos_los_pasajes
 from .parsers import resolver
 from .parsers.articulado import fecha_version
 from .parsers.reglas import fecha_publicacion, reglas_y_anomalias, texto_limpio as _texto_reglas
-from .parsers import articulado as _articulado, reglas as _reglas, criterios as _criterios
+from .parsers import (articulado as _articulado, reglas as _reglas,
+                      criterios as _criterios, fichas as _fichas,
+                      apartados as _apartados)
 from .registro import Documento, POR_CLAVE, activos
 
 
@@ -60,6 +62,8 @@ def escribir_metadata(unidades: list[Unidad], doc: Documento, data_repo: str,
             "cita": f"{u.etiqueta} {doc.sigla}",
             "titulo": u.titulo,
             "capitulo": u.capitulo,
+            "seccion": u.seccion,
+            "contexto": u.contexto,
             "derogado": u.derogado,
             "ultima_reforma": u.ultima_reforma.isoformat() if u.ultima_reforma else None,
             "num_reformas": len(u.fechas_reforma),
@@ -225,6 +229,70 @@ def escribir_criterios_metadata(crits: list[Criterio], doc: Documento, data_repo
     (meta_dir / "reformas.json").write_text("{}\n", encoding="utf-8")
 
 
+# ------------------- fichas de trámite y apartados de anexos --------------- #
+def escribir_unidades_texto(unidades: list, doc: Documento, data_repo: str) -> None:
+    """Capa 1 genérica: cualquier unidad con `.clave`, `.etiqueta` y `.cuerpo`."""
+    dirp = Path(data_repo) / doc.clave
+    dirp.mkdir(parents=True, exist_ok=True)
+    for old in dirp.glob("*.md"):
+        old.unlink()
+    for u in unidades:
+        body = normalize_body(u.cuerpo, u.etiqueta)
+        (dirp / f"{u.clave}.md").write_text(f"# {u.etiqueta}\n\n{body}\n", encoding="utf-8")
+
+
+def escribir_fichas_metadata(fichas: list[Ficha], doc: Documento, data_repo: str,
+                             version: str | None) -> None:
+    meta_dir = Path(data_repo) / "metadata" / doc.clave
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    desde, hasta = _vigencia_anual(doc.clave)
+    indice = [
+        {
+            "clave": f.clave, "numero": f.numero, "ley": f.ley,
+            "etiqueta": f.etiqueta, "rubro": f.rubro,
+            "cita": f"Ficha de trámite {f.numero}, {doc.sigla}",
+            "vigente_desde": desde, "vigente_hasta": hasta,
+            "archivo": f"{doc.clave}/{f.clave}.md",
+        }
+        for f in fichas
+    ]
+    doc_idx = {
+        "documento": doc.clave, "etiqueta": doc.etiqueta, "sigla": doc.sigla,
+        "tipo": doc.tipo, "fuente": doc.url, "version": version,
+        "vigente_desde": desde, "vigente_hasta": hasta,
+        "num_articulos": len(fichas), "fichas": indice,
+    }
+    (meta_dir / "articulos.json").write_text(
+        json.dumps(doc_idx, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (meta_dir / "reformas.json").write_text("{}\n", encoding="utf-8")
+
+
+def escribir_apartados_metadata(aps: list[Apartado], doc: Documento, data_repo: str,
+                                version: str | None) -> None:
+    meta_dir = Path(data_repo) / "metadata" / doc.clave
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    desde, hasta = _vigencia_anual(doc.clave)
+    indice = [
+        {
+            "clave": a.clave, "numero": a.numero,
+            "etiqueta": a.etiqueta, "rubro": a.rubro,
+            "cita": f"{doc.sigla}, apartado {a.numero}",
+            "vigente_desde": desde, "vigente_hasta": hasta,
+            "archivo": f"{doc.clave}/{a.clave}.md",
+        }
+        for a in aps
+    ]
+    doc_idx = {
+        "documento": doc.clave, "etiqueta": doc.etiqueta, "sigla": doc.sigla,
+        "tipo": doc.tipo, "fuente": doc.url, "version": version,
+        "vigente_desde": desde, "vigente_hasta": hasta,
+        "num_articulos": len(aps), "apartados": indice,
+    }
+    (meta_dir / "articulos.json").write_text(
+        json.dumps(doc_idx, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    (meta_dir / "reformas.json").write_text("{}\n", encoding="utf-8")
+
+
 # --------------------- pasajes con ubicación en el PDF --------------------- #
 def escribir_pasajes(unidades: list, doc: Documento, pdf_path: str,
                      data_repo: str) -> tuple[int, int]:
@@ -258,6 +326,26 @@ def build_documento(doc: Documento, pdf_path: str, data_repo: str,
             escribir_criterios_metadata(crits, doc, data_repo, version=version)
             escribir_pasajes(crits, doc, pdf_path, data_repo)
         return crits
+    if doc.parser == "fichas":
+        fichas = _fichas.parse(pdf_path, doc)
+        v = _fichas.fecha_publicacion(pdf_path)
+        version = v.isoformat() if v else None
+        if what in ("all", "text"):
+            escribir_unidades_texto(fichas, doc, data_repo)
+        if what in ("all", "metadata"):
+            escribir_fichas_metadata(fichas, doc, data_repo, version=version)
+            escribir_pasajes(fichas, doc, pdf_path, data_repo)
+        return fichas
+    if doc.parser == "apartados":
+        aps = _apartados.parse(pdf_path, doc)
+        v = _apartados.fecha_publicacion(pdf_path)
+        version = v.isoformat() if v else None
+        if what in ("all", "text"):
+            escribir_unidades_texto(aps, doc, data_repo)
+        if what in ("all", "metadata"):
+            escribir_apartados_metadata(aps, doc, data_repo, version=version)
+            escribir_pasajes(aps, doc, pdf_path, data_repo)
+        return aps
     if doc.parser == "reglas":
         unidades, anomalias = reglas_y_anomalias(_texto_reglas(pdf_path))
         v = fecha_publicacion(pdf_path)

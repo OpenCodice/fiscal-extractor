@@ -119,6 +119,25 @@ DOCUMENTOS: list[Documento] = [
                   "documentos2026/rfa/rfa/RFA2026_17022026.pdf",
               indice=INDICE_SAT_RMF,
               patron=r"documentos2026/rfa/rfa/RFA2026.*\.pdf$"),
+    # --- Anexos de la RMF: fichas de trámite, cantidades y tarifas ----------
+    Documento("anexo2-2026", "Fichas de trámite fiscales (Anexo 2 RMF 2026)",
+              "Anexo 2 RMF 2026", tipo="anexo-rmf", parser="fichas",
+              url="https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/"
+                  "documentos2026/rmf/anexos/Anexo-2-RMF-2026_DOF-28122025.pdf",
+              indice=INDICE_SAT_RMF,
+              patron=r"documentos2026/rmf/anexos/Anexo-2-RMF.*\.pdf$"),
+    Documento("anexo5-2026", "Cantidades actualizadas del CFF (Anexo 5 RMF 2026)",
+              "Anexo 5 RMF 2026", tipo="anexo-rmf", parser="apartados",
+              url="https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/"
+                  "documentos2026/rmf/anexos/Anexo-5-RMF-2026_DOF-28122025.pdf",
+              indice=INDICE_SAT_RMF,
+              patron=r"documentos2026/rmf/anexos/Anexo-5-RMF.*\.pdf$"),
+    Documento("anexo8-2026", "Tarifas del ISR (Anexo 8 RMF 2026)",
+              "Anexo 8 RMF 2026", tipo="anexo-rmf", parser="apartados",
+              url="https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/"
+                  "documentos2026/rmf/anexos/Anexo-8-RMF-2026_DOF-28122025.pdf",
+              indice=INDICE_SAT_RMF,
+              patron=r"documentos2026/rmf/anexos/Anexo-8-RMF.*\.pdf$"),
     # --- Criterios del SAT (anexos de la RMF) -------------------------------
     Documento("criterios-normativos",
               "Compilación de criterios normativos fiscales (Anexo 7 RMF 2026)",
