@@ -46,10 +46,15 @@ def text_hash(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
-def build_prompt(descriptor: str, plain_text: str) -> str:
+def build_prompt(descriptor: str, plain_text: str, contexto: str = "") -> str:
+    # La ubicación jerárquica (Título/Capítulo/Sección) suele traer el NOMBRE del
+    # régimen/tema, que no aparece en el cuerpo del artículo. Dárselo al modelo
+    # evita que lo infiera de su memoria (y se equivoque: p. ej. etiquetar el
+    # Régimen Simplificado de Confianza como el derogado RIF).
+    ubicacion = f"\nUbicación en la ley (úsala para situar el tema): {contexto}\n" if contexto else ""
     return f"""Eres un asistente que prepara METADATOS DE BÚSQUEDA para un buscador
 de legislación fiscal mexicana. NO interpretas la ley ni das asesoría fiscal.
-
+{ubicacion}
 A partir del texto de «{descriptor}», devuelve SOLO un objeto JSON (sin texto
 extra) con estas claves, en español, para ayudar a que una persona ENCUENTRE
 esta disposición cuando pregunte con palabras coloquiales:
@@ -57,13 +62,25 @@ esta disposición cuando pregunte con palabras coloquiales:
 - "denominacion_comun": nombre corto y común del tema (string).
 - "temas": 4-10 temas/conceptos que trata (array de strings cortos).
 - "terminos_coloquiales": cómo la gente se refiere a esto en lenguaje cotidiano,
-  incluyendo búsquedas típicas (array de strings).
+  incluyendo búsquedas típicas Y las SIGLAS o acrónimos oficiales conocidos
+  (muchos regímenes y figuras fiscales se conocen por sus siglas, p. ej. un
+  "Régimen Simplificado de Confianza" se conoce como "RESICO"). Si el tema tiene
+  una sigla establecida, INCLÚYELA. La ley usa términos técnicos donde la gente
+  usa otra palabra: cuando el texto regule una figura cuyo nombre cotidiano es
+  distinto, incluye SIEMPRE la palabra cotidiana — p. ej. "factura" si el texto
+  dice "comprobante fiscal" o "CFDI"; "gasolina" si dice "combustibles";
+  "aguinaldo" si dice "gratificaciones"; "e.firma" si dice "certificado de firma
+  electrónica avanzada"; "comprar un coche/auto" si dice "inversiones en
+  automóviles" (array de strings).
 - "resumen": 1-3 oraciones en lenguaje llano de lo que establece (string).
 - "preguntas_ejemplo": 3-6 preguntas reales que esta disposición respondería
   (array de strings).
 
 Reglas estrictas:
 - Apégate al contenido del texto; no inventes obligaciones que no aparezcan.
+- Usa la ubicación (sección/capítulo) para nombrar bien el régimen o tema e
+  incluir sus términos coloquiales y siglas; no infieras de tu memoria un régimen
+  que el texto o la ubicación no indiquen.
 - No cites fechas ni números de reforma.
 - Todas las claves de lista deben ser arreglos de strings, nunca null. Si el
   texto es muy corto o está derogado, devuelve igual arreglos (pueden tener
@@ -133,7 +150,15 @@ def validate(data: dict) -> None:
         raise ValueError("ninguna lista de búsqueda tiene contenido")
 
 
-def assemble(unidad, doc: Documento, plain_text: str, data: dict, modelo: str) -> dict:
+def _hash_de(plain_text: str, contexto: str = "") -> str:
+    """Hash de regeneración. Incluye el contexto jerárquico para que la unidad se
+    re-enriquezca cuando aparece/cambia su sección (sin contexto, el hash es el de
+    antes → la constitución y las unidades sin jerarquía no se invalidan)."""
+    return text_hash(f"{plain_text}\n##CTX##\n{contexto}" if contexto else plain_text)
+
+
+def assemble(unidad, doc: Documento, plain_text: str, data: dict, modelo: str,
+             contexto: str = "") -> dict:
     _normalize(data)
     validate(data)
     return {
@@ -142,7 +167,7 @@ def assemble(unidad, doc: Documento, plain_text: str, data: dict, modelo: str) -
         "etiqueta": unidad.etiqueta,
         "_generado": {
             "modelo": modelo, "schema": SCHEMA_VERSION,
-            "hash_texto": text_hash(plain_text), "advertencia": ADVERTENCIA,
+            "hash_texto": _hash_de(plain_text, contexto), "advertencia": ADVERTENCIA,
         },
         "denominacion_comun": data["denominacion_comun"],
         "temas": data["temas"],
@@ -155,14 +180,16 @@ def assemble(unidad, doc: Documento, plain_text: str, data: dict, modelo: str) -
 def needs_refresh(unidad, existing: dict | None) -> bool:
     if not existing:
         return True
-    return existing.get("_generado", {}).get("hash_texto") != text_hash(texto_plano(unidad))
+    actual = _hash_de(texto_plano(unidad), getattr(unidad, "contexto", ""))
+    return existing.get("_generado", {}).get("hash_texto") != actual
 
 
 def enrich_unit(unidad, doc: Documento, call, modelo: str) -> dict:
     plain = texto_plano(unidad)
+    contexto = getattr(unidad, "contexto", "")
     descriptor = f"{unidad.etiqueta} ({doc.sigla})"
-    data = _extract_json(call(build_prompt(descriptor, plain)))
-    return assemble(unidad, doc, plain, data, modelo)
+    data = _extract_json(call(build_prompt(descriptor, plain, contexto)))
+    return assemble(unidad, doc, plain, data, modelo, contexto)
 
 
 # --------------------------------------------------------------------------- #

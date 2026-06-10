@@ -90,6 +90,16 @@ def test_assemble_normaliza_temas_no_lista():
     assert rec["denominacion_comun"] == "Residencia fiscal"
 
 
+def test_prompt_pide_sinonimos_coloquiales():
+    # Falla real del RAG: "factura" no recuperaba el Art. 27 LISR porque la ley
+    # dice "comprobante fiscal" y el enriquecimiento nunca generó la palabra
+    # cotidiana. El prompt debe exigir el puente coloquial→legal con ejemplos.
+    prompt = enrich.build_prompt("Artículo 27 LISR", "texto")
+    assert "factura" in prompt and "comprobante fiscal" in prompt
+    assert "aguinaldo" in prompt and "gratificaciones" in prompt
+    assert "gasolina" in prompt and "combustibles" in prompt
+
+
 def test_needs_refresh_por_hash():
     u = _unidad()
     rec = enrich.enrich_unit(u, CFF, _call, "m")
