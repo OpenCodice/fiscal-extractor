@@ -18,6 +18,7 @@ from .build import build, build_documento
 from .enrich import DEFAULT_MODELS, caller_for, run_enrichment
 from .fuentes import descargar, url_vigente
 from .parsers.articulado import fecha_version
+from .referencias import aplicar_referencias
 from .registro import DOCUMENTOS, POR_CLAVE, activos
 from .validate import format_report, validar
 
@@ -162,6 +163,22 @@ def _cmd_enriquecer(a) -> int:
     return 0
 
 
+def _cmd_referencias(a) -> int:
+    """Anota metadata/*/pasajes.jsonl con referencias legales cruzadas.
+
+    Post-proceso sobre el repo de datos existente: no descarga PDFs ni
+    re-extrae. `build`/`actualizar` ya lo corren al final; este comando
+    retrofitea un repo construido antes de que existiera la capa.
+    """
+    stats = aplicar_referencias(a.out)
+    total = sum(stats.values())
+    for doc, n in sorted(stats.items(), key=lambda kv: -kv[1]):
+        if n:
+            print(f"  {doc:28} {n:5} pasajes con referencias")
+    print(f"\n✓ {total} pasajes anotados en {len(stats)} documentos")
+    return 0
+
+
 def _cmd_validar(a) -> int:
     ok, checks = validar(a.out)
     print(format_report(checks))
@@ -197,6 +214,11 @@ def main(argv=None) -> int:
     sp.add_argument("--modelo", default=None, help="override del modelo por defecto")
     sp.add_argument("--force", action="store_true", help="regenerar aunque no cambie el texto")
     sp.set_defaults(fn=_cmd_enriquecer)
+
+    sp = sub.add_parser("referencias",
+                        help="anota los pasajes con referencias legales cruzadas")
+    sp.add_argument("--out", required=True, help="repo de datos a anotar")
+    sp.set_defaults(fn=_cmd_referencias)
 
     sp = sub.add_parser("validar", help="corre los invariantes sobre el repo de datos")
     sp.add_argument("--out", required=True, help="repo de datos a validar")

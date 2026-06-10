@@ -21,6 +21,7 @@ from .modelo import Apartado, Criterio, Ficha, Regla, Unidad
 from .normalize import normalize_body
 from .locate import annotate
 from .pasajes import todos_los_pasajes
+from .referencias import aplicar_referencias
 from .parsers import resolver
 from .parsers.articulado import fecha_version
 from .parsers.reglas import fecha_publicacion, reglas_y_anomalias, texto_limpio as _texto_reglas
@@ -382,4 +383,8 @@ def build(claves: list[str] | None, pdf_por_clave: dict[str, str], data_repo: st
         salida[doc.clave] = build_documento(doc, pdf, data_repo, what=what)
     if what in ("all", "metadata"):
         escribir_indice_maestro(data_repo)
+        # Cruza TODO el corpus (no solo lo recién construido): las referencias
+        # apuntan entre documentos y un build parcial puede invalidar/crear refs
+        # en pasajes de documentos no tocados.
+        aplicar_referencias(data_repo)
     return salida
