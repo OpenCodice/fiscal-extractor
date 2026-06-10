@@ -125,6 +125,21 @@ def test_run_enrichment_imprime_progreso(tmp_path, capsys):
     assert enrich.needs_refresh(u2, rec) is True            # texto cambió
 
 
+def test_needs_refresh_por_prompt():
+    # Falla real en CI: un cambio de prompt no invalidaba la caché (es por hash
+    # del texto) y obligaba a --force, no reanudable. La huella del prompt en
+    # _generado invalida lo generado con un prompt viejo, incluida la ausencia
+    # de huella (todo lo generado antes de introducirla).
+    u = _unidad()
+    rec = enrich.enrich_unit(u, CFF, _call, "m")
+    assert rec["_generado"]["prompt"] == enrich.prompt_huella()
+    viejo = json.loads(json.dumps(rec))
+    viejo["_generado"]["prompt"] = "sha256:prompt-anterior"
+    assert enrich.needs_refresh(u, viejo) is True
+    del viejo["_generado"]["prompt"]
+    assert enrich.needs_refresh(u, viejo) is True
+
+
 def test_run_enrichment_escribe_y_cachea(tmp_path):
     u = _unidad()
     s1 = enrich.run_enrichment([u], CFF, str(tmp_path), _call, "m")

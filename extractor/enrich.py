@@ -16,6 +16,7 @@ Disciplina de cuarentena:
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import re
 from pathlib import Path
@@ -150,6 +151,17 @@ def validate(data: dict) -> None:
         raise ValueError("ninguna lista de búsqueda tiene contenido")
 
 
+def prompt_huella() -> str:
+    """Huella del template del prompt, guardada en cada registro generado.
+
+    La caché por hash de texto no detecta cambios al PROMPT: una corrida en CI
+    regeneró 3,951 unidades con --force y otra igual habría hecho falta ante
+    cualquier ajuste. Con la huella, `needs_refresh` invalida solo lo generado
+    con un prompt viejo — y una corrida interrumpida (límite de 6 h de GitHub
+    Actions) se reanuda sin --force: lo ya regenerado trae la huella nueva."""
+    return text_hash(inspect.getsource(build_prompt))
+
+
 def _hash_de(plain_text: str, contexto: str = "") -> str:
     """Hash de regeneración. Incluye el contexto jerárquico para que la unidad se
     re-enriquezca cuando aparece/cambia su sección (sin contexto, el hash es el de
@@ -167,7 +179,8 @@ def assemble(unidad, doc: Documento, plain_text: str, data: dict, modelo: str,
         "etiqueta": unidad.etiqueta,
         "_generado": {
             "modelo": modelo, "schema": SCHEMA_VERSION,
-            "hash_texto": _hash_de(plain_text, contexto), "advertencia": ADVERTENCIA,
+            "hash_texto": _hash_de(plain_text, contexto), "prompt": prompt_huella(),
+            "advertencia": ADVERTENCIA,
         },
         "denominacion_comun": data["denominacion_comun"],
         "temas": data["temas"],
@@ -180,8 +193,11 @@ def assemble(unidad, doc: Documento, plain_text: str, data: dict, modelo: str,
 def needs_refresh(unidad, existing: dict | None) -> bool:
     if not existing:
         return True
+    gen = existing.get("_generado", {})
+    if gen.get("prompt") != prompt_huella():
+        return True
     actual = _hash_de(texto_plano(unidad), getattr(unidad, "contexto", ""))
-    return existing.get("_generado", {}).get("hash_texto") != actual
+    return gen.get("hash_texto") != actual
 
 
 def enrich_unit(unidad, doc: Documento, call, modelo: str) -> dict:
