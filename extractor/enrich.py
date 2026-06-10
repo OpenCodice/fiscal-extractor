@@ -242,11 +242,15 @@ def caller_for(proveedor: str, model: str):
 
 
 def run_enrichment(unidades, doc: Documento, data_repo, call, modelo: str,
-                   force: bool = False, reintentos: int = 2) -> dict:
+                   force: bool = False, reintentos: int = 2,
+                   progreso_cada: int = 25) -> dict:
     """Genera/actualiza el enriquecimiento de las unidades que lo necesitan.
 
     Best-effort: si el LLM devuelve algo inválido, reintenta y, si aún falla,
     SALTA esa unidad sin abortar (esta capa nunca es crítica). Caché por hash.
+    Cada `progreso_cada` unidades procesadas (no cacheadas) imprime el avance
+    con flush: un documento grande (la RMF son ~1,200 reglas) tarda decenas de
+    minutos y sin esto el log de CI queda mudo hasta el final del documento.
     """
     gen_dir = Path(data_repo) / "metadata" / doc.clave / "generado"
     gen_dir.mkdir(parents=True, exist_ok=True)
@@ -254,7 +258,8 @@ def run_enrichment(unidades, doc: Documento, data_repo, call, modelo: str,
 
     generados = omitidos = fallidos = 0
     errores: list[str] = []
-    for u in unidades:
+    total = len(unidades)
+    for i, u in enumerate(unidades, 1):
         path = gen_dir / f"{u.clave}.json"
         existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
         if not force and not needs_refresh(u, existing):
@@ -267,9 +272,13 @@ def run_enrichment(unidades, doc: Documento, data_repo, call, modelo: str,
             except Exception as e:                       # LLM no-determinista: reintenta
                 ultimo = e
         if record is None:
-            fallidos += 1; errores.append(f"{doc.clave}/{u.clave}: {ultimo}"); continue
-        path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
-                        encoding="utf-8")
-        generados += 1
+            fallidos += 1; errores.append(f"{doc.clave}/{u.clave}: {ultimo}")
+        else:
+            path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n",
+                            encoding="utf-8")
+            generados += 1
+        if progreso_cada and (generados + fallidos) % progreso_cada == 0:
+            print(f"  {doc.clave}: {i}/{total} unidades "
+                  f"(generados={generados} fallidos={fallidos})", flush=True)
     return {"generados": generados, "omitidos": omitidos,
             "fallidos": fallidos, "errores": errores}

@@ -110,7 +110,7 @@ def _enriquecer_doc(doc, pdf: str, out: str, call, modelo: str, force: bool) -> 
     unidades = build_documento(doc, pdf, data_repo="/dev/null", what="none")
     stats = run_enrichment(unidades, doc, out, call, modelo, force=force)
     print(f"{doc.clave} ({modelo}): generados={stats['generados']} "
-          f"omitidos={stats['omitidos']} fallidos={stats['fallidos']}")
+          f"omitidos={stats['omitidos']} fallidos={stats['fallidos']}", flush=True)
     for e in stats["errores"][:5]:
         print(f"  ✗ {e}")
     return stats

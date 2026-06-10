@@ -100,7 +100,23 @@ def test_prompt_pide_sinonimos_coloquiales():
     assert "gasolina" in prompt and "combustibles" in prompt
 
 
-def test_needs_refresh_por_hash():
+def test_run_enrichment_imprime_progreso(tmp_path, capsys):
+    # En CI un documento grande tarda decenas de minutos; el avance debe salir
+    # cada `progreso_cada` unidades procesadas, también cuando hay fallos.
+    unidades = [
+        Unidad(numero=n, cuerpo=f"Artículo {n}o.- Texto del artículo número {n}.")
+        for n in range(1, 5)
+    ]
+    llamadas = iter([RESPUESTA, "sin json", "sin json", RESPUESTA, RESPUESTA])
+
+    def call(_p):
+        return next(llamadas, RESPUESTA)
+
+    stats = enrich.run_enrichment(unidades, CFF, tmp_path, call, "m",
+                                  reintentos=1, progreso_cada=2)
+    out = capsys.readouterr().out
+    assert "cff: 2/4 unidades" in out and "cff: 4/4 unidades" in out
+    assert stats["generados"] + stats["fallidos"] == 4
     u = _unidad()
     rec = enrich.enrich_unit(u, CFF, _call, "m")
     assert enrich.needs_refresh(u, None) is True            # no existe
