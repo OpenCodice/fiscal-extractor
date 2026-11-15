@@ -52,6 +52,7 @@ class Unidad:
     letra: str = ""                  # "", "A".."Z"
     ordinal: str = ""                # "", "Bis", "Ter", "Quáter", "Quinquies", ...
     ord_num: str = ""                # numeral tras el ordinal: "137 Bis 1" → "1"
+    sub_letra: str = ""              # letra tras ese numeral: "77 Bis 35 A" → "A"
     titulo: str = ""                 # "TÍTULO IV. DE LAS PERSONAS FÍSICAS" (núm. + nombre)
     capitulo: str = ""               # "CAPÍTULO II. DE LOS INGRESOS..."
     seccion: str = ""                # "SECCIÓN IV. DEL RÉGIMEN SIMPLIFICADO DE CONFIANZA"
@@ -80,6 +81,8 @@ class Unidad:
             partes.append(_ascii(self.ordinal))
         if self.ord_num:
             partes.append(self.ord_num)
+        if self.sub_letra:
+            partes.append(_ascii(self.sub_letra))
         return "-".join(partes)
 
     @property
@@ -95,6 +98,8 @@ class Unidad:
             core += f" {self.ordinal}"
         if self.ord_num:
             core += f" {self.ord_num}"
+        if self.sub_letra:
+            core += f" {self.sub_letra}"
         if not self.letra and not self.ordinal:
             core += "."                       # "Artículo 4o." / "Artículo 14."
         return f"Artículo {core}"

@@ -46,7 +46,8 @@ ARTICULO_RE = re.compile(
     r"^(?:Art[íi]culo|ART[IÍ]CULO)\.?\s+(\d+)\s*[oº°]?\.?"  # "Artículo"/"ARTÍCULO" + número
 
     r"(?:-([A-Z])(?![A-Za-z]))?"                     # letra "-A" PEGADA, una sola letra
-    rf"(?:[\s.\-]+(?i:({ORDINALES}))(?:\s+(\d+))?)?"  # ordinal + numeral opcional ("Bis 1")
+    rf"(?:[\s.\-]+(?i:({ORDINALES}))"               # ordinal
+    r"(?:\s+(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1") y letra ("Bis 35 A.-")
     r"\s*\.?-?(?:\s|$|\()"                           # separador final
 )
 
@@ -68,9 +69,14 @@ _ORDINAL_TC = (r"(?:Primer[oa]|Segund[oa]|Tercer[oa]|Cuart[oa]|Quint[oa]|"
 _NUMERAL_TC = rf"(?:[IVXLCDM]+|{_ORDINAL_TC}(?:\s+{_ORDINAL_TC})?)"
 TITULO_RE = re.compile(r"^T[IÍ]TULO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]+){0,2}\s*$"
                        rf"|^T[íi]tulo\s+{_NUMERAL_TC}\s*$")
-CAPITULO_RE = re.compile(r"^CAP[IÍ]TULO\s+([IVXLCDM]+|[ÚU]NICO|PRIMERO|SEGUNDO)\b.*$"
+_ORDINAL_MAY = (r"PRIMER[OA]|SEGUND[OA]|TERCER[OA]|CUART[OA]|QUINT[OA]|SEXT[OA]|"
+                 r"S[EÉ]PTIM[OA]|OCTAV[OA]|NOVEN[OA]|D[EÉ]CIM[OA]")
+CAPITULO_RE = re.compile(rf"^CAP[IÍ]TULO\s+([IVXLCDM]+|[ÚU]NICO|{_ORDINAL_MAY})\b.*$"
                          rf"|^Cap[íi]tulo\s+(?:{_NUMERAL_TC}|[ÚU]nico)\s*$")
-SECCION_RE = re.compile(r"^SECCI[OÓ]N\s+([IVXLCDM]+|[ÚU]NICA|PRIMERA|SEGUNDA)\b.*$"
+# Libro: nivel sobre el Título en los códigos (Código Penal, Código Civil).
+LIBRO_RE = re.compile(r"^LIBRO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]+)?\s*$"
+                      rf"|^Libro\s+{_NUMERAL_TC}\s*$")
+SECCION_RE = re.compile(rf"^SECCI[OÓ]N\s+([IVXLCDM]+|[ÚU]NICA|{_ORDINAL_MAY})\b.*$"
                         rf"|^Secci[óo]n\s+(?:{_NUMERAL_TC}|[ÚU]nica)\s*$")
 
 # ¿Es la línea-nombre de un encabezado? (la que sigue a "SECCIÓN IV"). Con
@@ -97,7 +103,36 @@ def _es_nombre_encabezado(s: str, estricto: bool = True) -> bool:
         return True
     if estricto:
         return False
-    return s[0].isupper() and "DOF" not in s and s[-1] not in ".;:,"
+    # Algunos nombres vienen entre comillas: '"De la Información y la Transparencia"'.
+    return s.lstrip('"“«')[:1].isupper() and "DOF" not in s and s[-1] not in ".;:,"
+
+# Nombre en caja normal de un encabezado en MAYÚSCULAS. Solo se acepta si el
+# bloque desemboca en el siguiente artículo (ver parse_texto); aquí se descartan
+# las notas de reforma y lo que no puede ser un nombre.
+MAX_LINEAS_ENCABEZADO = 8
+MAX_LINEAS_NOMBRE = 3
+
+
+def _es_nombre_suelto(s: str, continuacion: bool = False) -> bool:
+    if not s or len(s) > 150 or "DOF" in s or s.startswith("("):
+        return False
+    if (TITULO_RE.match(s) or CAPITULO_RE.match(s) or SECCION_RE.match(s)
+            or LIBRO_RE.match(s) or ARTICULO_RE.match(s) or PAGE_FOOTER_RE.match(s)):
+        return False
+    if re.fullmatch(r"[IVXLCDM]+", s) or re.match(r"^[IVXLCDM]+\.\s", s):
+        return False                      # numeral solo o fracción 'II. …'
+    if s[-1] in ".;:,":
+        return False
+    inicio = s.lstrip('"“«')[:1]
+    return inicio.islower() if continuacion else inicio.isupper()
+
+
+def _es_nota_de_bloque(s: str) -> bool:
+    """Nota de reforma de un encabezado o marca de capítulo derogado."""
+    return bool(DOF_CLAUSE_RE.search(s) or DOF_LARGA_RE.search(s)) and len(s) < 200 \
+        or bool(re.fullmatch(r"\(?\s*(?:Se\s+deroga|Derogad[oa])\s*\)?\.?", s,
+                             re.IGNORECASE))
+
 
 # Frontera del articulado permanente: el primer encabezado de Transitorios.
 TRANSITORIOS_RE = re.compile(
@@ -180,7 +215,21 @@ def _titulo_corrido(paginas: list[str]) -> tuple[str, ...]:
     if not primeras:
         return ()
     comun, n = Counter(primeras).most_common(1)[0]
-    return (comun,) if n >= max(3, len(paginas) // 2) else ()
+    umbral = max(3, len(paginas) // 2)
+    if n < umbral:
+        return ()
+    # Un título largo se parte en dos líneas ('… CON RECURSOS' / 'DE PROCEDENCIA
+    # ILÍCITA'): la segunda también se repite justo debajo en cada página.
+    segundas = []
+    for t in paginas[1:]:
+        lineas = [ln.strip() for ln in t.splitlines() if ln.strip()]
+        if len(lineas) > 1 and lineas[0] == comun:
+            segundas.append(lineas[1])
+    if segundas:
+        segunda, m = Counter(segundas).most_common(1)[0]
+        if m >= umbral and not segunda.startswith(HEADER_PREFIXES):
+            return (comun, segunda)
+    return (comun,)
 
 
 def limpiar_paginas(paginas: list[str], doc: Documento) -> str:
@@ -257,8 +306,11 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             u.derogado = bool(DEROGADO_RE.search(primer))
             unidades.append(u)
 
+    ultimo_nivel = ""
+
     def _fijar(nivel: str, valor: str) -> None:
-        nonlocal cur_titulo, cur_capitulo, cur_seccion
+        nonlocal cur_titulo, cur_capitulo, cur_seccion, ultimo_nivel
+        ultimo_nivel = nivel
         if nivel == "titulo":
             cur_titulo, cur_capitulo, cur_seccion = valor, "", ""   # nuevo título resetea lo inferior
         elif nivel == "capitulo":
@@ -266,7 +318,58 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
         else:
             cur_seccion = valor
 
-    for raw in lineas:
+    def abre_articulo(s: str) -> bool:
+        """¿`s` abre un artículo que la secuencia aceptaría ahora mismo?"""
+        am = ARTICULO_RE.match(s)
+        if not am:
+            return False
+        numero, sufijo = int(am.group(1)), bool(am.group(2) or am.group(3))
+        return ((numero == esperado and not sufijo)
+                or (actual is not None and numero == actual.numero and sufijo))
+
+    def desemboca_en_articulo(i: int) -> bool:
+        """¿Hay un artículo aceptable en las líneas que siguen a `i`, dentro de un
+        bloque de encabezado (encabezados, nombres y notas de reforma)?"""
+        vistas = 0
+        for sig in lineas[i + 1:]:
+            s = sig.strip()
+            if not s:
+                continue
+            if abre_articulo(s):
+                return True
+            vistas += 1
+            if vistas >= MAX_LINEAS_ENCABEZADO:
+                return False
+        return False
+
+    # Dentro de un bloque de encabezado que desemboca en el siguiente artículo,
+    # sus notas ('Capítulo adicionado DOF …') y la marca '(Se deroga)' de un
+    # capítulo derogado son de la estructura, no del artículo anterior.
+    en_bloque = False
+    nota_previa = False
+
+    def _ampliar_nombre(linea: str) -> None:
+        """Suma una línea al nombre del último encabezado (nombre envuelto, o
+        un subencabezado sin palabra clave tras un salto de página)."""
+        if ultimo_nivel == "titulo":
+            _fijar_sin_reset("titulo", cur_titulo, linea)
+        elif ultimo_nivel == "capitulo":
+            _fijar_sin_reset("capitulo", cur_capitulo, linea)
+        elif ultimo_nivel == "seccion":
+            _fijar_sin_reset("seccion", cur_seccion, linea)
+
+    def _fijar_sin_reset(nivel: str, actual_valor: str, linea: str) -> None:
+        nonlocal cur_titulo, cur_capitulo, cur_seccion
+        sep = " " if ". " in actual_valor else ". "
+        valor = f"{actual_valor}{sep}{linea}"
+        if nivel == "titulo":
+            cur_titulo = valor
+        elif nivel == "capitulo":
+            cur_capitulo = valor
+        else:
+            cur_seccion = valor
+
+    for i, raw in enumerate(lineas):
         line = raw.rstrip()
         stripped = line.strip()
 
@@ -283,23 +386,51 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             if acumulable and _es_nombre_encabezado(stripped, estricto=estricto):
                 pendiente = (nivel, encabezado, partes + [stripped])
                 continue
+            # Muchas leyes de la Cámara ponen el encabezado en MAYÚSCULAS y el
+            # nombre en caja normal ('CAPITULO IV' / 'Rescisión de las relaciones
+            # de trabajo'), a veces envuelto en varias líneas. Sin la caja como
+            # señal, la prueba es que el bloque desemboque en el siguiente
+            # artículo: así no se confunde con texto del artículo anterior.
+            if estricto and len(partes) < MAX_LINEAS_NOMBRE and _es_nombre_suelto(
+                    stripped, continuacion=bool(partes)) and desemboca_en_articulo(i):
+                pendiente = (nivel, encabezado, partes + [stripped])
+                continue
             pendiente = None
             nombre = " ".join(partes)
             # 'TÍTULO IV. DE LAS PERSONAS FÍSICAS'; sin nombre: solo número.
             _fijar(nivel, f"{encabezado}. {nombre}" if nombre else encabezado)
             # no 'continue': esta línea puede ser un artículo u otro encabezado
 
-        if TITULO_RE.match(stripped) and (actual is None or len(stripped) < 35):
-            pendiente = ("titulo", stripped, [])
+        nivel = None
+        if (TITULO_RE.match(stripped) or LIBRO_RE.match(stripped)) and (
+                actual is None or len(stripped) < 35):
+            nivel = "titulo"
+        elif CAPITULO_RE.match(stripped) and (actual is None or len(stripped) < 30):
+            nivel = "capitulo"
+        elif SECCION_RE.match(stripped) and (actual is None or len(stripped) < 35):
+            nivel = "seccion"
+        if nivel:
+            pendiente = (nivel, stripped, [])
+            if actual is not None and desemboca_en_articulo(i):
+                en_bloque = True
             continue
 
-        if CAPITULO_RE.match(stripped) and (actual is None or len(stripped) < 30):
-            pendiente = ("capitulo", stripped, [])
-            continue
-
-        if SECCION_RE.match(stripped) and (actual is None or len(stripped) < 35):
-            pendiente = ("seccion", stripped, [])
-            continue
+        if en_bloque and not ARTICULO_RE.match(stripped):
+            if not stripped:
+                continue
+            if _es_nota_de_bloque(stripped):
+                nota_previa = stripped
+                continue
+            if nota_previa and (stripped[:1].islower()
+                                or not nota_previa.endswith((".", ")"))):
+                nota_previa = stripped                      # la nota sigue en otra línea
+                continue
+            nota_previa = False
+            if (_es_nombre_suelto(stripped) or _es_nombre_suelto(stripped, continuacion=True)
+                    or re.fullmatch(r"[IVXLCDM]+", stripped)):
+                # Un numeral solo ('I' bajo 'Sección Primera') es un subencabezado.
+                _ampliar_nombre(stripped)
+                continue
 
         am = ARTICULO_RE.match(stripped)
         if am:
@@ -307,6 +438,7 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             letra = (am.group(2) or "").upper()
             ordinal = (am.group(3) or "").title()
             ord_num = am.group(4) or ""           # numeral tras el ordinal: "Bis 1"
+            sub_letra = am.group(5) or ""         # letra tras el numeral: "Bis 35 A"
             tiene_sufijo = bool(letra or ordinal)
             # Aceptar solo el siguiente esperado (bare) o una variante del actual.
             # Así se descartan las citas "Artículo 89 de la Constitución".
@@ -314,9 +446,11 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             es_variante = (actual is not None and numero == actual.numero
                            and tiene_sufijo)
             if es_siguiente or es_variante:
+                en_bloque = nota_previa = False
                 flush(actual)
                 actual = Unidad(
                     numero=numero, letra=letra, ordinal=ordinal, ord_num=ord_num,
+                    sub_letra=sub_letra,
                     titulo=cur_titulo, capitulo=cur_capitulo, seccion=cur_seccion,
                 )
                 actual.cuerpo = line + "\n"

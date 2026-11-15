@@ -292,3 +292,215 @@ def test_encabezado_mayusculas_no_acepta_nombre_title_case():
     assert [u.clave for u in us] == ["001", "002"]
     assert us[1].capitulo == "CAPÍTULO II"
     assert "personas morales" in us[0].cuerpo
+
+
+# --------------------------------------------------------------------------- #
+# Bloques de encabezado entre artículos (leyes federales de la Cámara)
+# --------------------------------------------------------------------------- #
+def test_nombre_en_caja_normal_tras_encabezado_en_mayusculas():
+    # Ley General de Salud: 'TÍTULO SEGUNDO' / 'Sistema Nacional de Salud' /
+    # 'CAPÍTULO I' / 'Disposiciones Comunes'. Los nombres se pegaban al final
+    # del artículo anterior.
+    texto = (
+        "Artículo 4o.- Son autoridades sanitarias:\n"
+        "I. El Presidente de la República;\n"
+        "TÍTULO SEGUNDO\n"
+        "Sistema Nacional de Salud\n"
+        "CAPÍTULO I\n"
+        "Disposiciones Comunes\n"
+        "Artículo 5o.- El Sistema Nacional de Salud está constituido por…"
+    )
+    us = parse_texto(texto, start=4)
+    assert [u.clave for u in us] == ["004", "005"]
+    assert "Sistema Nacional" not in us[0].cuerpo
+    assert "Disposiciones" not in us[0].cuerpo
+    assert us[1].titulo == "TÍTULO SEGUNDO. Sistema Nacional de Salud"
+    assert us[1].capitulo == "CAPÍTULO I. Disposiciones Comunes"
+
+
+def test_nombre_envuelto_en_varias_lineas():
+    texto = (
+        "Artículo 1o.- Uno.\n"
+        "CAPITULO II\n"
+        "De los derechos y obligaciones de los trabajadores y de los\n"
+        "patrones en el trabajo a domicilio\n"
+        "Artículo 2o.- Dos."
+    )
+    us = parse_texto(texto)
+    assert us[0].cuerpo.strip().endswith("Uno.")
+    assert us[1].capitulo.endswith("patrones en el trabajo a domicilio")
+
+
+def test_encabezado_que_no_desemboca_en_articulo_no_se_come_texto():
+    # Sin un artículo cerca, la línea en caja normal tras 'CAPÍTULO II' no es
+    # un nombre: sigue siendo cuerpo del artículo.
+    texto = (
+        "Artículo 1o.- Lo previsto en el\n"
+        "CAPÍTULO II\n"
+        "Disposiciones de esta Ley aplica\n"
+        "a todos los casos\n" + "".join(f"línea {i} del artículo\n" for i in range(10))
+        + "Artículo 2o.- Dos."
+    )
+    us = parse_texto(texto)
+    assert "Disposiciones de esta Ley aplica" in us[0].cuerpo
+
+
+def test_notas_del_encabezado_no_van_al_articulo_anterior():
+    # Ley Federal del Trabajo: la nota de reforma del Título y el '(Se deroga)'
+    # de un capítulo derogado son de la estructura.
+    texto = (
+        "Artículo 172.- En los establecimientos en que trabajen mujeres…\n"
+        "TITULO QUINTO BIS\n"
+        "Trabajo de los Menores\n"
+        "Título adicionado DOF 31-12-1974\n"
+        "Artículo 173.- El trabajo de los menores…\n"
+        "Artículo reformado DOF 30-11-2012\n"
+        "CAPITULO IV\n"
+        "Adulterio\n"
+        "(Se deroga)\n"
+        "Capítulo derogado DOF 08-06-2011\n"
+        "Artículo 174.- (Se deroga)."
+    )
+    us = parse_texto(texto, start=172)
+    assert [u.clave for u in us] == ["172", "173", "174"]
+    assert "DOF" not in us[0].cuerpo
+    # La nota del artículo (antes del encabezado) sí es suya.
+    assert "Artículo reformado DOF 30-11-2012" in us[1].cuerpo
+    assert "Se deroga" not in us[1].cuerpo and "Capítulo derogado" not in us[1].cuerpo
+
+
+def test_libro_es_encabezado():
+    texto = (
+        "Artículo 122.- (Se deroga).\n"
+        "LIBRO SEGUNDO\n"
+        "TITULO PRIMERO\n"
+        "Delitos contra la seguridad de la Nación\n"
+        "Título con denominación reformado DOF 29-07-1970\n"
+        "Artículo 123.- Se impondrá…"
+    )
+    us = parse_texto(texto, start=122)
+    assert us[0].cuerpo.strip() == "Artículo 122.- (Se deroga)."
+    assert us[1].titulo == "TITULO PRIMERO. Delitos contra la seguridad de la Nación"
+
+
+def test_letra_tras_el_numeral_del_ordinal():
+    # Ley General de Salud: 'Artículo 77 bis 35 A' … 'J' son artículos propios.
+    texto = (
+        "Artículo 77.- Uno.\n"
+        "Artículo 77 bis 35.- El organismo…\n"
+        "Artículo 77 bis 35 A.- Se deroga.\n"
+        "Artículo 77 bis 35 B.- Se deroga.\n"
+        "Artículo 78.- Otro."
+    )
+    us = parse_texto(texto, start=77)
+    assert [u.clave for u in us] == ["077", "077-bis-35", "077-bis-35-a", "077-bis-35-b", "078"]
+    assert us[2].etiqueta == "Artículo 77 Bis 35 A"
+
+
+def test_nombre_de_encabezado_entre_comillas():
+    # Ley del SAT: 'Título Quinto' / '"De la Información, … y de' / 'Fiscalización"'.
+    texto = (
+        "Artículo 20.- Uno.\n"
+        "Artículo 20-A.- Texto.\n"
+        "Artículo adicionado DOF 12-06-2003\n"
+        "Título Quinto\n"
+        "\"De la Información, la Transparencia y la Evaluación de la Eficiencia Recaudatoria y de\n"
+        "Fiscalización\"\n"
+        "Título adicionado DOF 12-06-2003\n"
+        "Capítulo I\n"
+        "\"De la Información y la Transparencia\"\n"
+        "Capítulo adicionado DOF 12-06-2003\n"
+        "Artículo 21.- Anualmente…"
+    )
+    us = parse_texto(texto, start=20)
+    assert us[1].cuerpo.strip().endswith("Artículo adicionado DOF 12-06-2003")
+    assert us[2].capitulo == "Capítulo I. \"De la Información y la Transparencia\""
+
+
+def test_nombre_envuelto_con_mayuscula_y_subencabezado_sin_palabra_clave():
+    # Reglamento de la LISR: tras el salto de página queda 'Disposiciones
+    # Generales', un subencabezado sin 'CAPÍTULO'; LFD: nombre de Sección
+    # envuelto cuya segunda línea empieza con mayúscula.
+    texto = (
+        "Artículo 12.- Doce.\n"
+        "Artículo reformado DOF 06-05-2016\n"
+        "TÍTULO II\n"
+        "De las Personas Morales\n"
+        "Disposiciones Generales\n"
+        "Artículo 13.- Trece.\n"
+        "SECCIÓN QUINTA\n"
+        "Servicios que presta la Comisión Intersecretarial para el Control del Proceso y Uso de\n"
+        "Plaguicidas, Fertilizantes y Sustancias Tóxicas\n"
+        "Sección adicionada DOF 31-12-1999\n"
+        "Artículo 14.- Catorce."
+    )
+    us = parse_texto(texto, start=12)
+    assert us[0].cuerpo.strip().endswith("Artículo reformado DOF 06-05-2016")
+    assert us[1].titulo == "TÍTULO II. De las Personas Morales Disposiciones Generales"
+    assert us[1].cuerpo.strip() == "Artículo 13.- Trece."
+    assert us[2].seccion.endswith("Plaguicidas, Fertilizantes y Sustancias Tóxicas")
+
+
+def test_nota_del_encabezado_envuelta_en_varias_lineas():
+    # LFD, Capítulo XII derogado con nota editorial de dos líneas.
+    texto = (
+        "Artículo 253-A.- Texto.\n"
+        "CAPÍTULO XII\n"
+        "Hidrocarburos\n"
+        "(Se deroga)\n"
+        "Capítulo reformado DOF 21-12-2005. Derogado DOF 11-08-2014\n"
+        "Nota: Por Decreto DOF 21-12-2005, se reformó íntegro el Capítulo XII. En consecuencia, se\n"
+        "suprimieron las referencias a las Secciones Primera y Segunda.\n"
+        "Artículo 253-B.- (Se deroga)."
+    )
+    us = parse_texto("Artículo 253.- Base.\n" + texto, start=253)
+    assert [u.clave for u in us] == ["253", "253-a", "253-b"]
+    assert us[1].cuerpo.strip() == "Artículo 253-A.- Texto."
+
+
+def test_numeral_solo_y_marca_derogada_dentro_del_bloque():
+    # Ley Aduanera: 'Sección Primera' / 'Importaciones temporales' / 'I' /
+    # 'Disposiciones generales'. Reglamento de la LIVA: sección derogada con
+    # 'Derogada.' en vez de '(Se deroga)'.
+    texto = (
+        "Artículo 103.- Texto.\n"
+        "Párrafo adicionado DOF 30-12-2002\n"
+        "Capítulo III\n"
+        "Temporales de importación y de exportación\n"
+        "Sección Primera\n"
+        "Importaciones temporales\n"
+        "I\n"
+        "Disposiciones generales\n"
+        "ARTICULO 104. Las importaciones temporales…\n"
+        "Sección III\n"
+        "De los servicios de hotelería y conexos para congresos, convenciones, exposiciones o\n"
+        "ferias\n"
+        "Derogada.\n"
+        "Sección derogada DOF 25-09-2014\n"
+        "Artículo 105. Derogado."
+    )
+    us = parse_texto(texto, start=103)
+    assert us[0].cuerpo.strip().endswith("Párrafo adicionado DOF 30-12-2002")
+    assert us[1].cuerpo.strip() == "ARTICULO 104. Las importaciones temporales…"
+
+
+def test_nota_envuelta_con_continuacion_en_mayuscula():
+    texto = (
+        "Artículo 253.- Texto.\n"
+        "CAPÍTULO XII\n"
+        "Hidrocarburos\n"
+        "Nota: Por Decreto DOF 21-12-2005, se reformó íntegro el Capítulo XII. En consecuencia, se\n"
+        "suprimieron las referencias a las Secciones Primera “Del Derecho sobre Hidrocarburos” y Segunda “Del Derecho\n"
+        "Adicional sobre Hidrocarburos” del anterior Capítulo XII.\n"
+        "Artículo 254.- Otro."
+    )
+    us = parse_texto(texto, start=253)
+    assert us[0].cuerpo.strip() == "Artículo 253.- Texto."
+
+
+def test_titulo_corrido_en_dos_lineas():
+    from extractor.parsers.articulado import _titulo_corrido
+    cab = ("REGLAMENTO DE LA LEY FEDERAL PARA LA PREVENCIÓN E IDENTIFICACIÓN DE "
+           "OPERACIONES CON RECURSOS\nDE PROCEDENCIA ILÍCITA\n")
+    paginas = ["Portada"] + [cab + f"Texto de la página {i}\n" for i in range(6)]
+    assert _titulo_corrido(paginas) == (cab.splitlines()[0], "DE PROCEDENCIA ILÍCITA")
