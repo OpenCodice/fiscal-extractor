@@ -55,17 +55,29 @@ def _cmd_stats(a) -> int:
     return 0
 
 
+def _pdf_en(pdf_dir: str, clave: str) -> str:
+    """`<clave>.pdf` (como lo deja `actualizar --pdf-dir`) o `CLAVE.pdf`."""
+    base = Path(pdf_dir)
+    return str(base / f"{clave}.pdf") if (base / f"{clave}.pdf").exists() \
+        else str(base / f"{clave.upper()}.pdf")
+
+
 def _cmd_build(a) -> int:
     claves = a.doc or None
     if claves:
         pdf_por_clave = {claves[0]: a.pdf} if a.pdf and len(claves) == 1 else {}
         if a.pdf_dir:
             for c in claves:
-                pdf_por_clave[c] = f"{a.pdf_dir.rstrip('/')}/{POR_CLAVE[c].clave.upper()}.pdf"
+                pdf_por_clave[c] = _pdf_en(a.pdf_dir, c)
     else:
         claves = [d.clave for d in activos()]
-        pdf_por_clave = {c: f"{a.pdf_dir.rstrip('/')}/{c.upper()}.pdf" for c in claves} \
-            if a.pdf_dir else {}
+        if a.pdf_dir:
+            pdf_por_clave = {c: _pdf_en(a.pdf_dir, c) for c in claves}
+            # Con --pdf-dir y sin --doc se construye lo que haya (lo que dejó
+            # `actualizar --pdf-dir`), no se exige el corpus completo.
+            claves = [c for c in claves if Path(pdf_por_clave[c]).exists()]
+        else:
+            pdf_por_clave = {}
     salida = build(claves, pdf_por_clave, a.out, what=a.only)
     for clave, unidades in salida.items():
         print(f"✓ {clave}: {len(unidades)} unidades → {a.out}/{clave}/")
@@ -205,6 +217,21 @@ def _cmd_verificar(a) -> int:
     return 0 if r.ok else 2
 
 
+def _cmd_auditar(a) -> int:
+    """Cobertura determinista de todas las unidades contra los PDF de --pdf-dir."""
+    import json
+    from .verificar import auditar
+    pdfs = {p.stem: str(p) for p in Path(a.pdf_dir).glob("*.pdf")}
+    res = auditar(a.out, pdfs)
+    if a.json:
+        Path(a.json).write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+    malos = res["con_problemas"]
+    print(f"{len(malos)} de {res['total']} unidades con problemas de cobertura")
+    for ref, pr in list(malos.items())[:60]:
+        print(f"  {ref}: " + "; ".join(f"{p['tipo']} «{p['fragmento'][:80]}»" for p in pr[:2]))
+    return 0
+
+
 def _cmd_validar(a) -> int:
     ok, checks = validar(a.out)
     print(format_report(checks))
@@ -230,6 +257,13 @@ def main(argv=None) -> int:
     sp.add_argument("--out", required=True, help="repo de datos de salida")
     sp.add_argument("--pdf-dir", help="conservar los PDF descargados aquí (<clave>.pdf)")
     sp.set_defaults(fn=_cmd_actualizar)
+
+    sp = sub.add_parser("auditar",
+                        help="cobertura determinista de todas las unidades contra los PDF")
+    sp.add_argument("--out", required=True, help="repo de datos")
+    sp.add_argument("--pdf-dir", required=True, help="PDFs de `actualizar --pdf-dir`")
+    sp.add_argument("--json", default=None, help="escribe el resultado aquí")
+    sp.set_defaults(fn=_cmd_auditar)
 
     sp = sub.add_parser("verificar",
                         help="verifica contra los PDF las unidades cambiadas (git)")

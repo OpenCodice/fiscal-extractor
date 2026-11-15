@@ -69,18 +69,23 @@ def fecha_publicacion(pdf_path: str) -> date | None:
     return date(int(m.group(3)), mes, int(m.group(1))) if mes else None
 
 
-def texto_limpio(pdf_path: str) -> str:
+def limpiar_paginas(paginas: list[str]) -> str:
+    """Texto completo sin encabezado/pie del DOF, a partir del texto por página."""
     partes = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            lineas = []
-            for ln in (page.extract_text() or "").splitlines():
-                s = ln.strip()
-                if DOF_HEADER_RE.match(s) or PAGE_NUM_RE.match(s):
-                    continue
-                lineas.append(ln)
-            partes.append("\n".join(lineas))
+    for pagina in paginas:
+        lineas = []
+        for ln in pagina.splitlines():
+            s = ln.strip()
+            if DOF_HEADER_RE.match(s) or PAGE_NUM_RE.match(s):
+                continue
+            lineas.append(ln)
+        partes.append("\n".join(lineas))
     return "\n".join(partes)
+
+
+def texto_limpio(pdf_path: str) -> str:
+    with pdfplumber.open(pdf_path) as pdf:
+        return limpiar_paginas([page.extract_text() or "" for page in pdf.pages])
 
 
 def parse(pdf_path: str, doc: Documento) -> list[Regla]:

@@ -183,12 +183,17 @@ def _titulo_corrido(paginas: list[str]) -> tuple[str, ...]:
     return (comun,) if n >= max(3, len(paginas) // 2) else ()
 
 
+def limpiar_paginas(paginas: list[str], doc: Documento) -> str:
+    """Texto completo sin encabezados/pies, a partir del texto crudo por página."""
+    fuera = doc.titulos_encabezado + _titulo_corrido(paginas)
+    return "\n".join(_quitar_encabezados(t, fuera) for t in paginas)
+
+
 def texto_limpio(pdf_path: str, doc: Documento) -> str:
     """Texto completo del PDF sin encabezados/pies de página."""
     with pdfplumber.open(pdf_path) as pdf:
         paginas = [page.extract_text() or "" for page in pdf.pages]
-    fuera = doc.titulos_encabezado + _titulo_corrido(paginas)
-    return "\n".join(_quitar_encabezados(t, fuera) for t in paginas)
+    return limpiar_paginas(paginas, doc)
 
 
 def es_ruido_factory(pdf_path: str, doc: Documento):

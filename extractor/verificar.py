@@ -56,19 +56,32 @@ def _es_encabezado(texto: str) -> bool:
                 and not re.search(r"\bArt[íi]culo\s+\d", texto))
 
 
+def paginas_crudas(pdf_path: str) -> list[str]:
+    """Texto crudo por página. Extraerlo es lo caro de toda la verificación, así
+    que se guarda junto al PDF y se reutiliza mientras el PDF no cambie."""
+    pdf = Path(pdf_path)
+    cache = pdf.with_suffix(".paginas.json")
+    firma = [pdf.stat().st_size, pdf.stat().st_mtime_ns]
+    if cache.exists():
+        guardado = json.loads(cache.read_text(encoding="utf-8"))
+        if guardado.get("firma") == firma:
+            return guardado["paginas"]
+    import pdfplumber
+    with pdfplumber.open(pdf_path) as doc:
+        paginas = [page.extract_text() or "" for page in doc.pages]
+    cache.write_text(json.dumps({"firma": firma, "paginas": paginas}, ensure_ascii=False),
+                     encoding="utf-8")
+    return paginas
+
+
 def texto_limpio(doc: Documento, pdf_path: str) -> str:
     """El mismo texto sin encabezados/pies que consume el parser del documento."""
+    paginas = paginas_crudas(pdf_path)
     if doc.parser == "articulado":
-        return articulado.texto_limpio(pdf_path, doc)
+        return articulado.limpiar_paginas(paginas, doc)
     if doc.parser == "reglas":
-        return reglas.texto_limpio(pdf_path)
-    return criterios.texto_limpio(pdf_path)
-
-
-def paginas_crudas(pdf_path: str) -> list[str]:
-    import pdfplumber
-    with pdfplumber.open(pdf_path) as pdf:
-        return [page.extract_text() or "" for page in pdf.pages]
+        return reglas.limpiar_paginas(paginas)
+    return criterios.limpiar_paginas(paginas)
 
 
 def _norm(s: str) -> str:
@@ -369,6 +382,21 @@ def verificar(out: str | Path, pdf_por_clave: dict[str, str],
         with ThreadPoolExecutor(max_workers=6) as pool:
             llm = list(pool.map(evaluar, _muestra(candidatos, MAX_LLM)))
     return Resultado(len(todos), duros, llm, sin_pdf)
+
+
+def auditar(out: str | Path, pdf_por_clave: dict[str, str]) -> dict:
+    """Cobertura determinista de TODAS las unidades de los documentos con PDF.
+    Sirve de línea base: un cambio al extractor no puede sumar unidades."""
+    total, malos = 0, {}
+    for clave, pdf in sorted(pdf_por_clave.items()):
+        if clave not in POR_CLAVE:
+            continue
+        flujo = Flujo.de(texto_limpio(POR_CLAVE[clave], pdf))
+        for md in sorted((Path(out) / clave).glob("*.md")):
+            total += 1
+            if pr := cobertura(md.read_text(encoding="utf-8"), flujo):
+                malos[f"{clave}/{md.stem}"] = pr
+    return {"total": total, "con_problemas": malos}
 
 
 ICONO = {"fiel": "✅", "artefacto": "❌", "incierto": "❔"}
