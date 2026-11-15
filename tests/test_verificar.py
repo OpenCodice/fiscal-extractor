@@ -105,3 +105,15 @@ def test_resultado_ok_exige_todo_en_verde():
 def test_muestra_reparte_parejo():
     assert _muestra(list(range(5)), 10) == [0, 1, 2, 3, 4]
     assert _muestra(list(range(100)), 4) == [0, 25, 50, 75]
+
+
+def test_encabezado_pegado_al_final_del_articulo():
+    from extractor.verificar import encabezado_pegado
+    pegado = "# Artículo 1797.\n\nSiete.\n\nDe la Capacidad\n"
+    assert encabezado_pegado(pegado)[0]["fragmento"] == "De la Capacidad"
+    # Notas de reforma, fracciones y párrafos con punto final no son encabezados.
+    for md in ("# Artículo 1.\n\nUno.\n\n_Artículo reformado DOF 01-01-2020_\n",
+               "# Artículo 2.\n\nSon:\n\nI. Las personas físicas\n",
+               "# Artículo 3.\n\nUno.\n\nDos.\n",
+               "# Artículo 4.\n\n(Se deroga)\n"):
+        assert encabezado_pegado(md) == []

@@ -67,17 +67,24 @@ ARTICULO_RE = re.compile(
 _ORDINAL_TC = (r"(?:Primer[oa]|Segund[oa]|Tercer[oa]|Cuart[oa]|Quint[oa]|"
                r"Sext[oa]|S[ée]ptim[oa]|Octav[oa]|Noven[oa]|D[ée]cim[oa])")
 _NUMERAL_TC = rf"(?:[IVXLCDM]+|{_ORDINAL_TC}(?:\s+{_ORDINAL_TC})?)"
+_BIS_TC = r"(?:\s+(?:Bis|Ter))?"
 TITULO_RE = re.compile(r"^T[IÍ]TULO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]+){0,2}\s*$"
-                       rf"|^T[íi]tulo\s+{_NUMERAL_TC}\s*$")
+                       rf"|^T[íi]tulo\s+{_NUMERAL_TC}{_BIS_TC}\s*$")
 _ORDINAL_MAY = (r"PRIMER[OA]|SEGUND[OA]|TERCER[OA]|CUART[OA]|QUINT[OA]|SEXT[OA]|"
                  r"S[EÉ]PTIM[OA]|OCTAV[OA]|NOVEN[OA]|D[EÉ]CIM[OA]")
 CAPITULO_RE = re.compile(rf"^CAP[IÍ]TULO\s+([IVXLCDM]+|[ÚU]NICO|{_ORDINAL_MAY})\b.*$"
-                         rf"|^Cap[íi]tulo\s+(?:{_NUMERAL_TC}|[ÚU]nico)\s*$")
+                         rf"|^Cap[íi]tulo\s+(?:{_NUMERAL_TC}|[ÚU]nico){_BIS_TC}\s*$")
 # Libro: nivel sobre el Título en los códigos (Código Penal, Código Civil).
 LIBRO_RE = re.compile(r"^LIBRO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]+)?\s*$"
                       rf"|^Libro\s+{_NUMERAL_TC}\s*$")
 SECCION_RE = re.compile(rf"^SECCI[OÓ]N\s+([IVXLCDM]+|[ÚU]NICA|{_ORDINAL_MAY})\b.*$"
-                        rf"|^Secci[óo]n\s+(?:{_NUMERAL_TC}|[ÚU]nica)\s*$")
+                        rf"|^Secci[óo]n\s+(?:{_NUMERAL_TC}|[ÚU]nica){_BIS_TC}\s*$")
+# Parte: nivel del Código Civil ('PARTE SEGUNDA', 'TERCERA PARTE') y de la Ley de
+# Amparo ('Segunda Parte'). Apartado: subdivisión de capítulo ('APARTADO II',
+# 'Apartado A'), sin más texto en la línea.
+_ORD_PARTE = rf"(?:{_ORDINAL_MAY}|{_ORDINAL_TC})"
+PARTE_RE = re.compile(rf"^(?:PARTE|Parte)\s+{_ORD_PARTE}\s*$|^{_ORD_PARTE}\s+(?:PARTE|Parte)\s*$")
+APARTADO_RE = re.compile(r"^(?:APARTADO|Apartado)\s+(?:[A-Z]|[IVXLC]+)\s*$")
 
 # ¿Es la línea-nombre de un encabezado? (la que sigue a "SECCIÓN IV"). Con
 # `estricto` exige MAYÚSCULAS (formato Cámara): excluye notas de reforma
@@ -109,22 +116,27 @@ def _es_nombre_encabezado(s: str, estricto: bool = True) -> bool:
 # Nombre en caja normal de un encabezado en MAYÚSCULAS. Solo se acepta si el
 # bloque desemboca en el siguiente artículo (ver parse_texto); aquí se descartan
 # las notas de reforma y lo que no puede ser un nombre.
-MAX_LINEAS_ENCABEZADO = 8
+MAX_LINEAS_ENCABEZADO = 12
 MAX_LINEAS_NOMBRE = 3
 
 
 def _es_nombre_suelto(s: str, continuacion: bool = False) -> bool:
     if not s or len(s) > 150 or "DOF" in s or s.startswith("("):
         return False
-    if (TITULO_RE.match(s) or CAPITULO_RE.match(s) or SECCION_RE.match(s)
-            or LIBRO_RE.match(s) or ARTICULO_RE.match(s) or PAGE_FOOTER_RE.match(s)):
+    if _es_encabezado(s) or ARTICULO_RE.match(s) or PAGE_FOOTER_RE.match(s):
         return False
     if re.fullmatch(r"[IVXLCDM]+", s) or re.match(r"^[IVXLCDM]+\.\s", s):
         return False                      # numeral solo o fracción 'II. …'
-    if s[-1] in ".;:,":
+    # La coma final es de un nombre que sigue en la línea siguiente.
+    if s[-1] in ".;:":
         return False
     inicio = s.lstrip('"“«')[:1]
     return inicio.islower() if continuacion else inicio.isupper()
+
+
+def _es_encabezado(s: str) -> bool:
+    return bool(TITULO_RE.match(s) or CAPITULO_RE.match(s) or SECCION_RE.match(s)
+                or LIBRO_RE.match(s) or PARTE_RE.match(s) or APARTADO_RE.match(s))
 
 
 def _es_nota_de_bloque(s: str) -> bool:
@@ -283,6 +295,9 @@ def parse(pdf_path: str, doc: Documento) -> list[Unidad]:
     return parse_texto(texto_limpio(pdf_path, doc))
 
 
+NIVELES = ("titulo", "capitulo", "seccion", "epigrafe")
+
+
 def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
     """Segmenta texto ya limpio en unidades. Separado para poder probarlo sin PDF."""
     texto = _solo_articulado(clean_text)
@@ -290,13 +305,21 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
 
     unidades: list[Unidad] = []
     actual: Unidad | None = None
-    cur_titulo = ""
-    cur_capitulo = ""
-    cur_seccion = ""
-    # ('titulo'|'capitulo'|'seccion', encabezado, líneas-nombre acumuladas):
-    # un encabezado espera su nombre en la(s) línea(s) siguiente(s).
+    # Jerarquía vigente: 'TÍTULO IV. DE LAS PERSONAS FÍSICAS', etc. El epígrafe
+    # es el nivel más bajo: un apartado o un rótulo sin palabra clave ('Del
+    # Consentimiento' en el Código Civil).
+    jer = dict.fromkeys(NIVELES, "")
+    ultimo_nivel = ""
+    # (nivel, encabezado, líneas-nombre acumuladas): un encabezado espera su
+    # nombre en la(s) línea(s) siguiente(s).
     pendiente: tuple[str, str, list[str]] | None = None
     esperado = start                 # número de artículo esperado (valida la secuencia)
+    # Dentro de un bloque de encabezado que desemboca en el siguiente artículo,
+    # sus nombres, notas ('Capítulo adicionado DOF …') y la marca '(Se deroga)'
+    # de un capítulo derogado son de la estructura, no del artículo anterior.
+    en_bloque = False
+    nota_previa: str | bool = False
+    previa = ""                      # última línea no vacía
 
     def flush(u: Unidad | None) -> None:
         if u is not None:
@@ -306,17 +329,19 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             u.derogado = bool(DEROGADO_RE.search(primer))
             unidades.append(u)
 
-    ultimo_nivel = ""
-
-    def _fijar(nivel: str, valor: str) -> None:
-        nonlocal cur_titulo, cur_capitulo, cur_seccion, ultimo_nivel
+    def fijar(nivel: str, valor: str) -> None:
+        nonlocal ultimo_nivel
         ultimo_nivel = nivel
-        if nivel == "titulo":
-            cur_titulo, cur_capitulo, cur_seccion = valor, "", ""   # nuevo título resetea lo inferior
-        elif nivel == "capitulo":
-            cur_capitulo, cur_seccion = valor, ""                   # nuevo capítulo resetea sección
-        else:
-            cur_seccion = valor
+        jer[nivel] = valor
+        for inferior in NIVELES[NIVELES.index(nivel) + 1:]:
+            jer[inferior] = ""                  # un nivel nuevo resetea los inferiores
+
+    def ampliar_nombre(linea: str) -> None:
+        """Suma una línea al nombre del último encabezado (nombre envuelto, o
+        un subencabezado sin palabra clave tras un salto de página)."""
+        if ultimo_nivel:
+            v = jer[ultimo_nivel]
+            jer[ultimo_nivel] = f"{v}{' ' if '. ' in v or ultimo_nivel == 'epigrafe' else '. '}{linea}"
 
     def abre_articulo(s: str) -> bool:
         """¿`s` abre un artículo que la secuencia aceptaría ahora mismo?"""
@@ -327,9 +352,11 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
         return ((numero == esperado and not sufijo)
                 or (actual is not None and numero == actual.numero and sufijo))
 
-    def desemboca_en_articulo(i: int) -> bool:
-        """¿Hay un artículo aceptable en las líneas que siguen a `i`, dentro de un
-        bloque de encabezado (encabezados, nombres y notas de reforma)?"""
+    def desemboca_en_articulo(i: int, max_lineas: int = MAX_LINEAS_ENCABEZADO,
+                              solo_estructura: bool = False) -> bool:
+        """¿Hay un artículo aceptable en las líneas que siguen a `i`? Con
+        `solo_estructura`, todas las intermedias deben ser encabezados, nombres o
+        notas."""
         vistas = 0
         for sig in lineas[i + 1:]:
             s = sig.strip()
@@ -337,41 +364,32 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
                 continue
             if abre_articulo(s):
                 return True
+            if solo_estructura and not (
+                    _es_encabezado(s) or _es_nota_de_bloque(s) or _es_nombre_suelto(s)
+                    or _es_nombre_suelto(s, continuacion=True)
+                    or re.fullmatch(r"[IVXLCDM]+", s)):
+                return False
             vistas += 1
-            if vistas >= MAX_LINEAS_ENCABEZADO:
+            if vistas >= max_lineas:
                 return False
         return False
 
-    # Dentro de un bloque de encabezado que desemboca en el siguiente artículo,
-    # sus notas ('Capítulo adicionado DOF …') y la marca '(Se deroga)' de un
-    # capítulo derogado son de la estructura, no del artículo anterior.
-    en_bloque = False
-    nota_previa = False
-
-    def _ampliar_nombre(linea: str) -> None:
-        """Suma una línea al nombre del último encabezado (nombre envuelto, o
-        un subencabezado sin palabra clave tras un salto de página)."""
-        if ultimo_nivel == "titulo":
-            _fijar_sin_reset("titulo", cur_titulo, linea)
-        elif ultimo_nivel == "capitulo":
-            _fijar_sin_reset("capitulo", cur_capitulo, linea)
-        elif ultimo_nivel == "seccion":
-            _fijar_sin_reset("seccion", cur_seccion, linea)
-
-    def _fijar_sin_reset(nivel: str, actual_valor: str, linea: str) -> None:
-        nonlocal cur_titulo, cur_capitulo, cur_seccion
-        sep = " " if ". " in actual_valor else ". "
-        valor = f"{actual_valor}{sep}{linea}"
-        if nivel == "titulo":
-            cur_titulo = valor
-        elif nivel == "capitulo":
-            cur_capitulo = valor
-        else:
-            cur_seccion = valor
+    def nivel_de(s: str) -> str | None:
+        if (TITULO_RE.match(s) or LIBRO_RE.match(s) or PARTE_RE.match(s)) and (
+                actual is None or len(s) < 35):
+            return "titulo"
+        if CAPITULO_RE.match(s) and (actual is None or len(s) < 30):
+            return "capitulo"
+        if SECCION_RE.match(s) and (actual is None or len(s) < 35):
+            return "seccion"
+        if APARTADO_RE.match(s):
+            return "epigrafe"
+        return None
 
     for i, raw in enumerate(lineas):
         line = raw.rstrip()
         stripped = line.strip()
+        anterior, previa = previa, (stripped or previa)
 
         # ¿La línea anterior fue un encabezado esperando su nombre (línea siguiente)?
         if pendiente is not None:
@@ -398,21 +416,28 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             pendiente = None
             nombre = " ".join(partes)
             # 'TÍTULO IV. DE LAS PERSONAS FÍSICAS'; sin nombre: solo número.
-            _fijar(nivel, f"{encabezado}. {nombre}" if nombre else encabezado)
+            fijar(nivel, f"{encabezado}. {nombre}" if nombre else encabezado)
             # no 'continue': esta línea puede ser un artículo u otro encabezado
 
-        nivel = None
-        if (TITULO_RE.match(stripped) or LIBRO_RE.match(stripped)) and (
-                actual is None or len(stripped) < 35):
-            nivel = "titulo"
-        elif CAPITULO_RE.match(stripped) and (actual is None or len(stripped) < 30):
-            nivel = "capitulo"
-        elif SECCION_RE.match(stripped) and (actual is None or len(stripped) < 35):
-            nivel = "seccion"
+        nivel = nivel_de(stripped)
         if nivel:
             pendiente = (nivel, stripped, [])
             if actual is not None and desemboca_en_articulo(i):
                 en_bloque = True
+            continue
+
+        if actual is not None and not en_bloque and stripped and (
+                # Subencabezado sin palabra clave: un numeral solo ('III' en la
+                # Ley Aduanera) o un rótulo tras el final del artículo ('Del
+                # Consentimiento', Código Civil), seguidos solo de estructura
+                # hasta el siguiente artículo.
+                (re.fullmatch(r"[IVXLCDM]+", stripped)
+                 and desemboca_en_articulo(i, 3, solo_estructura=True))
+                or (_es_nombre_suelto(stripped) and not stripped.endswith(",")
+                    and (anterior.endswith((".", ";", ":")) or _es_nota_de_bloque(anterior))
+                    and desemboca_en_articulo(i, 4, solo_estructura=True))):
+            fijar("epigrafe", stripped)
+            en_bloque = True
             continue
 
         if en_bloque and not ARTICULO_RE.match(stripped):
@@ -428,8 +453,7 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             nota_previa = False
             if (_es_nombre_suelto(stripped) or _es_nombre_suelto(stripped, continuacion=True)
                     or re.fullmatch(r"[IVXLCDM]+", stripped)):
-                # Un numeral solo ('I' bajo 'Sección Primera') es un subencabezado.
-                _ampliar_nombre(stripped)
+                ampliar_nombre(stripped)
                 continue
 
         am = ARTICULO_RE.match(stripped)
@@ -450,8 +474,8 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
                 flush(actual)
                 actual = Unidad(
                     numero=numero, letra=letra, ordinal=ordinal, ord_num=ord_num,
-                    sub_letra=sub_letra,
-                    titulo=cur_titulo, capitulo=cur_capitulo, seccion=cur_seccion,
+                    sub_letra=sub_letra, titulo=jer["titulo"], capitulo=jer["capitulo"],
+                    seccion=jer["seccion"], epigrafe=jer["epigrafe"],
                 )
                 actual.cuerpo = line + "\n"
                 if es_siguiente:

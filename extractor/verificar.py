@@ -194,6 +194,24 @@ def cobertura(md: str, flujo: Flujo) -> list[dict]:
     return problemas
 
 
+def encabezado_pegado(md: str) -> list[dict]:
+    """Último párrafo de un artículo que tiene forma de encabezado: corto, sin
+    puntuación final, sin nota de reforma y sin ser fracción. Es texto literal
+    del PDF, así que `cobertura` no lo ve, pero es estructura (el nombre de un
+    capítulo, un epígrafe) pegada al artículo anterior."""
+    bloques = [b.strip() for b in md.split("\n\n") if b.strip() and not b.startswith("# ")]
+    while bloques and bloques[-1].startswith("_"):
+        bloques.pop()                       # notas de reforma en cursiva
+    if len(bloques) < 2:
+        return []
+    b = bloques[-1]
+    if (len(b) > 150 or "DOF" in b or re.search(r"[.;:)…”\"»]$", b)
+            or re.match(r"^(?:[IVXLCDM]+|[a-zñ]{1,2}|\d+)\s*[.)\-]", b)
+            or not b[:1].isupper()):
+        return []
+    return [{"tipo": "encabezado_pegado", "fragmento": b[:200]}]
+
+
 # ------------------------------------------------------------------ contexto
 
 def _coincidencias(bloque: str, normas: list[str]) -> list[int]:
@@ -360,8 +378,10 @@ def verificar(out: str | Path, pdf_por_clave: dict[str, str],
             continue
         pdf = pdf_por_clave[clave]
         flujo = Flujo.de(texto_limpio(POR_CLAVE[clave], pdf))
+        articulado_doc = POR_CLAVE[clave].parser == "articulado"
         for c in cs:
-            if c.despues and (pr := cobertura(c.despues, flujo)):
+            if c.despues and (pr := cobertura(c.despues, flujo) + (
+                    encabezado_pegado(c.despues) if articulado_doc else [])):
                 duros.append(Veredicto(c.ref, "artefacto",
                                        "El texto extraído no coincide con el PDF.", pr))
         paginas = paginas_crudas(pdf)
@@ -392,9 +412,12 @@ def auditar(out: str | Path, pdf_por_clave: dict[str, str]) -> dict:
         if clave not in POR_CLAVE:
             continue
         flujo = Flujo.de(texto_limpio(POR_CLAVE[clave], pdf))
+        articulado_doc = POR_CLAVE[clave].parser == "articulado"
         for md in sorted((Path(out) / clave).glob("*.md")):
             total += 1
-            if pr := cobertura(md.read_text(encoding="utf-8"), flujo):
+            texto = md.read_text(encoding="utf-8")
+            if pr := cobertura(texto, flujo) + (
+                    encabezado_pegado(texto) if articulado_doc else []):
                 malos[f"{clave}/{md.stem}"] = pr
     return {"total": total, "con_problemas": malos}
 

@@ -338,7 +338,7 @@ def test_encabezado_que_no_desemboca_en_articulo_no_se_come_texto():
         "Artículo 1o.- Lo previsto en el\n"
         "CAPÍTULO II\n"
         "Disposiciones de esta Ley aplica\n"
-        "a todos los casos\n" + "".join(f"línea {i} del artículo\n" for i in range(10))
+        "a todos los casos\n" + "".join(f"línea {i} del artículo\n" for i in range(20))
         + "Artículo 2o.- Dos."
     )
     us = parse_texto(texto)
@@ -504,3 +504,113 @@ def test_titulo_corrido_en_dos_lineas():
            "OPERACIONES CON RECURSOS\nDE PROCEDENCIA ILÍCITA\n")
     paginas = ["Portada"] + [cab + f"Texto de la página {i}\n" for i in range(6)]
     assert _titulo_corrido(paginas) == (cab.splitlines()[0], "DE PROCEDENCIA ILÍCITA")
+
+
+# --------------------------------------------------------------------------- #
+# Epígrafes, apartados y partes (Código Civil, Ley del Mercado de Valores, CNPP)
+# --------------------------------------------------------------------------- #
+def test_epigrafe_sin_palabra_clave():
+    # Código Civil Federal: rótulos sueltos entre artículos.
+    texto = (
+        "Artículo 1796.- Los contratos se perfeccionan por el mero consentimiento.\n"
+        "Artículo 1797.- Siete.\n"
+        "De la Capacidad\n"
+        "Artículo 1798.- Son hábiles para contratar todas las personas no exceptuadas por la ley."
+    )
+    us = parse_texto(texto, start=1796)
+    assert [u.clave for u in us] == ["1796", "1797", "1798"]
+    assert us[1].cuerpo.strip() == "Artículo 1797.- Siete."
+    assert us[2].epigrafe == "De la Capacidad"
+    assert "De la Capacidad" in us[2].contexto
+
+
+def test_epigrafe_con_nota_de_reforma():
+    texto = (
+        "Artículo 3042.- Texto final.\n"
+        "DE LOS EFECTOS DE LAS ANOTACIONES\n"
+        "Epígrafe adicionado DOF 18-01-1952. Reformado DOF 03-01-1979\n"
+        "Artículo 3043.- Otro."
+    )
+    us = parse_texto(texto, start=3042)
+    assert us[0].cuerpo.strip() == "Artículo 3042.- Texto final."
+
+
+def test_linea_sin_punto_a_media_frase_no_es_epigrafe():
+    # Sin un final de oración antes, una línea corta en mayúscula es la
+    # continuación del párrafo, no un rótulo.
+    texto = (
+        "Artículo 1o.- Las disposiciones de la presente Ley Federal\n"
+        "Del Trabajo\n"
+        "Artículo 2o.- Dos."
+    )
+    us = parse_texto(texto)
+    assert "Del Trabajo" in us[0].cuerpo
+
+
+def test_apartado_y_parte():
+    texto = (
+        "Artículo 28.- Uno.\n"
+        "Apartado A\n"
+        "Del deber de diligencia\n"
+        "Artículo 29.- Dos.\n"
+        "TERCERA PARTE\n"
+        "De las obligaciones\n"
+        "Artículo 30.- Tres.\n"
+        "Segunda Parte\n"
+        "En Materia Penal\n"
+        "Artículo 31.- Cuatro."
+    )
+    us = parse_texto(texto, start=28)
+    assert [u.cuerpo.strip() for u in us] == [
+        "Artículo 28.- Uno.", "Artículo 29.- Dos.", "Artículo 30.- Tres.", "Artículo 31.- Cuatro."]
+    assert us[1].epigrafe == "Apartado A. Del deber de diligencia"
+    assert us[2].titulo == "TERCERA PARTE. De las obligaciones" and us[2].epigrafe == ""
+
+
+def test_capitulo_bis_y_nombre_envuelto_con_coma():
+    texto = (
+        "Artículo 33.- Uno.\n"
+        "Capítulo IV Bis\n"
+        "Del Beneficiario Controlador\n"
+        "Artículo 34.- Dos.\n"
+        "CAPITULO IV\n"
+        "Aplicación de sanciones en caso de concurso, delito continuado, complicidad,\n"
+        "reincidencia y error vencible\n"
+        "Denominación del Capítulo reformada DOF 13-01-1984, 10-01-1994\n"
+        "Artículo 35.- Tres."
+    )
+    us = parse_texto(texto, start=33)
+    assert [u.cuerpo.strip() for u in us] == [
+        "Artículo 33.- Uno.", "Artículo 34.- Dos.", "Artículo 35.- Tres."]
+    assert us[2].capitulo.endswith("reincidencia y error vencible")
+
+
+def test_bloque_largo_titulo_y_capitulo_con_nombres_de_tres_lineas():
+    # LISR, Título VI: el bloque completo supera las 8 líneas.
+    texto = (
+        "Artículo 175.- Texto.\n"
+        "TÍTULO VI\n"
+        "DE LAS ENTIDADES EXTRANJERAS CONTROLADAS SUJETAS A REGÍMENES\n"
+        "FISCALES PREFERENTES, DE LAS EMPRESAS MULTINACIONALES Y DE LAS\n"
+        "OPERACIONES CELEBRADAS ENTRE PARTES RELACIONADAS\n"
+        "Denominación del Título reformada DOF 09-12-2019, 12-11-2021\n"
+        "CAPÍTULO I\n"
+        "DE LAS ENTIDADES EXTRANJERAS CONTROLADAS SUJETAS A REGÍMENES\n"
+        "FISCALES PREFERENTES\n"
+        "Denominación del Capítulo reformada DOF 09-12-2019\n"
+        "Artículo 176.- Otro."
+    )
+    us = parse_texto(texto, start=175)
+    assert us[0].cuerpo.strip() == "Artículo 175.- Texto."
+    assert us[1].titulo.endswith("ENTRE PARTES RELACIONADAS")
+
+
+def test_numeral_solo_como_subencabezado_sin_palabra_clave():
+    texto = (
+        "Artículo 107.- Texto.\n"
+        "III\n"
+        "Para elaboración, transformación o reparación en programas de maquila o de exportación\n"
+        "ARTICULO 108. Otro."
+    )
+    us = parse_texto(texto, start=107)
+    assert us[0].cuerpo.strip() == "Artículo 107.- Texto."

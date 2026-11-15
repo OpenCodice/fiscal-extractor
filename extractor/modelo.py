@@ -56,6 +56,7 @@ class Unidad:
     titulo: str = ""                 # "TÍTULO IV. DE LAS PERSONAS FÍSICAS" (núm. + nombre)
     capitulo: str = ""               # "CAPÍTULO II. DE LOS INGRESOS..."
     seccion: str = ""                # "SECCIÓN IV. DEL RÉGIMEN SIMPLIFICADO DE CONFIANZA"
+    epigrafe: str = ""               # apartado o rótulo: "Apartado A. Del deber…", "Forma"
     cuerpo: str = ""                 # texto completo de la unidad
     fechas_reforma: list[date] = field(default_factory=list)
     derogado: bool = False
@@ -69,7 +70,9 @@ class Unidad:
         cuerpo del Art. 113-E), así que sin esto la unidad es irrecuperable por
         ese término. No es fuente de cita.
         """
-        return _contexto(self.titulo, self.capitulo, self.seccion)
+        base = _contexto(self.titulo, self.capitulo, self.seccion)
+        epigrafe = _nombre_jerarquia(self.epigrafe) or self.epigrafe
+        return " · ".join(x for x in (base, epigrafe) if x)
 
     @property
     def clave(self) -> str:
@@ -134,7 +137,9 @@ class Regla:
     @property
     def contexto(self) -> str:
         """Nombres de Título/Capítulo/Sección de la regla, para búsqueda."""
-        return _contexto(self.titulo, self.capitulo, self.seccion)
+        base = _contexto(self.titulo, self.capitulo, self.seccion)
+        epigrafe = _nombre_jerarquia(self.epigrafe) or self.epigrafe
+        return " · ".join(x for x in (base, epigrafe) if x)
 
     @property
     def nivel(self) -> int:
