@@ -98,14 +98,43 @@ if [ "$cobertura_ok" -eq 0 ] && [ "$fiel" = "true" ] && [ -z "$motivo_descarte" 
   ok=true
 fi
 
-python - "$TRABAJO" "$REPORTE" "$ok" "$reparado" "$motivo_descarte" <<'PY'
-import json, pathlib, sys
-trabajo, reporte, ok, reparado, descarte = sys.argv[1:6]
+python - "$TRABAJO" "$REPORTE" "$ok" "$reparado" "$motivo_descarte" "$OUT" <<'PY'
+import json, os, pathlib, subprocess, sys
+trabajo, reporte, ok, reparado, descarte, out_dir = sys.argv[1:7]
 t = pathlib.Path(trabajo)
 try:
     v = json.loads((t / "veredicto.json").read_text(encoding="utf-8"))
 except Exception:
     v = None
+# Asunto del commit de datos: distingue reforma real de corrección de extracción.
+cambiadas = set()
+for l in subprocess.run(["git", "-C", out_dir, "status", "--porcelain", "--no-renames", "-uall"],
+                        capture_output=True, text=True).stdout.splitlines():
+    r = pathlib.Path(l[3:].strip().strip('"'))
+    if r.suffix == ".md" and len(r.parts) == 2 and r.parts[0] not in ("metadata", "scripts"):
+        cambiadas.add(f"{r.parts[0]}/{r.stem}")
+reformadas = set(map(str, (v or {}).get("reformadas", []))) & cambiadas
+correcciones = cambiadas - reformadas
+
+
+def por_doc(refs):
+    n = {}
+    for r in refs:
+        n[r.split("/")[0]] = n.get(r.split("/")[0], 0) + 1
+    return ", ".join(f"{d} ({c})" for d, c in sorted(n.items()))
+
+
+if reformadas:
+    asunto = f"Actualización del corpus fiscal: {por_doc(reformadas)}"
+    if correcciones:
+        asunto += f" (+{len(correcciones)} correcciones de extracción)"
+    tipo = "reforma"
+elif correcciones:
+    asunto = f"Corrección de extracción del corpus fiscal: {por_doc(correcciones)}"
+    tipo = "correccion"
+else:
+    asunto, tipo = "Actualización de metadata del corpus fiscal", "metadata"
+
 icono = {"fiel": "✅", "artefacto": "❌", "incierto": "❔"}
 out = ["### 🤖 Verificación del agente contra los PDF", ""]
 if ok == "true":
@@ -124,6 +153,11 @@ else:
 if descarte:
     out += ["", f"⚠️ Se descartó un arreglo del agente: {descarte}."]
 out += ["", (t / "cobertura-final.md").read_text(encoding="utf-8")]
+if ok == "true":
+    out += ["", f"<!-- asunto: {asunto} -->"]
+if os.environ.get("GITHUB_OUTPUT"):
+    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+        fh.write(f"tipo={tipo}\n")
 pathlib.Path(reporte).write_text("\n".join(out) + "\n", encoding="utf-8")
 print("\n".join(out))
 PY
