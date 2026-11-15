@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 # PDFs fuente: se descargan, no se versionan (pesan ~3 MB c/u).
 *.pdf
+# Texto por página que guarda verificar.py junto a cada PDF (caché local).
+*.paginas.json
