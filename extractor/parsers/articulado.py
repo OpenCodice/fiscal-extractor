@@ -43,7 +43,7 @@ HEADER_PREFIXES = (
 #   Reglamento de la Ley Aduanera): la validación de secuencia filtra falsos positivos.
 ORDINALES = "Bis|Ter|Qu[aá]ter|Quintus|Quinquies|Sexies|Septies|Octies|Nonies|Decies"
 ARTICULO_RE = re.compile(
-    r"^(?:Art[íi]culo|ART[IÍ]CULO|Art[íi]culos(?=\s+\d+\s*[oº°]?\.-))\.?\s+(\d+)\s*[oº°]?\.?"  # "Artículo"/"ARTÍCULO" + número
+    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art[íi]culos(?=\s+\d+\s*[oº°]?\.-))\.?\s+(\d+)\s*[oº°]?\.?"  # "Artículo"/"ARTÍCULO" + número
 
     r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-]))([A-Z])(?![A-Za-z]))?"  # letra "-A" PEGADA o " A." (118 A.)
     rf"(?:[\s.\-]+(?i:({ORDINALES}))"               # ordinal
@@ -117,6 +117,13 @@ def _es_nombre_encabezado(s: str, estricto: bool = True) -> bool:
 # bloque desemboca en el siguiente artículo (ver parse_texto); aquí se descartan
 # las notas de reforma y lo que no puede ser un nombre.
 MAX_LINEAS_ENCABEZADO = 12
+
+# Marca de agua vertical '(Primera Sección)' que pdfplumber reparte en renglones
+# sueltos ('(P' / 'rim' / 'e' / 'ra' / 'S' / …). Dentro de un bloque de
+# encabezado no es nombre ni texto: no debe cerrar el bloque ni pegarse al
+# artículo anterior.
+MARCA_AGUA_RE = re.compile(
+    r"\(P|rim|e|ra|S|c|ió|n|\)|\(Primera Secci[oó]n\)|\(Segunda Secci[oó]n\)")
 MAX_LINEAS_NOMBRE = 3
 
 
@@ -125,6 +132,8 @@ def _es_nombre_suelto(s: str, continuacion: bool = False) -> bool:
         return False
     if _es_encabezado(s) or ARTICULO_RE.match(s) or PAGE_FOOTER_RE.match(s):
         return False
+    if re.match(r"\[\s*Art[ií]culo\b", s):
+        return False                      # '[Artículo 28 Bis. Suprimido]': texto, no nombre
     if re.fullmatch(r"[IVXLCDM]+", s) or re.match(r"^[IVXLCDM]+\.\s", s):
         return False                      # numeral solo o fracción 'II. …'
     # La coma final es de un nombre que sigue en la línea siguiente.
@@ -388,6 +397,13 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
                     or _es_nombre_suelto(s, continuacion=True)
                     or re.fullmatch(r"[IVXLCDM]+", s)):
                 return False
+            # Encabezados, notas y nombres entre corchetes no cuentan: un bloque
+            # Libro/Título/Capítulo con sus notas de reforma e invalidez puede
+            # pasar de MAX_LINEAS_ENCABEZADO renglones y aun así es estructura.
+            if (_es_encabezado(s) or _es_nota_de_bloque(s)
+                    or (s.startswith("[") and len(s) < 150
+                        and not re.match(r"\[\s*Art[ií]culo\b", s))):
+                continue
             vistas += 1
             if vistas >= max_lineas:
                 return False
@@ -408,6 +424,8 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
     for i, raw in enumerate(lineas):
         line = raw.rstrip()
         stripped = line.strip()
+        if (pendiente is not None or en_bloque) and MARCA_AGUA_RE.fullmatch(stripped):
+            continue
         anterior, previa = previa, (stripped or previa)
 
         # ¿La línea anterior fue un encabezado esperando su nombre (línea siguiente)?
@@ -419,7 +437,12 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             # Title-case (normateca SAT) → nombre Title-case, hasta dos líneas
             # (los nombres largos envuelven: 'De las Facultades previstas en…').
             estricto = encabezado.isupper()
-            acumulable = not partes or (not estricto and len(partes) < 2)
+            # Un nombre en MAYÚSCULAS bajo un encabezado en Title-case ('Sección XVI'
+            # / 'MÁQUINAS Y APARATOS…') puede envolver en tres renglones.
+            en_mayusculas = bool(partes) and all(
+                p.isupper() for p in (*partes, stripped)) and not partes[-1].endswith((".", ";", ":"))
+            acumulable = not partes or (
+                not estricto and len(partes) < (MAX_LINEAS_NOMBRE if en_mayusculas else 2))
             if acumulable and _es_nombre_encabezado(stripped, estricto=estricto):
                 pendiente = (nivel, encabezado, partes + [stripped])
                 continue
@@ -428,6 +451,15 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             # de trabajo'), a veces envuelto en varias líneas. Sin la caja como
             # señal, la prueba es que el bloque desemboque en el siguiente
             # artículo: así no se confunde con texto del artículo anterior.
+            # Un nombre entre corchetes ('[De la Integración … de las Entidades' /
+            # 'Federativas, así como de los Ayuntamientos]') sigue hasta el ']'.
+            corchete_abierto = bool(partes) and partes[0].startswith("[") and not any(
+                "]" in p for p in partes)
+            if corchete_abierto and len(partes) < MAX_LINEAS_NOMBRE and (
+                    not stripped.endswith((".", ";", ":")) or stripped.endswith("]")) and (
+                    "DOF" not in stripped) and not ARTICULO_RE.match(stripped):
+                pendiente = (nivel, encabezado, partes + [stripped])
+                continue
             if estricto and len(partes) < MAX_LINEAS_NOMBRE and _es_nombre_suelto(
                     stripped, continuacion=bool(partes)) and desemboca_en_articulo(i):
                 pendiente = (nivel, encabezado, partes + [stripped])
@@ -439,6 +471,12 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             # no 'continue': esta línea puede ser un artículo u otro encabezado
 
         nivel = nivel_de(stripped)
+        # 'Sección XVI' en Title-case dentro de una tabla (LIGIE) que no desemboca
+        # en un artículo no es estructura: es texto del artículo en curso. Sacarlo
+        # dejaría un hueco en medio de un párrafo.
+        if (nivel and actual is not None and not en_bloque and not stripped.isupper()
+                and not desemboca_en_articulo(i)):
+            nivel = None
         if nivel:
             pendiente = (nivel, stripped, [])
             if actual is not None and desemboca_en_articulo(i):
