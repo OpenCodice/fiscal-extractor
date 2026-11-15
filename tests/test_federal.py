@@ -180,3 +180,22 @@ def test_cerrar_conserva_lo_publicado_si_la_nueva_version_no_es_fiel(repo):
     assert [c for c, _ in res["retenidas"]] == ["lgs"]
     fuentes = json.loads((repo / "fuentes.json").read_text())["documentos"]
     assert fuentes[0]["estado"] == "incluida" and fuentes[0]["revision_pendiente"]
+
+
+def test_cerrar_retira_lo_publicado_si_tampoco_pasa_la_auditoria(repo):
+    # Mismo PDF (cambió el extractor): sin poder certificar la versión publicada
+    # contra el PDF, no se conserva.
+    plan = _plan(repo, [_d("lgs", "extractor")])
+    res = federal.cerrar(plan, str(repo), {"lgs": {**R_OK, "problemas": {"lgs/004": [{}]}}})
+    assert [c for c, _ in res["excluidas"]] == ["lgs"] and not res["retenidas"]
+    assert not (repo / "lgs").exists()
+    fuentes = json.loads((repo / "fuentes.json").read_text())["documentos"]
+    assert fuentes[0]["estado"] == "excluida"
+
+
+def test_cerrar_retira_lo_declarado_fuera_del_corpus(repo, monkeypatch):
+    monkeypatch.setitem(federal.FUERA_DEL_CORPUS, "lgs", "tabla de varias columnas")
+    res = federal.cerrar(_plan(repo, []), str(repo), {})
+    assert res["excluidas"] == [("lgs", "tabla de varias columnas")]
+    assert not (repo / "lgs").exists()
+    assert res["asunto"] == "Retiro de 1 ley que no reproduce el PDF: LGS"

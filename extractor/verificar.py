@@ -219,15 +219,37 @@ def encabezado_pegado(md: str) -> list[dict]:
 # transitorios y los decretos de reforma que la Cámara compila al final.
 _FUERA_DEL_ARTICULADO = re.compile(
     r"^(?:DECRETO\s+(?:por\s+el\s+que|que)\b|Publicado\s+en\s+el\s+Diario\s+Oficial\s+de\s+la"
-    r"\s+Federaci[óo]n\s+el\b|(?:ART[ÍI]CULOS?\s+)?TRANSITORIOS?:?$|T\s+r\s+a\s+n\s+s\s+i)",
+    r"\s+Federaci[óo]n\s+el\b|(?:ART[ÍI]CULOS?\s+)?TRANSITORIOS?:?$|T\s+r\s+a\s+n\s+s\s+i"
+    # Otro artículo del decreto que expidió la ley ('ARTÍCULO SEGUNDO.- …'):
+    # los artículos de una ley llevan número, los de un decreto, ordinal en palabra.
+    r"|ART[ÍI]CULO\s+(?:PRIMERO|SEGUNDO|TERCERO|CUARTO|QUINTO|SEXTO|S[ÉE]PTIMO|OCTAVO|"
+    r"NOVENO|D[ÉE]CIMO|[ÚU]NICO)\b)",
     re.MULTILINE)
 
 
 def fuera_del_articulado(md: str) -> list[dict]:
     """Un artículo que contiene transitorios o decretos de reforma: el corte del
     articulado no se encontró y el último artículo se tragó el resto del PDF."""
-    m = _FUERA_DEL_ARTICULADO.search(md)
-    return [{"tipo": "fuera_del_articulado", "fragmento": md[m.start():m.start() + 200]}] if m else []
+    m = _FUERA_DEL_ARTICULADO.search(md.split("\n", 2)[-1])
+    if not m:
+        return []
+    cuerpo = md.split("\n", 2)[-1]
+    return [{"tipo": "fuera_del_articulado", "fragmento": cuerpo[m.start():m.start() + 200]}]
+
+
+# Párrafo hecho solo de fragmentos de 1 a 3 mayúsculas ('D IA', 'IO O F', 'L'):
+# letras sueltas de una marca de agua girada ('DIARIO OFICIAL') que el PDF
+# intercala con el texto.
+_MARCA_DE_AGUA = re.compile(r"^(?:[A-ZÁÉÍÓÚÑ]{1,3}\s+)*[A-ZÁÉÍÓÚÑ]{1,3}$")
+
+
+def marca_de_agua(md: str) -> list[dict]:
+    for b in md.split("\n\n"):
+        b = b.strip()
+        if b and not b.startswith("#") and _MARCA_DE_AGUA.match(b) \
+                and not re.fullmatch(r"[IVXLCDM]+\.?", b):
+            return [{"tipo": "marca_de_agua", "fragmento": b}]
+    return []
 
 
 # ------------------------------------------------------------------ contexto
@@ -400,6 +422,7 @@ def verificar(out: str | Path, pdf_por_clave: dict[str, str],
         for c in cs:
             if c.despues and (pr := cobertura(c.despues, flujo) + (
                     encabezado_pegado(c.despues) + fuera_del_articulado(c.despues)
+                    + marca_de_agua(c.despues)
                     if articulado_doc else [])):
                 duros.append(Veredicto(c.ref, "artefacto",
                                        "El texto extraído no coincide con el PDF.", pr))
@@ -437,6 +460,7 @@ def auditar(out: str | Path, pdf_por_clave: dict[str, str]) -> dict:
             texto = md.read_text(encoding="utf-8")
             if pr := cobertura(texto, flujo) + (
                     encabezado_pegado(texto) + fuera_del_articulado(texto)
+                    + marca_de_agua(texto)
                     if articulado_doc else []):
                 malos[f"{clave}/{md.stem}"] = pr
     return {"total": total, "con_problemas": malos}

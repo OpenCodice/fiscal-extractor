@@ -137,7 +137,8 @@ def _cmd_cerrar(a) -> int:
     trabajo = Path(a.trabajo)
     resultados = _leer_json(trabajo / "resultados.json", {})
     reparacion = _leer_json(trabajo / "reparacion.json")
-    res = federal.cerrar(a.plan, a.out, resultados, reparacion=reparacion)
+    res = federal.cerrar(a.plan, a.out, resultados, reparacion=reparacion,
+                         pdf_dir=a.pdf_dir)
     plan = _leer_json(a.plan)
     notas = (trabajo / "notas-agente.md").read_text(encoding="utf-8") \
         if (trabajo / "notas-agente.md").exists() else ""
@@ -196,6 +197,8 @@ def registrar(sub) -> None:
 
     sp = fsub.add_parser("cerrar", help="decide altas, exclusiones y el commit")
     sp.add_argument("--plan", required=True)
+    sp.add_argument("--pdf-dir", default=None,
+                    help="PDFs de los documentos con fallas (para auditar lo publicado)")
     sp.add_argument("--out", required=True)
     sp.add_argument("--trabajo", required=True)
     sp.set_defaults(fn=_cmd_cerrar)

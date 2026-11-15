@@ -132,3 +132,17 @@ def test_tabla_al_final_no_es_encabezado_pegado():
     md = ("# Artículo 27.\n\nEl haber se fija conforme a la tabla:\n\n"
           "Años de Servicios Años en el Grado 20 10 22 9 24 8 26 7\n")
     assert encabezado_pegado(md) == []
+
+
+def test_articulo_del_decreto_dentro_de_la_ley():
+    from extractor.verificar import fuera_del_articulado
+    md = ("# Artículo 229.\n\nEl incumplimiento será causa de responsabilidad.\n\n"
+          "ARTÍCULO TERCERO. ..........\n")
+    assert fuera_del_articulado(md)[0]["fragmento"].startswith("ARTÍCULO TERCERO")
+
+
+def test_marca_de_agua():
+    from extractor.verificar import marca_de_agua
+    md = "# Artículo 32.\n\nTendrán las siguientes obligaciones:\n\nD IA\n\nI. Realizar las actividades;\n"
+    assert marca_de_agua(md)[0]["fragmento"] == "D IA"
+    assert marca_de_agua("# Artículo 1.\n\nUno.\n\nII.\n\nDos.\n") == []

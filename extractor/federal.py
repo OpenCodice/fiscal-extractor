@@ -42,11 +42,19 @@ INDICE = f"{BASE_DIPUTADOS}/index.htm"
 # Documentos del índice que no entran a este corpus.
 FUERA_DEL_CORPUS = {
     "cpeum": "La Constitución se versiona aparte, en OpenCodice/constitucion-mexicana.",
+    # Su artículo 1o. es la tarifa arancelaria: una tabla de varias columnas
+    # (fracción, descripción, unidad, tasas) que en texto plano mezcla las
+    # columnas a media descripción. No es un articulado que este parser
+    # pueda representar fielmente.
+    "ligie-2022": "La tarifa del artículo 1o. es una tabla de varias columnas; en texto "
+                  "plano las columnas se mezclan a media descripción.",
 }
 
 # Archivos del extractor cuyo cambio puede cambiar el texto o la metadata que se
 # genera. Si su huella cambia, todo el corpus se reconstruye.
-_FUENTES_EXTRACTOR = ("parsers/*.py", "build.py", "modelo.py", "normalize.py")
+_FUENTES_EXTRACTOR = ("parsers/*.py", "build.py", "modelo.py", "normalize.py",
+                      # Una compuerta más estricta también obliga a reauditar.
+                      "verificar.py", "validate.py")
 
 TIEMPO_MAX_DOC = 20 * 60          # segundos para construir un documento
 
@@ -379,8 +387,22 @@ def motivo_exclusion(r: dict) -> str:
     return ". ".join(partes) or "sin detalle"
 
 
+def _publicada_es_fiel(out: Path, clave: str, pdf: str | None) -> bool:
+    """¿La versión publicada (HEAD) pasa la auditoría actual contra este PDF?"""
+    if not pdf or not Path(pdf).exists():
+        return False
+    import tempfile
+    from .verificar import auditar
+    with tempfile.TemporaryDirectory() as tmp:
+        destino = Path(tmp) / clave
+        destino.mkdir()
+        for ruta in _git(out, "ls-tree", "--name-only", "HEAD", f"{clave}/").split():
+            (Path(tmp) / ruta).write_text(_git(out, "show", f"HEAD:{ruta}"), encoding="utf-8")
+        return not auditar(tmp, {clave: pdf})["con_problemas"]
+
+
 def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | None = None,
-           hoy: date | None = None) -> dict:
+           hoy: date | None = None, pdf_dir: str | None = None) -> dict:
     """Aplica las decisiones a `fuentes.json` y al árbol de datos; devuelve el
     resumen para el commit y el PR."""
     plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
@@ -393,6 +415,18 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
     titulo_rep = (reparacion or {}).get("titulo")
 
     altas, reformas, correcciones, excluidas, retenidas, fallidas = [], [], [], [], [], []
+    retiradas: list[str] = []            # publicadas que salen del corpus
+    for clave, motivo in FUERA_DEL_CORPUS.items():
+        e = entradas.get(clave)
+        if e and e.get("estado") == "incluida":
+            for ruta in (clave, f"metadata/{clave}"):
+                if (out_p / ruta).exists():
+                    shutil.rmtree(out_p / ruta)
+            entradas[clave] = {**{k: v for k, v in e.items() if k not in ("alta", "unidades",
+                                                                          "version")},
+                               "estado": "excluida", "motivo": motivo, "fecha": hoy}
+            excluidas.append((clave, motivo))
+            retiradas.append(clave)
     for d in plan["documentos"]:
         clave = d["clave"]
         r = resultados.get(clave)
@@ -430,7 +464,19 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
             continue
         motivo = motivo_exclusion(r)
         _restaurar(out_p, clave)
-        if publicada:
+        pdf = str(Path(pdf_dir) / f"{clave}.pdf") if pdf_dir else None
+        if publicada and d["motivo"] != "pdf" and not _publicada_es_fiel(out_p, clave, pdf):
+            # Mismo PDF y la versión publicada tampoco pasa la auditoría actual
+            # (se publicó con compuertas más laxas): no puede seguir publicada.
+            for ruta in (clave, f"metadata/{clave}"):
+                if (out_p / ruta).exists():
+                    shutil.rmtree(out_p / ruta)
+            motivo += ". La versión publicada tampoco pasa la auditoría actual"
+            entradas[clave] = {**definicion, "estado": "excluida", "motivo": motivo,
+                               "fecha": hoy, "pdf": huella_pdf, "extractor": plan["huella"]}
+            excluidas.append((clave, motivo))
+            retiradas.append(clave)
+        elif publicada:
             # Lo publicado se conserva: mejor la versión anterior fiel que una
             # nueva que no lo es. Queda anotado para revisión.
             prev["revision_pendiente"] = {"fecha": hoy, "motivo": motivo,
@@ -451,8 +497,8 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
     escribir_indice_maestro(out)
 
     siglas = {c: e["sigla"] for c, e in entradas.items()}
-    asunto = _asunto(altas, reformas, correcciones, siglas)
-    return {"asunto": asunto, "altas": altas, "reformas": reformas,
+    asunto = _asunto(altas, reformas, correcciones, siglas, retiradas)
+    return {"asunto": asunto, "altas": altas, "reformas": reformas, "retiradas": retiradas,
             "correcciones": correcciones, "excluidas": excluidas,
             "retenidas": retenidas, "fuentes_fallidas": fallidas,
             "reparados": sorted(reparados & set(altas + [c for c, *_ in reformas]
@@ -463,7 +509,7 @@ def _lista_corta(elems: list[str], n: int = 6) -> str:
     return ", ".join(elems[:n]) + (f" y {len(elems) - n} más" if len(elems) > n else "")
 
 
-def _asunto(altas, reformas, correcciones, siglas) -> str:
+def _asunto(altas, reformas, correcciones, siglas, retiradas=()) -> str:
     partes = []
     for clave, version, arts in reformas[:3]:
         partes.append(f"Reforma {siglas.get(clave, clave)} (DOF {version or 's/f'}): "
@@ -479,6 +525,11 @@ def _asunto(altas, reformas, correcciones, siglas) -> str:
         partes.append(f"Corrección de extracción: {n} "
                       f"{'artículo' if n == 1 else 'artículos'} en {len(correcciones)} "
                       f"{'ley' if len(correcciones) == 1 else 'leyes'}")
+    if retiradas:
+        partes.append(f"Retiro de {len(retiradas)} "
+                      f"{'ley' if len(retiradas) == 1 else 'leyes'} que no "
+                      f"{'reproduce' if len(retiradas) == 1 else 'reproducen'} el PDF: "
+                      f"{_lista_corta([siglas.get(c, c) for c in retiradas], 5)}")
     return " · ".join(partes) or "Actualización de fuentes de las leyes federales"
 
 
