@@ -23,7 +23,7 @@ restaurar() {
 descartar() {
   echo "::warning::Arreglo del agente descartado: $1"
   echo "$1" > "$TRABAJO/descarte.txt"
-  git diff > "$TRABAJO/arreglo-descartado.patch" || true
+  [ -s "$TRABAJO/arreglo-descartado.patch" ] || git diff > "$TRABAJO/arreglo-descartado.patch" || true
   git checkout -q -- . && git clean -fdq
   restaurar
 }
@@ -82,9 +82,14 @@ PY
         else
           titulo="$(campo titulo_commit)"
           git add -A
-          git -c user.name="${GITHUB_ACTOR:-opencodice-ci}" \
-              -c user.email="${GITHUB_ACTOR_ID:-0}+${GITHUB_ACTOR:-opencodice-ci}@users.noreply.github.com" \
-              commit -q -m "Reparación automática (leyes federales): ${titulo:-ajuste del extractor a un formato de PDF}"
+          # El parche se guarda antes de publicar: si falla, no se pierde.
+          git diff --cached > "$TRABAJO/arreglo.patch"
+          partida="$(git rev-parse HEAD)"
+          # La identidad vale también para el rebase, no solo para el commit.
+          export GIT_AUTHOR_NAME="${GITHUB_ACTOR:-opencodice-ci}" GIT_COMMITTER_NAME="${GITHUB_ACTOR:-opencodice-ci}"
+          export GIT_AUTHOR_EMAIL="${GITHUB_ACTOR_ID:-0}+${GITHUB_ACTOR:-opencodice-ci}@users.noreply.github.com"
+          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+          git commit -q -m "Reparación automática (leyes federales): ${titulo:-ajuste del extractor a un formato de PDF}"
           destino="${EXTRACTOR_PUSH_URL:-https://x-access-token:${EXTRACTOR_TOKEN:-}@github.com/${EXTRACTOR_SLUG:-}.git}"
           if git pull -q --rebase "$destino" main && git push -q "$destino" HEAD:main; then
             python - "$TRABAJO" "$titulo" $reparados <<'PY'
@@ -96,7 +101,8 @@ PY
             echo "Arreglo publicado; quedaron fieles: $reparados"
           else
             git rebase --abort 2>/dev/null || true
-            git reset -q --hard "@{u}" 2>/dev/null || git reset -q --hard HEAD~1
+            git reset -q --hard "$partida"
+            cp "$TRABAJO/arreglo.patch" "$TRABAJO/arreglo-descartado.patch"
             descartar "no se pudo publicar el arreglo en el extractor"
           fi
         fi
