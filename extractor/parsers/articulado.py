@@ -43,7 +43,7 @@ HEADER_PREFIXES = (
 #   Reglamento de la Ley Aduanera): la validación de secuencia filtra falsos positivos.
 ORDINALES = "Bis|Ter|Qu[aá]ter|Quintus|Quinquies|Sexies|Septies|Octies|Nonies|Decies"
 ARTICULO_RE = re.compile(
-    r"^(?:Art[íi]culo|ART[IÍ]CULO)\.?\s+(\d+)\s*[oº°]?\.?"  # "Artículo"/"ARTÍCULO" + número
+    r"^(?:Art[íi]culo|ART[IÍ]CULO|Art[íi]culos(?=\s+\d+\s*[oº°]?\.-))\.?\s+(\d+)\s*[oº°]?\.?"  # "Artículo"/"ARTÍCULO" + número
 
     r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-]))([A-Z])(?![A-Za-z]))?"  # letra "-A" PEGADA o " A." (118 A.)
     rf"(?:[\s.\-]+(?i:({ORDINALES}))"               # ordinal
@@ -130,7 +130,7 @@ def _es_nombre_suelto(s: str, continuacion: bool = False) -> bool:
     # La coma final es de un nombre que sigue en la línea siguiente.
     if s[-1] in ".;:":
         return False
-    inicio = s.lstrip('"“«')[:1]
+    inicio = s.lstrip('"“«[')[:1]
     return inicio.islower() if continuacion else inicio.isupper()
 
 
@@ -139,9 +139,17 @@ def _es_encabezado(s: str) -> bool:
                 or LIBRO_RE.match(s) or PARTE_RE.match(s) or APARTADO_RE.match(s))
 
 
+# Notas de invalidez de la SCJN ('Denominación declarada inválida por Resolutivos…',
+# 'Denominación que "recupera su vigencia…"'), a veces sin 'DOF' en el renglón.
+NOTA_SCJN_RE = re.compile(
+    r"^(?:Denominaci[oó]n|Cap[ií]tulo|T[ií]tulo|Secci[oó]n)\s+"
+    r"(?:declarad[oa]\s+inv[aá]lid[oa]|que\s+[“\"]recupera)")
+
+
 def _es_nota_de_bloque(s: str) -> bool:
     """Nota de reforma de un encabezado o marca de capítulo derogado."""
     return bool(DOF_CLAUSE_RE.search(s) or DOF_LARGA_RE.search(s)) and len(s) < 200 \
+        or bool(NOTA_SCJN_RE.match(s)) \
         or bool(re.fullmatch(r"\(?\s*(?:Se\s+deroga|Derogad[oa])\s*\)?\.?", s,
                              re.IGNORECASE))
 
