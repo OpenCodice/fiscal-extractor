@@ -155,7 +155,10 @@ _TRANSITORIOS_MAY = r"T\s*R\s*A\s*N\s*S\s*I\s*T\s*O\s*R\s*I\s*[OA]\s*S?"
 _TRANSITORIOS_TC = r"T\s*r\s*a\s*n\s*s\s*i\s*t\s*o\s*r\s*i\s*[oa]\s*s?"
 TRANSITORIOS_RE = re.compile(
     r"^[ \t]*(?:(?:ART[ÍI]CULOS?|DISPOSICIONES)\s+)?" + _TRANSITORIOS_MAY + r"[ \t]*[:.]?[ \t]*$"
-    r"|^[ \t]*(?:(?:Art[íi]culos?|Disposiciones)\s+)?" + _TRANSITORIOS_TC + r"[ \t]*[:.]?[ \t]*$",
+    r"|^[ \t]*(?:(?:Art[íi]culos?|Disposiciones)\s+)?" + _TRANSITORIOS_TC + r"[ \t]*[:.]?[ \t]*$"
+    # Compilación de los decretos de reforma al final: 'ARTÍCULOS TRANSITORIOS DE
+    # DECRETOS DE REFORMA' (el título puede envolverse en varias líneas).
+    r"|^[ \t]*(?:ART[ÍI]CULOS\s+)?TRANSITORIOS\s+DE(?:L|\s+LOS)?\s+DECRETOS?\b",
     re.MULTILINE,
 )
 
@@ -233,7 +236,7 @@ def _titulo_corrido(paginas: list[str]) -> tuple[str, ...]:
     if not primeras:
         return ()
     comun, n = Counter(primeras).most_common(1)[0]
-    umbral = max(3, len(paginas) // 2)
+    umbral = max(min(3, len(paginas) - 1), len(paginas) // 2)   # PDF de 3 páginas: basta con 2
     if n < umbral:
         return ()
     # Un título largo se parte en dos líneas ('… CON RECURSOS' / 'DE PROCEDENCIA

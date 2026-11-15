@@ -125,3 +125,10 @@ def test_fuera_del_articulado():
                "DECRETO por el que se reforman diversas disposiciones.\n")
     assert fuera_del_articulado(tragado)[0]["tipo"] == "fuera_del_articulado"
     assert fuera_del_articulado("# Artículo 1.\n\nEl decreto por el que se crea…\n") == []
+
+
+def test_tabla_al_final_no_es_encabezado_pegado():
+    from extractor.verificar import encabezado_pegado
+    md = ("# Artículo 27.\n\nEl haber se fija conforme a la tabla:\n\n"
+          "Años de Servicios Años en el Grado 20 10 22 9 24 8 26 7\n")
+    assert encabezado_pegado(md) == []

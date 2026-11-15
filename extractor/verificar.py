@@ -207,7 +207,10 @@ def encabezado_pegado(md: str) -> list[dict]:
     b = bloques[-1]
     if (len(b) > 150 or "DOF" in b or re.search(r"[.;:)…”\"»]$", b)
             or re.match(r"^(?:[IVXLCDM]+|[a-zñ]{1,2}|\d+)\s*[.)\-]", b)
-            or not b[:1].isupper()):
+            or not b[:1].isupper()
+            # Una tabla que cierra el artículo ('Años de servicios … 10 80% 11
+            # 85%') tampoco lleva puntuación final; un encabezado no trae cifras.
+            or len(re.findall(r"\d+", b)) >= 4):
         return []
     return [{"tipo": "encabezado_pegado", "fragmento": b[:200]}]
 
