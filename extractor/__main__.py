@@ -3,6 +3,7 @@
     python -m extractor build      --doc cff --pdf CFF.pdf --out ../fiscal-mexicano
     python -m extractor actualizar --out ../fiscal-mexicano   # descarga + reconstruye
     python -m extractor validar    --out ../fiscal-mexicano
+    python -m extractor verificar  --out ../fiscal-mexicano --pdf-dir /tmp/pdfs
     python -m extractor stats      --doc cff --pdf CFF.pdf
     python -m extractor listar
 """
@@ -80,7 +81,9 @@ def _cmd_actualizar(a) -> int:
     """
     docs = [POR_CLAVE[c] for c in a.doc] if a.doc else activos()
     fallidos: list[str] = []
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory() as tmp:
+        td = a.pdf_dir or tmp
+        Path(td).mkdir(parents=True, exist_ok=True)
         pdf_por_clave: dict[str, str] = {}
         for d in docs:
             if not d.url and not d.indice:
@@ -181,6 +184,27 @@ def _cmd_referencias(a) -> int:
     return 0
 
 
+def _cmd_verificar(a) -> int:
+    """Verifica contra los PDF las unidades cuyo texto cambió (según git).
+
+    Espera los PDF que dejó `actualizar --pdf-dir` (`<clave>.pdf`). Sale 2 si
+    queda algún cambio que no es fiel al PDF.
+    """
+    from .verificar import (modelo_configurado, modelo_fuerte_configurado,
+                            openai_call, reporte_md, verificar)
+    pdfs = {p.stem: str(p) for p in Path(a.pdf_dir).glob("*.pdf")}
+    call = fuerte = None
+    if not a.sin_llm:
+        call = openai_call(a.modelo or modelo_configurado())
+        fuerte = openai_call(modelo_fuerte_configurado())
+    r = verificar(a.out, pdfs, call, call_fuerte=fuerte)
+    md = reporte_md(r)
+    if a.reporte:
+        Path(a.reporte).write_text(md, encoding="utf-8")
+    print(md)
+    return 0 if r.ok else 2
+
+
 def _cmd_validar(a) -> int:
     ok, checks = validar(a.out)
     print(format_report(checks))
@@ -204,7 +228,19 @@ def main(argv=None) -> int:
                         help="descarga las fuentes del registro y reconstruye el repo")
     sp.add_argument("--doc", action="append", help="clave(s); omitir = todos los activos")
     sp.add_argument("--out", required=True, help="repo de datos de salida")
+    sp.add_argument("--pdf-dir", help="conservar los PDF descargados aquí (<clave>.pdf)")
     sp.set_defaults(fn=_cmd_actualizar)
+
+    sp = sub.add_parser("verificar",
+                        help="verifica contra los PDF las unidades cambiadas (git)")
+    sp.add_argument("--out", required=True, help="repo de datos ya reconstruido")
+    sp.add_argument("--pdf-dir", required=True, help="PDFs de `actualizar --pdf-dir`")
+    sp.add_argument("--modelo", default=None,
+                    help="modelo base (default: $VERIFICADOR_MODELO o el del módulo)")
+    sp.add_argument("--sin-llm", action="store_true",
+                    help="solo la cobertura determinista")
+    sp.add_argument("--reporte", default=None, help="escribe el reporte markdown aquí")
+    sp.set_defaults(fn=_cmd_verificar)
 
     sp = sub.add_parser("enriquecer",
                         help="genera la capa de búsqueda (LLM) en metadata/<clave>/generado/")
