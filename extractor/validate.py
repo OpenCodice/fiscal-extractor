@@ -21,6 +21,20 @@ from .parsers.reglas import DOF_HEADER_RE, _ctx_prefijo, _consistente
 
 # Marcas de encabezado/pie que NUNCA deben aparecer en el texto.
 LEAK_MARKERS = ("CÁMARA DE DIPUTADOS", "Secretaría de Servicios")
+# La Ley Orgánica del Congreso nombra en su texto a 'la Secretaría de Servicios
+# Parlamentarios'; precedida de artículo o preposición es mención, no fuga del
+# encabezado de página.
+_MENCION_RE = re.compile(r"\b(?:la|La|las|de|a|y|por|con|del|al)\s+Secretar[íi]a de Servicios")
+
+
+def _fuga_de_marcador(t: str) -> bool:
+    for m in LEAK_MARKERS:
+        if m == "Secretaría de Servicios":
+            if t.count(m) > len(_MENCION_RE.findall(t)):
+                return True
+        elif m in t:
+            return True
+    return False
 FOOTER_RE = re.compile(r"^\d{1,4} (?:de|/) \d{1,4}$", re.MULTILINE)
 MIN_BODY_CHARS = 8
 
@@ -68,7 +82,7 @@ def validar(data_repo: str, claves: list[str] | None = None
 
         textos = {p.name: p.read_text(encoding="utf-8") for p in mds}
         fugas = [n for n, t in textos.items()
-                 if any(m in t for m in LEAK_MARKERS) or FOOTER_RE.search(t)
+                 if _fuga_de_marcador(t) or FOOTER_RE.search(t)
                  or any(DOF_HEADER_RE.match(ln.strip()) for ln in t.splitlines())]
         chk(not fugas, f"[{clave}] sin fugas de encabezado/pie", ", ".join(fugas[:4]))
 

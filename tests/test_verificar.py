@@ -146,3 +146,8 @@ def test_marca_de_agua():
     md = "# Artículo 32.\n\nTendrán las siguientes obligaciones:\n\nD IA\n\nI. Realizar las actividades;\n"
     assert marca_de_agua(md)[0]["fragmento"] == "D IA"
     assert marca_de_agua("# Artículo 1.\n\nUno.\n\nII.\n\nDos.\n") == []
+
+
+def test_inciso_en_mayuscula_no_es_encabezado_pegado():
+    from extractor.verificar import encabezado_pegado
+    assert encabezado_pegado("# Artículo 130.\n\nLos grados son:\n\nB. Soldado Marinero\n") == []

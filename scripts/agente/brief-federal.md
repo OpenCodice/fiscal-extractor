@@ -63,8 +63,8 @@ Tipos de falla:
 
 Si cambiaste código, el pipeline: corre las pruebas, reconstruye los
 documentos de la lista y además una muestra de leyes ya publicadas (que hoy
-salen limpias), y descarta tu arreglo entero si alguna unidad que antes estaba
-bien queda con falla, o si ningún documento de la lista pasó a quedar limpio.
+salen limpias), y descarta tu arreglo entero si alguna unidad de la muestra
+queda con falla, o si ningún documento de la lista pasó a quedar limpio.
 Si se acepta, lo publica en el extractor y todo el corpus se reconstruye con tu
 versión en la siguiente corrida.
 

@@ -75,3 +75,11 @@ def test_regla_inconsistente_con_contexto_falla(tmp_path):
     ok, checks = validar(str(tmp_path))
     assert not ok
     assert any("consistentes con su contexto" in c[1] and not c[0] for c in checks)
+
+
+def test_mencion_de_la_secretaria_de_servicios_no_es_fuga():
+    from extractor.validate import _fuga_de_marcador
+    assert not _fuga_de_marcador("La Secretaría de Servicios Parlamentarios se integra por …")
+    assert not _fuga_de_marcador("Corresponde a la Secretaría de Servicios Parlamentarios: …")
+    assert _fuga_de_marcador("dentro del plazo Secretaría de Servicios Parlamentarios señalado")
+    assert _fuga_de_marcador("CÁMARA DE DIPUTADOS DEL H. CONGRESO DE LA UNIÓN")
