@@ -178,8 +178,52 @@ DOCUMENTOS: list[Documento] = [
 ]
 
 POR_CLAVE = {d.clave: d for d in DOCUMENTOS}
+# El corpus fiscal tal cual, aunque `usar` sustituya el activo.
+FISCALES: tuple[Documento, ...] = tuple(DOCUMENTOS)
 
 
 def activos() -> list[Documento]:
     """Documentos listos para extraer hoy (parser implementado)."""
     return [d for d in DOCUMENTOS if d.activo]
+
+
+# --- Registros declarados en un repo de datos -------------------------------
+# Un repo de datos puede traer su propio registro (`fuentes.json`) en vez del
+# corpus fiscal de arriba: es el caso de leyes-federales, cuyo registro se
+# genera del índice de LeyesBiblio (ver federal.py).
+
+def a_dict(doc: Documento) -> dict:
+    d = {"clave": doc.clave, "etiqueta": doc.etiqueta, "sigla": doc.sigla,
+         "tipo": doc.tipo, "parser": doc.parser, "url": doc.url}
+    for campo in ("indice", "patron", "texto_enlace"):
+        if getattr(doc, campo):
+            d[campo] = getattr(doc, campo)
+    if doc.titulos_encabezado:
+        d["titulos_encabezado"] = list(doc.titulos_encabezado)
+    return d
+
+
+def de_dict(d: dict) -> Documento:
+    return Documento(
+        clave=d["clave"], etiqueta=d["etiqueta"], sigla=d["sigla"], tipo=d["tipo"],
+        parser=d.get("parser", "articulado"), url=d.get("url"),
+        indice=d.get("indice"), patron=d.get("patron"),
+        texto_enlace=d.get("texto_enlace"),
+        titulos_encabezado=tuple(d.get("titulos_encabezado", ())),
+    )
+
+
+def usar(documentos: list[Documento]) -> None:
+    """Sustituye el corpus activo. Se modifican las estructuras en sitio porque
+    los demás módulos las importan por nombre."""
+    DOCUMENTOS[:] = documentos
+    POR_CLAVE.clear()
+    POR_CLAVE.update({d.clave: d for d in documentos})
+
+
+def cargar(ruta) -> None:
+    """Usa como corpus los documentos de un `fuentes.json` (o de un plan)."""
+    import json
+    from pathlib import Path
+    datos = json.loads(Path(ruta).read_text(encoding="utf-8"))
+    usar([de_dict(d) for d in datos["documentos"]])

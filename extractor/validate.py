@@ -34,23 +34,31 @@ def _cuerpo(md_text: str) -> str:
     return md_text.split("\n", 2)[-1].strip()
 
 
-def validar(data_repo: str) -> tuple[bool, list[tuple[bool, str, str]]]:
+def validar(data_repo: str, claves: list[str] | None = None
+            ) -> tuple[bool, list[tuple[bool, str, str]]]:
+    """Invariantes de todo el repo o, con `claves`, solo de esos documentos
+    (sin pasar por el índice maestro: sirve para un documento recién construido)."""
     repo = Path(data_repo)
     checks: list[tuple[bool, str, str]] = []
 
     def chk(ok: bool, label: str, detail: str = "") -> None:
         checks.append((bool(ok), label, detail))
 
-    docs = json.loads((repo / "metadata" / "documentos.json")
-                      .read_text(encoding="utf-8"))["documentos"]
-    chk(bool(docs), "índice maestro no vacío", f"{len(docs)} documentos")
+    if claves is None:
+        docs = json.loads((repo / "metadata" / "documentos.json")
+                          .read_text(encoding="utf-8"))["documentos"]
+        chk(bool(docs), "índice maestro no vacío", f"{len(docs)} documentos")
+        claves = [d["clave"] for d in docs]
 
-    for d in docs:
-        clave = d["clave"]
-        idx = json.loads((repo / "metadata" / clave / "articulos.json")
-                         .read_text(encoding="utf-8"))
+    for clave in claves:
+        idx_path = repo / "metadata" / clave / "articulos.json"
+        if not idx_path.exists():
+            chk(False, f"[{clave}] índice del documento", "falta articulos.json")
+            continue
+        idx = json.loads(idx_path.read_text(encoding="utf-8"))
         items = _items(idx)
         mds = sorted((repo / clave).glob("*.md"))
+        chk(bool(items), f"[{clave}] al menos una unidad", f"{len(items)} unidades")
 
         # --- comunes a todo documento --------------------------------------
         chk(len(mds) == idx["num_articulos"] == len(items),

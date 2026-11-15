@@ -6,6 +6,7 @@
     python -m extractor verificar  --out ../fiscal-mexicano --pdf-dir /tmp/pdfs
     python -m extractor stats      --doc cff --pdf CFF.pdf
     python -m extractor listar
+    python -m extractor federal planear|extraer|integrar|reevaluar|cerrar …
 """
 from __future__ import annotations
 
@@ -77,7 +78,8 @@ def _cmd_build(a) -> int:
             claves = [c for c in claves if Path(pdf_por_clave[c]).exists()]
         else:
             pdf_por_clave = {}
-    salida = build(claves, pdf_por_clave, a.out, what=a.only)
+    salida = build(claves, pdf_por_clave, a.out, what=a.only,
+                   pasajes=not a.sin_pasajes)
     for clave, unidades in salida.items():
         print(f"✓ {clave}: {len(unidades)} unidades → {a.out}/{clave}/")
     return 0
@@ -182,6 +184,9 @@ def _cmd_validar(a) -> int:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="extractor", description="Extractor del corpus fiscal")
+    p.add_argument("--registro", default=None,
+                   help="fuentes.json o plan con el corpus a usar (default: el fiscal, "
+                        "o el fuentes.json del repo de --out si existe)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("listar", help="lista el corpus declarado")
@@ -232,9 +237,19 @@ def main(argv=None) -> int:
     sp.add_argument("--pdf-dir", help="carpeta con PDFs nombrados CLAVE.pdf")
     sp.add_argument("--out", required=True, help="repo de datos de salida")
     sp.add_argument("--only", default="all", choices=["all", "text", "metadata"])
+    sp.add_argument("--sin-pasajes", action="store_true",
+                    help="no escribir metadata/<clave>/pasajes.jsonl")
     sp.set_defaults(fn=_cmd_build)
 
+    from .cli_federal import registrar as _registrar_federal
+    _registrar_federal(sub)
+
     a = p.parse_args(argv)
+    from . import registro
+    if a.registro:
+        registro.cargar(a.registro)
+    elif getattr(a, "out", None) and (Path(a.out) / "fuentes.json").exists():
+        registro.cargar(Path(a.out) / "fuentes.json")
     return a.fn(a)
 
 

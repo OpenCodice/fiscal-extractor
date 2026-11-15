@@ -315,8 +315,12 @@ def escribir_pasajes(unidades: list, doc: Documento, pdf_path: str,
 
 
 def build_documento(doc: Documento, pdf_path: str, data_repo: str,
-                    what: str = "all") -> list:
-    """Parsea un documento y materializa las capas pedidas. Devuelve sus unidades."""
+                    what: str = "all", pasajes: bool = True) -> list:
+    """Parsea un documento y materializa las capas pedidas. Devuelve sus unidades.
+
+    `pasajes=False` omite metadata/<clave>/pasajes.jsonl (párrafos con su
+    ubicación en el PDF): pesa ~2 MB por ley y se reescribe entero con cada
+    reforma, así que un corpus grande que no lo usa prescinde de él."""
     if doc.parser == "criterios":
         crits = _criterios.parse(pdf_path, doc)
         v = _criterios.fecha_publicacion(pdf_path)
@@ -325,7 +329,8 @@ def build_documento(doc: Documento, pdf_path: str, data_repo: str,
             escribir_criterios_texto(crits, doc, data_repo)
         if what in ("all", "metadata"):
             escribir_criterios_metadata(crits, doc, data_repo, version=version)
-            escribir_pasajes(crits, doc, pdf_path, data_repo)
+            if pasajes:
+                escribir_pasajes(crits, doc, pdf_path, data_repo)
         return crits
     if doc.parser == "fichas":
         fichas = _fichas.parse(pdf_path, doc)
@@ -335,7 +340,8 @@ def build_documento(doc: Documento, pdf_path: str, data_repo: str,
             escribir_unidades_texto(fichas, doc, data_repo)
         if what in ("all", "metadata"):
             escribir_fichas_metadata(fichas, doc, data_repo, version=version)
-            escribir_pasajes(fichas, doc, pdf_path, data_repo)
+            if pasajes:
+                escribir_pasajes(fichas, doc, pdf_path, data_repo)
         return fichas
     if doc.parser == "apartados":
         aps = _apartados.parse(pdf_path, doc)
@@ -345,7 +351,8 @@ def build_documento(doc: Documento, pdf_path: str, data_repo: str,
             escribir_unidades_texto(aps, doc, data_repo)
         if what in ("all", "metadata"):
             escribir_apartados_metadata(aps, doc, data_repo, version=version)
-            escribir_pasajes(aps, doc, pdf_path, data_repo)
+            if pasajes:
+                escribir_pasajes(aps, doc, pdf_path, data_repo)
         return aps
     if doc.parser == "reglas":
         unidades, anomalias = reglas_y_anomalias(_texto_reglas(pdf_path))
@@ -356,7 +363,8 @@ def build_documento(doc: Documento, pdf_path: str, data_repo: str,
         if what in ("all", "metadata"):
             escribir_reglas_metadata(unidades, doc, data_repo, version=version)
             _escribir_anomalias(anomalias, doc, data_repo)
-            escribir_pasajes(unidades, doc, pdf_path, data_repo)
+            if pasajes:
+                escribir_pasajes(unidades, doc, pdf_path, data_repo)
         return unidades
     unidades = resolver(doc.parser)(pdf_path, doc)
     # articulado
@@ -366,12 +374,13 @@ def build_documento(doc: Documento, pdf_path: str, data_repo: str,
         escribir_texto(unidades, doc, data_repo)
     if what in ("all", "metadata"):
         escribir_metadata(unidades, doc, data_repo, version=version)
-        escribir_pasajes(unidades, doc, pdf_path, data_repo)
+        if pasajes:
+            escribir_pasajes(unidades, doc, pdf_path, data_repo)
     return unidades
 
 
 def build(claves: list[str] | None, pdf_por_clave: dict[str, str], data_repo: str,
-          what: str = "all") -> dict[str, list[Unidad]]:
+          what: str = "all", pasajes: bool = True) -> dict[str, list[Unidad]]:
     """Construye los documentos indicados (o todos los activos). pdf_por_clave mapea
     clave → ruta del PDF descargado. Actualiza también el índice maestro."""
     docs = [POR_CLAVE[c] for c in claves] if claves else activos()
@@ -380,7 +389,8 @@ def build(claves: list[str] | None, pdf_por_clave: dict[str, str], data_repo: st
         pdf = pdf_por_clave.get(doc.clave)
         if not pdf:
             raise FileNotFoundError(f"falta el PDF para '{doc.clave}'")
-        salida[doc.clave] = build_documento(doc, pdf, data_repo, what=what)
+        salida[doc.clave] = build_documento(doc, pdf, data_repo, what=what,
+                                            pasajes=pasajes)
     if what in ("all", "metadata"):
         escribir_indice_maestro(data_repo)
         # Cruza TODO el corpus (no solo lo recién construido): las referencias
