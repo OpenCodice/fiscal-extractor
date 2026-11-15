@@ -45,7 +45,7 @@ ORDINALES = "Bis|Ter|Qu[aá]ter|Quintus|Quinquies|Sexies|Septies|Octies|Nonies|D
 ARTICULO_RE = re.compile(
     r"^(?:Art[íi]culo|ART[IÍ]CULO)\.?\s+(\d+)\s*[oº°]?\.?"  # "Artículo"/"ARTÍCULO" + número
 
-    r"(?:-([A-Z])(?![A-Za-z]))?"                     # letra "-A" PEGADA, una sola letra
+    r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-]))([A-Z])(?![A-Za-z]))?"  # letra "-A" PEGADA o " A." (118 A.)
     rf"(?:[\s.\-]+(?i:({ORDINALES}))"               # ordinal
     r"(?:\s+(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1") y letra ("Bis 35 A.-")
     r"\s*\.?-?(?:\s|$|\()"                           # separador final
@@ -432,10 +432,10 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
                 # Consentimiento', Código Civil), seguidos solo de estructura
                 # hasta el siguiente artículo.
                 (re.fullmatch(r"[IVXLCDM]+", stripped)
-                 and desemboca_en_articulo(i, 3, solo_estructura=True))
+                 and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))
                 or (_es_nombre_suelto(stripped) and not stripped.endswith(",")
                     and (anterior.endswith((".", ";", ":")) or _es_nota_de_bloque(anterior))
-                    and desemboca_en_articulo(i, 4, solo_estructura=True))):
+                    and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))):
             fijar("epigrafe", stripped)
             en_bloque = True
             continue

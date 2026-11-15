@@ -614,3 +614,31 @@ def test_numeral_solo_como_subencabezado_sin_palabra_clave():
     )
     us = parse_texto(texto, start=107)
     assert us[0].cuerpo.strip() == "Artículo 107.- Texto."
+
+
+def test_numeral_y_nombre_con_nota_y_capitulo_antes_del_articulo():
+    texto = (
+        "Artículo 2687.- Texto.\n"
+        "II\n"
+        "De las sociedades\n"
+        "Fe de erratas al epígrafe DOF 21-12-1928\n"
+        "CAPITULO I\n"
+        "Disposiciones generales\n"
+        "Fe de erratas a la denominación del Capítulo DOF 21-12-1928\n"
+        "Artículo 2688.- Otro."
+    )
+    us = parse_texto(texto, start=2687)
+    assert us[0].cuerpo.strip() == "Artículo 2687.- Texto."
+    assert us[1].capitulo.endswith("Disposiciones generales")
+
+
+def test_articulo_con_letra_separada_por_espacio():
+    texto = (
+        "Artículo 118.- Texto.\n"
+        "Artículo 118 A. Se deroga\n"
+        "Artículo 118-B.- (Se deroga).\n"
+        "Artículo 119.- Otro."
+    )
+    us = parse_texto(texto, start=118)
+    assert [(u.numero, u.letra) for u in us] == [(118, ""), (118, "A"), (118, "B"), (119, "")]
+    assert us[0].cuerpo.strip() == "Artículo 118.- Texto."
