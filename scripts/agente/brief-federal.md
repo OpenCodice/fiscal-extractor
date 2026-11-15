@@ -50,7 +50,9 @@ Tipos de falla:
    muchos documentos. Mira el texto crudo de las páginas donde ocurren.
 2. Corrige el extractor de la forma más general que el caso permita —un
    patrón, no un parche para un artículo ni para una ley— y agrega una prueba
-   de regresión en `tests/`.
+   de regresión en un archivo nuevo, `tests/test_reparacion_<tema>.py`: otros
+   cambios al extractor llegan mientras trabajas, y agregar al final de un
+   archivo existente choca con ellos al publicar.
 3. Reconstruye y vuelve a auditar hasta que los documentos queden en cero, o
    hasta convencerte de que alguno no tiene arreglo razonable (un PDF con
    texto ilegible, una ley sin artículos numerados, una errata del propio PDF).

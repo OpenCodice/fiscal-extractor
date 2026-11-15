@@ -643,6 +643,7 @@ def test_articulo_con_letra_separada_por_espacio():
     assert [(u.numero, u.letra) for u in us] == [(118, ""), (118, "A"), (118, "B"), (119, "")]
     assert us[0].cuerpo.strip() == "Artículo 118.- Texto."
 
+
 @pytest.mark.parametrize("encabezado", [
     "TRANSITORIOS", "T R A N S I T O R I O S", "T r a n s i t o r i o s",
     "ARTICULOS TRANSITORIOS:", "Artículos Transitorios", "ARTÍCULO TRANSITORIO",
@@ -657,3 +658,23 @@ def test_frontera_de_transitorios(encabezado):
 def test_transitorios_en_minusculas_es_cita_partida():
     texto = "Artículo 1o.- Conforme a los artículos\ntransitorios\nde esta Ley.\nArtículo 2o.- Dos."
     assert [u.clave for u in parse_texto(texto)] == ["001", "002"]
+
+
+def test_cita_al_inicio_de_renglon_no_abre_variante_repetida():
+    from extractor.parsers.articulado import parse_texto
+    texto = (
+        "Artículo 1.- Uno.\n"
+        "Artículo 2.- Dos.\n"
+        "Artículo 2 Bis.- Bis.\n"
+        "Artículo 2 Bis 1.- Otro que remite al\n"
+        "Artículo 2 Bis de esta Ley.\n"
+        "Artículo 3.- Tres.\n"
+    )
+    claves = [u.clave for u in parse_texto(texto)]
+    assert claves == ["001", "002", "002-bis", "002-bis-1", "003"]
+
+
+def test_articulo_con_guion_pegado_al_texto():
+    from extractor.parsers.articulado import parse_texto
+    texto = "ARTICULO 1.- Uno.\nARTICULO 2.-Dos pegado.\nARTICULO 3.- Tres.\n"
+    assert [u.clave for u in parse_texto(texto)] == ["001", "002", "003"]

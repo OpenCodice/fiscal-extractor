@@ -48,7 +48,7 @@ ARTICULO_RE = re.compile(
     r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-]))([A-Z])(?![A-Za-z]))?"  # letra "-A" PEGADA o " A." (118 A.)
     rf"(?:[\s.\-]+(?i:({ORDINALES}))"               # ordinal
     r"(?:\s+(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1") y letra ("Bis 35 A.-")
-    r"\s*\.?-?(?:\s|$|\()"                           # separador final
+    r"(?:\s*\.?-?(?:\s|$|\()|\.-(?=\S))"             # separador final (o ".-" pegado al texto)
 )
 
 # Encabezados de Título / Capítulo / Sección. En los PDF de la Cámara van en
@@ -327,6 +327,8 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
     nota_previa: str | bool = False
     previa = ""                      # última línea no vacía
 
+    abiertos: set[tuple] = set()
+
     def flush(u: Unidad | None) -> None:
         if u is not None:
             u.cuerpo = u.cuerpo.strip()
@@ -475,7 +477,12 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             es_siguiente = numero == esperado and not tiene_sufijo
             es_variante = (actual is not None and numero == actual.numero
                            and tiene_sufijo)
+            # Una cita al inicio de renglón ("Artículo 46 Bis 3 de la presente
+            # Ley") repite una clave ya abierta: no es un artículo nuevo.
+            if es_variante and (numero, letra, ordinal, ord_num, sub_letra) in abiertos:
+                es_variante = False
             if es_siguiente or es_variante:
+                abiertos.add((numero, letra, ordinal, ord_num, sub_letra))
                 en_bloque = nota_previa = False
                 flush(actual)
                 actual = Unidad(
