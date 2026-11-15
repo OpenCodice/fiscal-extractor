@@ -212,6 +212,21 @@ def encabezado_pegado(md: str) -> list[dict]:
     return [{"tipo": "encabezado_pegado", "fragmento": b[:200]}]
 
 
+# Señales de que una unidad absorbió lo que sigue al articulado: los
+# transitorios y los decretos de reforma que la Cámara compila al final.
+_FUERA_DEL_ARTICULADO = re.compile(
+    r"^(?:DECRETO\s+(?:por\s+el\s+que|que)\b|Publicado\s+en\s+el\s+Diario\s+Oficial\s+de\s+la"
+    r"\s+Federaci[óo]n\s+el\b|(?:ART[ÍI]CULOS?\s+)?TRANSITORIOS?:?$|T\s+r\s+a\s+n\s+s\s+i)",
+    re.MULTILINE)
+
+
+def fuera_del_articulado(md: str) -> list[dict]:
+    """Un artículo que contiene transitorios o decretos de reforma: el corte del
+    articulado no se encontró y el último artículo se tragó el resto del PDF."""
+    m = _FUERA_DEL_ARTICULADO.search(md)
+    return [{"tipo": "fuera_del_articulado", "fragmento": md[m.start():m.start() + 200]}] if m else []
+
+
 # ------------------------------------------------------------------ contexto
 
 def _coincidencias(bloque: str, normas: list[str]) -> list[int]:
@@ -381,7 +396,8 @@ def verificar(out: str | Path, pdf_por_clave: dict[str, str],
         articulado_doc = POR_CLAVE[clave].parser == "articulado"
         for c in cs:
             if c.despues and (pr := cobertura(c.despues, flujo) + (
-                    encabezado_pegado(c.despues) if articulado_doc else [])):
+                    encabezado_pegado(c.despues) + fuera_del_articulado(c.despues)
+                    if articulado_doc else [])):
                 duros.append(Veredicto(c.ref, "artefacto",
                                        "El texto extraído no coincide con el PDF.", pr))
         paginas = paginas_crudas(pdf)
@@ -417,7 +433,8 @@ def auditar(out: str | Path, pdf_por_clave: dict[str, str]) -> dict:
             total += 1
             texto = md.read_text(encoding="utf-8")
             if pr := cobertura(texto, flujo) + (
-                    encabezado_pegado(texto) if articulado_doc else []):
+                    encabezado_pegado(texto) + fuera_del_articulado(texto)
+                    if articulado_doc else []):
                 malos[f"{clave}/{md.stem}"] = pr
     return {"total": total, "con_problemas": malos}
 

@@ -117,3 +117,11 @@ def test_encabezado_pegado_al_final_del_articulo():
                "# Artículo 3.\n\nUno.\n\nDos.\n",
                "# Artículo 4.\n\n(Se deroga)\n"):
         assert encabezado_pegado(md) == []
+
+
+def test_fuera_del_articulado():
+    from extractor.verificar import fuera_del_articulado
+    tragado = ("# Artículo 203.\n\nTexto.\n\nT r a n s i t o r i o s\n\nPrimero. Vigor.\n\n"
+               "DECRETO por el que se reforman diversas disposiciones.\n")
+    assert fuera_del_articulado(tragado)[0]["tipo"] == "fuera_del_articulado"
+    assert fuera_del_articulado("# Artículo 1.\n\nEl decreto por el que se crea…\n") == []

@@ -146,10 +146,16 @@ def _es_nota_de_bloque(s: str) -> bool:
                              re.IGNORECASE))
 
 
-# Frontera del articulado permanente: el primer encabezado de Transitorios.
+# Frontera del articulado permanente: el primer encabezado de Transitorios, en
+# mayúsculas o en caja de título, con o sin espacios entre letras y con
+# 'Artículos'/'Disposiciones' delante: 'TRANSITORIOS', 'T r a n s i t o r i o s',
+# 'ARTICULOS TRANSITORIOS:', 'Artículo Transitorio'. En minúsculas no cuenta:
+# 'transitorios' solo en una línea es una cita partida a media frase.
+_TRANSITORIOS_MAY = r"T\s*R\s*A\s*N\s*S\s*I\s*T\s*O\s*R\s*I\s*[OA]\s*S?"
+_TRANSITORIOS_TC = r"T\s*r\s*a\s*n\s*s\s*i\s*t\s*o\s*r\s*i\s*[oa]\s*s?"
 TRANSITORIOS_RE = re.compile(
-    r"^[ \t]*(?:Artículos?\s+Transitorios?|ARTÍCULOS?\s+TRANSITORIOS?|"
-    r"TRANSITORIOS?|T\s*R\s*A\s*N\s*S\s*I\s*T\s*O\s*R\s*I\s*O\s*S)[ \t]*$",
+    r"^[ \t]*(?:(?:ART[ÍI]CULOS?|DISPOSICIONES)\s+)?" + _TRANSITORIOS_MAY + r"[ \t]*[:.]?[ \t]*$"
+    r"|^[ \t]*(?:(?:Art[íi]culos?|Disposiciones)\s+)?" + _TRANSITORIOS_TC + r"[ \t]*[:.]?[ \t]*$",
     re.MULTILINE,
 )
 

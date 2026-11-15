@@ -642,3 +642,18 @@ def test_articulo_con_letra_separada_por_espacio():
     us = parse_texto(texto, start=118)
     assert [(u.numero, u.letra) for u in us] == [(118, ""), (118, "A"), (118, "B"), (119, "")]
     assert us[0].cuerpo.strip() == "Artículo 118.- Texto."
+
+@pytest.mark.parametrize("encabezado", [
+    "TRANSITORIOS", "T R A N S I T O R I O S", "T r a n s i t o r i o s",
+    "ARTICULOS TRANSITORIOS:", "Artículos Transitorios", "ARTÍCULO TRANSITORIO",
+    "Transitorio", "DISPOSICIONES TRANSITORIAS",
+])
+def test_frontera_de_transitorios(encabezado):
+    texto = f"Artículo 1o.- Uno.\nArtículo 2o.- Dos.\n{encabezado}\nPrimero. Entra en vigor."
+    us = parse_texto(texto)
+    assert us[-1].cuerpo.strip() == "Artículo 2o.- Dos."
+
+
+def test_transitorios_en_minusculas_es_cita_partida():
+    texto = "Artículo 1o.- Conforme a los artículos\ntransitorios\nde esta Ley.\nArtículo 2o.- Dos."
+    assert [u.clave for u in parse_texto(texto)] == ["001", "002"]
