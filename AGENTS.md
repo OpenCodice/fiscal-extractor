@@ -19,7 +19,9 @@ editan a mano: si una unidad está mal, se corrige aquí.
   `locate.py`, `build.py` — unidades, párrafos y metadata derivada.
 - `extractor/validate.py` — invariantes del repo de datos (gate de los PR).
 - `extractor/verificar.py` — fidelidad contra el PDF: `cobertura` (cada párrafo
-  literal en el PDF y sin texto omitido entre párrafos) y `auditar`. Guarda el
+  literal en el PDF y sin texto omitido entre párrafos), `encabezado_pegado`
+  (en el articulado, un último párrafo con forma de encabezado: es texto literal
+  del PDF pero fuera de lugar) y `auditar`. Guarda el
   texto por página junto al PDF (`*.paginas.json`) porque extraerlo es lo lento.
 - `extractor/federal.py` y `cli_federal.py` — el corpus federal: su registro
   se genera del índice de LeyesBiblio y vive en `leyes-federales/fuentes.json`
@@ -80,7 +82,11 @@ Entre un artículo y el siguiente puede haber un bloque de encabezado: `LIBRO`,
 varias líneas o tras un salto de página) y notas como `Capítulo adicionado DOF
 …` o `(Se deroga)`. Si el bloque desemboca en el siguiente artículo, todo eso
 es estructura: el nombre va al contexto de la unidad y nada se queda en el
-cuerpo del artículo anterior.
+cuerpo del artículo anterior. Debajo de la sección está el `epigrafe`: un
+`APARTADO`, un numeral romano solo o un rótulo sin palabra clave ('Del
+Consentimiento' en el Código Civil) que sigue a un fin de oración y desemboca
+en el siguiente artículo. `PARTE` cuenta como nivel de título, igual que
+`LIBRO`.
 
 ## Agregar un documento
 
