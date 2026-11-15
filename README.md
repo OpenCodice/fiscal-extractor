@@ -44,11 +44,11 @@ curl -L -o CFF.pdf https://www.diputados.gob.mx/LeyesBiblio/pdf/CFF.pdf
 # Validar invariantes (gate de CI)
 .venv/bin/python -m extractor validar --out ../fiscal-mexicano
 
-# Enriquecer (capa de búsqueda LLM, mejora recall) — TODO el corpus en un comando.
-# Sin --doc procesa los activos; sin --pdf descarga las fuentes del registro.
-# Incremental por hash; --force regenera. Requiere OPENAI_API_KEY (o ANTHROPIC_API_KEY).
-OPENAI_API_KEY=... .venv/bin/python -m extractor enriquecer \
-  --out ../fiscal-mexicano --proveedor openai
+# Fidelidad contra los PDF: cada párrafo literal en el PDF y sin texto omitido.
+# `auditar` revisa todo; `verificar` solo lo que difiere de HEAD en el repo de datos.
+.venv/bin/python -m extractor actualizar --out ../fiscal-mexicano --pdf-dir /tmp/pdfs
+.venv/bin/python -m extractor auditar --out ../fiscal-mexicano --pdf-dir /tmp/pdfs
+.venv/bin/python -m extractor verificar --sin-llm --out ../fiscal-mexicano --pdf-dir /tmp/pdfs
 
 # Diagnóstico de parseo (no escribe)
 .venv/bin/python -m extractor stats --doc cff --pdf CFF.pdf
@@ -74,4 +74,6 @@ regresión barato.
 | 4 | Criterios normativos y no vinculativos | ✅ 153 + 81 criterios (Anexos 7 y 3) |
 | 5 | Validador de invariantes (`extractor validar`) | ✅ 16 docs: TODO OK |
 | 5b | CI de vigilancia (DOF/SAT) | ✅ `vigilar-fiscal.yml` + `extractor actualizar` |
-| 6 | Enriquecimiento LLM (recall) — `extractor enriquecer` | ✅ corpus completo en un comando (autodescarga) + CI `enriquecer.yml` |
+| 6 | Verificación contra el PDF (`verificar`, `auditar`) y agente de CI que repara el parser (`scripts/agente/`) | ✅ en `vigilar-fiscal.yml`, con fusión automática de los PR verificados |
+
+Para trabajar en este repo, ver [`AGENTS.md`](AGENTS.md).

@@ -16,7 +16,6 @@ from collections import Counter
 from pathlib import Path
 
 from .build import build, build_documento
-from .enrich import DEFAULT_MODELS, caller_for, run_enrichment
 from .fuentes import descargar, url_vigente
 from .parsers.articulado import fecha_version
 from .referencias import aplicar_referencias
@@ -122,64 +121,6 @@ def _cmd_actualizar(a) -> int:
     return 0
 
 
-def _enriquecer_doc(doc, pdf: str, out: str, call, modelo: str, force: bool,
-                    hilos: int = 8) -> dict:
-    unidades = build_documento(doc, pdf, data_repo="/dev/null", what="none")
-    stats = run_enrichment(unidades, doc, out, call, modelo, force=force, hilos=hilos)
-    print(f"{doc.clave} ({modelo}): generados={stats['generados']} "
-          f"omitidos={stats['omitidos']} fallidos={stats['fallidos']}", flush=True)
-    for e in stats["errores"][:5]:
-        print(f"  ✗ {e}")
-    return stats
-
-
-def _cmd_enriquecer(a) -> int:
-    """Genera la capa de búsqueda (LLM) en metadata/<clave>/generado/.
-
-    Sin --doc procesa todos los documentos activos; sin --pdf descarga cada
-    fuente del registro (igual que `actualizar`). Un fallo de descarga o de un
-    documento no tumba a los demás. `--doc X --pdf Y` (un solo doc) sigue válido.
-    """
-    docs = [POR_CLAVE[c] for c in a.doc] if a.doc else activos()
-    # Validar el uso ANTES de construir el caller (que exige API key).
-    if a.pdf and len(docs) != 1:
-        print("✗ --pdf solo es válido con un único --doc; "
-              "omítelo para descargar las fuentes del registro.")
-        return 1
-
-    modelo = a.modelo or DEFAULT_MODELS[a.proveedor]
-    call = caller_for(a.proveedor, modelo)
-
-    # PDF explícito: un único documento, sin descargas.
-    if a.pdf:
-        _enriquecer_doc(docs[0], a.pdf, a.out, call, modelo, force=a.force, hilos=a.hilos)
-        return 0
-
-    total = {"generados": 0, "omitidos": 0, "fallidos": 0}
-    with tempfile.TemporaryDirectory() as td:
-        for d in docs:
-            if not d.url and not d.indice:
-                print(f"· {d.clave}: sin URL, se omite")
-                continue
-            dest = str(Path(td) / f"{d.clave}.pdf")
-            try:
-                descargar(url_vigente(d), dest)
-            except Exception as e:                       # noqa: BLE001 — CI robusto
-                print(f"✗ {d.clave}: error al resolver/descargar — {e}")
-                continue
-            try:
-                stats = _enriquecer_doc(d, dest, a.out, call, modelo,
-                                        force=a.force, hilos=a.hilos)
-            except Exception as e:                       # noqa: BLE001 — CI robusto
-                print(f"✗ {d.clave}: error al enriquecer — {e}")
-                continue
-            for k in total:
-                total[k] += stats[k]
-    print(f"\nTotal: generados={total['generados']} "
-          f"omitidos={total['omitidos']} fallidos={total['fallidos']}")
-    return 0
-
-
 def _cmd_referencias(a) -> int:
     """Anota metadata/*/pasajes.jsonl con referencias legales cruzadas.
 
@@ -275,19 +216,6 @@ def main(argv=None) -> int:
                     help="solo la cobertura determinista")
     sp.add_argument("--reporte", default=None, help="escribe el reporte markdown aquí")
     sp.set_defaults(fn=_cmd_verificar)
-
-    sp = sub.add_parser("enriquecer",
-                        help="genera la capa de búsqueda (LLM) en metadata/<clave>/generado/")
-    sp.add_argument("--doc", action="append", help="clave(s); omitir = todos los activos")
-    sp.add_argument("--pdf", help="PDF local (solo válido con un único --doc); "
-                                  "omitir = descargar las fuentes del registro")
-    sp.add_argument("--out", required=True, help="repo de datos de salida")
-    sp.add_argument("--proveedor", choices=["anthropic", "openai"], default="anthropic")
-    sp.add_argument("--modelo", default=None, help="override del modelo por defecto")
-    sp.add_argument("--force", action="store_true", help="regenerar aunque no cambie el texto")
-    sp.add_argument("--hilos", type=int, default=8,
-                    help="llamadas LLM concurrentes (1 = en serie)")
-    sp.set_defaults(fn=_cmd_enriquecer)
 
     sp = sub.add_parser("referencias",
                         help="anota los pasajes con referencias legales cruzadas")
