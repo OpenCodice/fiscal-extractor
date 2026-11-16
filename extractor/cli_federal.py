@@ -73,6 +73,8 @@ def _cmd_extraer(a) -> int:
     registro.cargar(a.plan)
     plan = _leer_json(a.plan)
     claves = a.doc or plan["shards"][a.shard]
+    # Lo que sale del corpus no se extrae: `cerrar` lo retira.
+    claves = [c for c in claves if c not in federal.FUERA_DEL_CORPUS]
     res = federal.extraer(a.plan, a.out, a.pdf_dir, claves=claves)
     staging = Path(a.staging)
     for clave, r in res.items():

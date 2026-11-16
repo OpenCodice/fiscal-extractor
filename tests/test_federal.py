@@ -199,3 +199,13 @@ def test_cerrar_retira_lo_declarado_fuera_del_corpus(repo, monkeypatch):
     assert res["excluidas"] == [("lgs", "tabla de varias columnas")]
     assert not (repo / "lgs").exists()
     assert res["asunto"] == "Retiro de 1 ley que no reproduce el PDF: LGS"
+
+
+def test_planear_incluye_lo_publicado_que_se_declara_fuera(tmp_path, monkeypatch):
+    huella = federal.huella_extractor()
+    _fuentes(tmp_path, [{"clave": "lgs", "etiqueta": "Ley General de Salud", "sigla": "LGS",
+                         "tipo": "ley", "parser": "articulado", "url": "https://x/pdf/LGS.pdf",
+                         "estado": "incluida", "pdf": CAB, "extractor": huella}])
+    monkeypatch.setitem(federal.FUERA_DEL_CORPUS, "lgs", "tabla")
+    plan = federal.planear(tmp_path, _docs()[1:], consultar=lambda _u: CAB)
+    assert [(d["clave"], d["motivo"]) for d in plan["documentos"]][:1] == [("lgs", "fuera")]

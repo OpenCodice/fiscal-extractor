@@ -48,6 +48,11 @@ FUERA_DEL_CORPUS = {
     # pueda representar fielmente.
     "ligie-2022": "La tarifa del artículo 1o. es una tabla de varias columnas; en texto "
                   "plano las columnas se mezclan a media descripción.",
+    # La marca de agua girada 'DIARIO OFICIAL' del PDF deja letras sueltas a
+    # media frase ('la metodología S para su evaluación') que ninguna regla
+    # general separa de una letra legítima ('fracciones III, V y VI').
+    "lfpccs": "La marca de agua girada del PDF deja letras sueltas dentro del texto de "
+              "varios artículos.",
 }
 
 # Archivos del extractor cuyo cambio puede cambiar el texto o la metadata que se
@@ -240,6 +245,14 @@ def planear(out: str | Path, docs: list[Documento], *, solo: list[str] | None = 
         revisados = list(pool.map(revisar, candidatos))
 
     elegidos, nuevos = [], 0
+    # Lo declarado fuera del corpus que sigue publicado se retira en `cerrar`;
+    # entra al plan para que haya corrida aunque nada más cambie.
+    for clave in FUERA_DEL_CORPUS:
+        prev = previos.get(clave)
+        if prev and prev.get("estado") == "incluida" and (not solo or clave in solo):
+            elegidos.append({**{k: prev[k] for k in ("clave", "etiqueta", "sigla", "tipo",
+                                                      "parser", "url") if k in prev},
+                             "motivo": "fuera", "cabeceras": None})
     for doc, motivo, cab in revisados:
         if not motivo:
             continue
@@ -431,7 +444,7 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
         clave = d["clave"]
         r = resultados.get(clave)
         prev = entradas.get(clave)
-        if r is None:
+        if r is None or clave in FUERA_DEL_CORPUS:
             continue
         if r.get("error_fuente"):
             fallidas.append((clave, r["error_fuente"]))
