@@ -169,6 +169,14 @@ def huella_extractor() -> str:
     return h.hexdigest()[:16]
 
 
+def sha_extractor() -> str | None:
+    """Commit del extractor que corre (el que produce el texto), o None si no
+    es un repo de git."""
+    r = subprocess.run(["git", "-C", str(Path(__file__).parent.parent), "rev-parse", "HEAD"],
+                       capture_output=True, text=True)
+    return r.stdout.strip() or None if r.returncode == 0 else None
+
+
 def sha256(ruta: str | Path) -> str:
     h = hashlib.sha256()
     with open(ruta, "rb") as f:
@@ -265,7 +273,8 @@ def planear(out: str | Path, docs: list[Documento], *, solo: list[str] | None = 
     n = max(1, min(shards, len(elegidos)))
     grupos = [[e["clave"] for e in elegidos[i::n]] for i in range(n)] if elegidos else []
     pendientes = sum(1 for _, m, _ in revisados if m in ("nuevo", "reintento")) - nuevos
-    return {"huella": huella, "documentos": elegidos, "shards": grupos,
+    return {"huella": huella, "extractor_sha": sha_extractor(),
+            "documentos": elegidos, "shards": grupos,
             "nuevos_pendientes": max(0, pendientes)}
 
 
@@ -426,6 +435,12 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
     hoy = (hoy or date.today()).isoformat()
     reparados = set((reparacion or {}).get("reparados", []))
     titulo_rep = (reparacion or {}).get("titulo")
+    sha_plan = plan.get("extractor_sha")
+    sha_rep = (reparacion or {}).get("sha") or sha_plan
+    huella_rep = huella_extractor() if reparados else plan["huella"]
+    # Causa de cada cambio, para los trailers de su commit
+    # (scripts/commits_por_documento.py): con qué PDF y qué extractor se produjo.
+    contexto: dict[str, dict] = {}
 
     altas, reformas, correcciones, excluidas, retenidas, fallidas = [], [], [], [], [], []
     retiradas: list[str] = []            # publicadas que salen del corpus
@@ -440,6 +455,7 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
                                "estado": "excluida", "motivo": motivo, "fecha": hoy}
             excluidas.append((clave, motivo))
             retiradas.append(clave)
+            contexto[clave] = {"motivo_retiro": "fuera del corpus", "extractor_sha": sha_plan}
     for d in plan["documentos"]:
         clave = d["clave"]
         r = resultados.get(clave)
@@ -459,9 +475,22 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
             continue
         publicada = prev is not None and prev.get("estado") == "incluida"
         if es_fiel(r):
+            reparada = clave in reparados
+            sha_doc = sha_rep if reparada else sha_plan
+            cambio_pdf = ((prev or {}).get("pdf") or {}).get("sha256") != r["sha256"]
+            contexto[clave] = {
+                "fuente": r.get("url") or d.get("url"), "sha256": r["sha256"],
+                "pdf": str(Path(pdf_dir) / f"{clave}.pdf") if pdf_dir else None,
+                "pdf_cambio": cambio_pdf if publicada else None,
+                "extractor_cambio": (prev or {}).get("extractor") != (
+                    huella_rep if reparada else plan["huella"]),
+                "extractor_sha": sha_doc,
+                "extractor_anterior": (prev or {}).get("extractor_sha") if publicada else None,
+            }
             entrada = {**definicion, "estado": "incluida", "version": r.get("version"),
                        "unidades": r.get("unidades"), "pdf": huella_pdf,
-                       "extractor": plan["huella"]}
+                       "extractor": plan["huella"],
+                       **({"extractor_sha": sha_doc} if sha_doc else {})}
             entrada["alta"] = prev.get("alta") if publicada else {
                 "fecha": hoy, "via": "reparada" if clave in reparados else "limpia",
                 **({"reparacion": titulo_rep} if clave in reparados and titulo_rep else {})}
@@ -469,7 +498,7 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
             cambiadas = unidades_cambiadas(out_p, clave)
             if not publicada:
                 altas.append(clave)
-            elif cambiadas and d["motivo"] == "pdf":
+            elif cambiadas and cambio_pdf:
                 reformas.append((clave, r.get("version"),
                                  [_articulo(out_p, clave, u) for u in cambiadas]))
             elif cambiadas:
@@ -489,6 +518,8 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
                                "fecha": hoy, "pdf": huella_pdf, "extractor": plan["huella"]}
             excluidas.append((clave, motivo))
             retiradas.append(clave)
+            contexto[clave] = {"motivo_retiro": "la extracción no reproduce el PDF",
+                               "extractor_sha": sha_plan}
         elif publicada:
             # Lo publicado se conserva: mejor la versión anterior fiel que una
             # nueva que no lo es. Queda anotado para revisión.
@@ -511,29 +542,12 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
 
     siglas = {c: e["sigla"] for c, e in entradas.items()}
     asunto = _asunto(altas, reformas, correcciones, siglas, retiradas)
-    return {"asunto": asunto,
-            "asuntos": asuntos_por_ley(altas, reformas, correcciones, siglas, retiradas),
+    return {"asunto": asunto, "contexto": contexto,
             "altas": altas, "reformas": reformas, "retiradas": retiradas,
             "correcciones": correcciones, "excluidas": excluidas,
             "retenidas": retenidas, "fuentes_fallidas": fallidas,
             "reparados": sorted(reparados & set(altas + [c for c, *_ in reformas]
                                                  + [c for c, _ in correcciones]))}
-
-
-def asuntos_por_ley(altas, reformas, correcciones, siglas, retiradas=()) -> dict:
-    """Título del commit de cada ley que cambió: el historial de cada carpeta
-    debe contar solo su propia historia (ver scripts/commits_por_documento.py)."""
-    s = lambda c: siglas.get(c, c)  # noqa: E731
-    asuntos = {c: f"Alta de {s(c)}" for c in altas}
-    for clave, version, arts in reformas:
-        asuntos[clave] = (f"Reforma {s(clave)} (DOF {version or 's/f'}): "
-                          f"{'art.' if len(arts) == 1 else 'arts.'} {_lista_corta(arts, 12)}")
-    for clave, n in correcciones:
-        asuntos[clave] = (f"Corrección de extracción {s(clave)}: {n} "
-                          f"{'artículo' if n == 1 else 'artículos'}")
-    for clave in retiradas:
-        asuntos[clave] = f"Retiro de {s(clave)}: la extracción no reproduce el PDF"
-    return asuntos
 
 
 def _lista_corta(elems: list[str], n: int = 6) -> str:

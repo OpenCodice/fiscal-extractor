@@ -229,13 +229,16 @@ jobs:
 
       - name: Un commit por documento
         # El historial de cada documento debe contar solo su propia historia:
-        # un commit por ley con su título (reforma, corrección, alta) y uno
-        # aparte para lo compartido (índices, README).
+        # un commit por ley con su título y sus trailers (reforma, corrección,
+        # alta, retiro; los decide la causa que registró `federal cerrar` en
+        # contexto.json) y uno aparte para lo compartido (índices, README).
         if: success()
         run: |
           git -C "$OUT" config user.name "${{ github.actor }}"
           git -C "$OUT" config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-          python /tmp/extractor/scripts/commits_por_documento.py "$OUT" /tmp/agente/asuntos.json "Registro de fuentes de las leyes federales y README al día"
+          python /tmp/extractor/scripts/commits_por_documento.py "$OUT" \
+            --contexto /tmp/agente/contexto.json --extractor-dir /tmp/extractor \
+            --titulo-indice "Registro de fuentes de las leyes federales y README al día"
 
       - name: Abrir Pull Request
         id: pr

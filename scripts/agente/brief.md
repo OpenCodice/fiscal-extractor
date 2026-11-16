@@ -90,18 +90,10 @@ Escribe `__TRABAJO__/veredicto.json` con esta forma, y nada más como salida fin
   "fiel": true,
   "reparado": false,
   "titulo_commit": "solo si reparado: una línea que describa el arreglo",
-  "reformadas": ["cff/027"],
   "resumen": "dos o tres frases: qué cambió en la norma y, si aplica, qué defecto había y cómo lo arreglaste",
   "unidades": [{"clave": "cff/027", "veredicto": "fiel", "nota": "qué verificaste"}]
 }
 ```
-
-`reformadas` lista las claves de las unidades cuyo texto legal cambió en el PDF
-(una reforma, adición o derogación real), sin omitir ninguna. Las que cambiaron
-solo porque el extractor ahora lee mejor el mismo texto no van ahí: son
-correcciones de extracción. De esa lista sale el título del commit en el
-historial público, así que una corrección no debe aparecer como reforma ni al
-revés.
 
 `fiel` es verdadero solo si TODAS las unidades cambiadas, tal como quedan
 después de tu trabajo, reproducen el PDF. `veredicto` por unidad: `fiel`,

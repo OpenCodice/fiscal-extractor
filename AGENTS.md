@@ -33,6 +33,11 @@ editan a mano: si una unidad está mal, se corrige aquí.
   Las lanza cada lunes el Worker `scheduler` (constitucion-extractor/scheduler/)
   y abren en el repo de datos un PR con un commit por documento
   (`scripts/commits_por_documento.py`), que `revisar-pr` fusiona con rebase.
+- `scripts/commits_por_documento.py` — un commit por documento con sus
+  trailers (y uno `Tipo: indice` para lo compartido). `scripts/trailers.py` los
+  calcula y `scripts/validar_commits.py` los comprueba desde `revisar-pr` de
+  cada repo de datos. Los dos existen idénticos en `constitucion-extractor` (y
+  `tests/test_trailers.py`): un cambio se hace en los dos.
 - `scripts/readme_fiscal.py` y `readme_federal.py` — regeneran las tablas del
   README de cada repo de datos; las corre su vigilancia.
 - `scripts/agente/` — el agente de CI: `brief.md` (su encargo), `correr.sh`
@@ -69,6 +74,54 @@ llegas a diputados.gob.mx, lanza el workflow en GitHub.
 `HEAD` en el repo de datos. `verificar` sin `--sin-llm` añade una revisión por
 API de OpenAI; es una herramienta manual opcional y la CI no la usa.
 
+## Commits de datos y sus trailers
+
+Cada commit de `fiscal-mexicano` y `leyes-federales` es de un documento y lleva,
+además del título, trailers calculados por código, nunca por el agente (su
+veredicto solo dice si la extracción es fiel):
+
+```
+Reforma LGS (DOF 2026-01-15): arts. 4o, 22, 222 Bis
+
+Documento: lgs
+Tipo: reforma
+Publicacion: 2026-01-15
+Publicacion-Origen: notas
+Medio: DOF
+Articulos-Modificados: 004, 022
+Articulos-Adicionados: 222-bis
+Fuente: https://www.diputados.gob.mx/LeyesBiblio/pdf/LGS.pdf
+Fuente-Sha256: 9f2c…
+Extractor: OpenCodice/fiscal-extractor@b897ca4
+```
+
+- `Tipo` por la causa: PDF distinto al de la versión publicada con el mismo
+  extractor → `reforma`; mismo PDF → `correccion`; ambos → dos commits: el PDF
+  nuevo se reconstruye con el commit del extractor de la versión publicada
+  (`git worktree`), primero la `reforma` (lo que ese extractor ve cambiar) y
+  luego la `correccion`. El PDF anterior no se guarda, así que el orden inverso
+  no es reconstruible. Si no se sabe con qué extractor se publicó, todo es
+  reforma con `Separacion: no-disponible`. `alta` / `retiro` cuando el
+  documento aparece o desaparece.
+- De dónde sale la causa: en fiscal, `metadata/documentos.json` guarda por
+  documento `pdf_sha256` y `extractor_sha` de su versión publicada (`build` no
+  los escribe; `commits_por_documento.py --conservar-indice` los trae de HEAD) y
+  `actualizar` deja en `--pdf-dir/descargas.json` la URL de cada PDF. En
+  federal, `fuentes.json` guarda `pdf.sha256`, la huella `extractor` y
+  `extractor_sha`; `federal cerrar` escribe la causa de cada ley en
+  `contexto.json` del directorio de trabajo.
+- `Publicacion`: fechas de reforma nuevas en `metadata/<doc>/reformas.json`
+  (`notas`) o, si no hay, la versión del PDF (`portada`). Solo en reforma y
+  alta. `Medio: DOF` para todo el corpus (también RMF, anexos y criterios).
+- Listas de claves de archivo: `Articulos-Adicionados` / `-Modificados` /
+  `-Derogados` (reforma; derogado = el cuerpo pasa a "Se deroga"/"Derogado" o el
+  archivo desaparece) y `Articulos-Corregidos` (corrección).
+
+Para el historial existente, `trailers.calcular(documento, tipo, rutas,
+lector_antes, lector_despues)` sobre dos árboles (`lector_git(repo, rev)`),
+`trailers.tipo_historico(...)` y `trailers.formatear` dan el mensaje sin
+Fuente ni Extractor.
+
 ## Al cambiar un parser
 
 - La compuerta es `auditar`: tras tu cambio no puede listar unidades que antes
@@ -80,7 +133,7 @@ API de OpenAI; es una herramienta manual opcional y la CI no la usa.
 - Prefiere un patrón general a un caso especial por unidad, y agrega una prueba
   de regresión en `tests/`.
 - Un cambio aquí modifica texto ya publicado en la siguiente vigilancia. Es lo
-  esperado; ese PR sale titulado como corrección de extracción.
+  esperado; ese commit sale como corrección de extracción (`Tipo: correccion`).
 - No relajes `verificar.py` ni pruebas existentes para que algo pase.
 
 ## Encabezados en el articulado

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import tempfile
 from collections import Counter
@@ -98,6 +99,7 @@ def _cmd_actualizar(a) -> int:
         td = a.pdf_dir or tmp
         Path(td).mkdir(parents=True, exist_ok=True)
         pdf_por_clave: dict[str, str] = {}
+        urls: dict[str, str] = {}
         for d in docs:
             if not d.url and not d.indice:
                 print(f"· {d.clave}: sin URL, se omite")
@@ -107,6 +109,7 @@ def _cmd_actualizar(a) -> int:
                 url = url_vigente(d)
                 descargar(url, dest)
                 pdf_por_clave[d.clave] = dest
+                urls[d.clave] = url
                 print(f"↓ {d.clave} ← {url}")
             except Exception as e:                       # noqa: BLE001 — CI robusto
                 fallidos.append(d.clave)
@@ -114,6 +117,10 @@ def _cmd_actualizar(a) -> int:
         if not pdf_por_clave:
             print("Nada que construir.")
             return 1
+        # La URL de cada PDF descargado: la de las fuentes del SAT cambia con
+        # cada versión y va en el trailer Fuente del commit de datos.
+        (Path(td) / "descargas.json").write_text(json.dumps(
+            {c: urls[c] for c in pdf_por_clave}, ensure_ascii=False, indent=1), encoding="utf-8")
         salida = build(list(pdf_por_clave), pdf_por_clave, a.out, what="all")
     for clave, u in salida.items():
         print(f"✓ {clave}: {len(u)} unidades")

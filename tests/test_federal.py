@@ -170,6 +170,11 @@ def test_cerrar_reforma_alta_y_exclusion(repo):
     assert fuentes["lgs"]["alta"]["via"] == "limpia"     # se conserva el alta original
     assert res["asunto"].startswith("Reforma LGS (DOF 2026-01-15): art. 4o")
     assert "Alta de 1 ley federal: LFT" in res["asunto"]
+    # La causa de cada cambio queda para los trailers de su commit.
+    ctx = res["contexto"]
+    assert ctx["lgs"]["pdf_cambio"] is True and ctx["lgs"]["extractor_cambio"] is True
+    assert ctx["lgs"]["sha256"] == "s" and "cpf" not in ctx
+    assert ctx["lft"]["pdf_cambio"] is None
 
 
 def test_cerrar_conserva_lo_publicado_si_la_nueva_version_no_es_fiel(repo):
@@ -199,6 +204,7 @@ def test_cerrar_retira_lo_declarado_fuera_del_corpus(repo, monkeypatch):
     assert res["excluidas"] == [("lgs", "tabla de varias columnas")]
     assert not (repo / "lgs").exists()
     assert res["asunto"] == "Retiro de 1 ley que no reproduce el PDF: LGS"
+    assert res["contexto"]["lgs"]["motivo_retiro"] == "fuera del corpus"
 
 
 def test_planear_incluye_lo_publicado_que_se_declara_fuera(tmp_path, monkeypatch):

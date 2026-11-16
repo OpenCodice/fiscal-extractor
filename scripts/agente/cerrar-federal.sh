@@ -102,11 +102,11 @@ PY
           git commit -q -m "Reparación automática (leyes federales): ${titulo:-ajuste del extractor a un formato de PDF}"
           destino="${EXTRACTOR_PUSH_URL:-https://x-access-token:${EXTRACTOR_TOKEN:-}@github.com/${EXTRACTOR_SLUG:-}.git}"
           if git pull -q --rebase "$destino" main && git push -q "$destino" HEAD:main; then
-            python - "$TRABAJO" "$titulo" $reparados <<'PY'
+            python - "$TRABAJO" "$titulo" "$(git rev-parse HEAD)" $reparados <<'PY'
 import json, sys
-t, titulo, *reparados = sys.argv[1:]
-json.dump({"reparados": reparados, "titulo": titulo}, open(f"{t}/reparacion.json", "w"),
-          ensure_ascii=False)
+t, titulo, sha, *reparados = sys.argv[1:]
+json.dump({"reparados": reparados, "titulo": titulo, "sha": sha},
+          open(f"{t}/reparacion.json", "w"), ensure_ascii=False)
 PY
             echo "Arreglo publicado; quedaron fieles: $reparados"
           else

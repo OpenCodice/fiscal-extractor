@@ -55,8 +55,10 @@ jobs:
           python-version: '3.12'
 
       - name: Clonar extractor e instalar dependencias
+        # Con historia: separar una reforma de una corrección reconstruye el PDF
+        # nuevo con el commit del extractor que produjo la versión publicada.
         run: |
-          git clone --depth 1 "$EXTRACTOR_REPO" /tmp/extractor
+          git clone -q "$EXTRACTOR_REPO" /tmp/extractor
           pip install -r /tmp/extractor/requirements.txt
 
       - name: Descargar fuentes y reconstruir el corpus
@@ -133,6 +135,11 @@ jobs:
         # metadata recién reconstruida, para que entren en el mismo PR.
         run: python /tmp/extractor/scripts/readme_fiscal.py "$GITHUB_WORKSPACE"
 
+      - name: Conservar la huella de cada documento en el índice
+        # `build` reescribe metadata/documentos.json sin el sha256 del PDF ni el
+        # commit del extractor de cada versión publicada; se traen de main.
+        run: python /tmp/extractor/scripts/commits_por_documento.py "$GITHUB_WORKSPACE" --conservar-indice
+
       - name: ¿Cambió el texto vigente?
         id: cambios
         run: |
@@ -155,13 +162,17 @@ jobs:
 
       - name: Un commit por documento
         # El historial de cada documento debe contar solo su propia historia:
-        # un commit por ley con su título (reforma, corrección, alta) y uno
-        # aparte para lo compartido (índices, README).
+        # un commit por documento con su título y sus trailers (reforma,
+        # corrección, alta; los decide la causa: cambió el PDF, el extractor o
+        # ambos) y uno aparte para lo compartido (índices, README).
+        id: commits
         if: steps.cambios.outputs.hay_cambios == 'true' && steps.veredicto.outputs.ok == 'true'
         run: |
           git -C "$GITHUB_WORKSPACE" config user.name "${{ github.actor }}"
           git -C "$GITHUB_WORKSPACE" config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-          python /tmp/extractor/scripts/commits_por_documento.py "$GITHUB_WORKSPACE" /tmp/agente/asuntos.json "Índice del corpus fiscal y README al día"
+          python /tmp/extractor/scripts/commits_por_documento.py "$GITHUB_WORKSPACE" \
+            --pdf-dir /tmp/pdfs --extractor-dir /tmp/extractor \
+            --titulo-indice "Índice del corpus fiscal y README al día"
 
       - name: Abrir Pull Request
         id: pr
@@ -183,7 +194,7 @@ jobs:
             actualizacion
             automatico
             verificado
-            ${{ steps.agente.outputs.tipo == 'correccion' && 'correccion-extraccion' || '' }}
+            ${{ steps.commits.outputs.tipo == 'correccion' && 'correccion-extraccion' || '' }}
           delete-branch: true
 
       - name: Anotar lo que no se publicó

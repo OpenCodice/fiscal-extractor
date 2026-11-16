@@ -147,7 +147,11 @@ def _cmd_cerrar(a) -> int:
     (trabajo / "pr.md").write_text(federal.cuerpo_pr(res, plan, resultados, notas),
                                    encoding="utf-8")
     _escribir_json(trabajo / "cierre.json", res)
-    _escribir_json(trabajo / "asuntos.json", res["asuntos"])
+    # Lo que necesita scripts/commits_por_documento.py para los trailers, y para
+    # reconstruir un documento con el extractor anterior si hay que separarlo.
+    _escribir_json(trabajo / "contexto.json", {
+        "build": {"registro": str(Path(a.plan).resolve()), "args": ["--sin-pasajes"]},
+        "documentos": res["contexto"]})
     print(f"Asunto: {res['asunto']}")
     for k in ("altas", "excluidas", "retenidas", "fuentes_fallidas"):
         if res[k]:
