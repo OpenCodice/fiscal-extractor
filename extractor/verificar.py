@@ -156,42 +156,80 @@ class Flujo:
         return " ".join(self.texto[self.idx[a]:self.idx[b - 1] + 1].split())
 
 
+def _bloques(md: str) -> tuple[list[str], list[bool], list[dict]]:
+    """Párrafos normalizados de una unidad y, para cada uno, si lo precede una
+    marca de fórmula. Una marca no es texto del PDF: no se busca literal, pero
+    exige un párrafo a cada lado para que el texto que sustituye se pueda
+    acotar y comprobar."""
+    bloques: list[str] = []
+    formula: list[bool] = []
+    problemas: list[dict] = []
+    pendiente = False
+    for b in md.split("\n\n"):
+        if not b.strip() or b.startswith("# "):
+            continue
+        if articulado.MARCA_FORMULA_RE.match(b.strip()):
+            if not bloques:
+                problemas.append({"tipo": "formula_sin_contexto", "fragmento": b.strip()})
+            pendiente = True
+            continue
+        if n := _norm(b):
+            bloques.append(n)
+            formula.append(pendiente)
+            pendiente = False
+    if pendiente and bloques:
+        problemas.append({"tipo": "formula_sin_contexto", "fragmento": "(marca al final)"})
+    return bloques, formula, problemas
+
+
 def cobertura(md: str, flujo: Flujo) -> list[dict]:
     """Comprobación determinista de una unidad extraída contra el PDF."""
-    bloques = [n for b in md.split("\n\n")
-               if b.strip() and not b.startswith("# ") and (n := _norm(b))]
+    bloques, formula, problemas = _bloques(md)
     unicos = [(len(b), i) for i, b in enumerate(bloques) if flujo.norma.count(b) == 1]
     if not unicos:
         # Unidad sin ningún párrafo único (p. ej. "(Se deroga)."): solo literalidad.
-        return [{"tipo": "no_literal", "fragmento": b[:120]}
-                for b in bloques if b not in flujo.norma]
+        return problemas + [{"tipo": "no_literal", "fragmento": b[:120]}
+                            for b in bloques if b not in flujo.norma]
     k = max(unicos)[1]
     ini = flujo.norma.find(bloques[k])
     fin = ini + len(bloques[k])
-    problemas: list[dict] = []
 
-    def hueco(a: int, b: int) -> None:
+    def hueco(a: int, b: int, es_formula: bool = False) -> None:
+        if es_formula:
+            # El hueco que cubre una marca debe ser fórmula y nada más, según el
+            # mismo detector que puso la marca.
+            crudo = flujo.texto[flujo.idx[a - 1] + 1:flujo.idx[b]] if b > a else ""
+            if not articulado.bloques_de_formula(crudo) or _norm(
+                    articulado.sustituir_formulas(crudo).replace(_MARCA_SIN_PAGINA, "")):
+                problemas.append({"tipo": "formula_no_verificada",
+                                  "fragmento": " ".join(crudo.split())[:300]})
+            return
         if b - a <= MAX_HUECO:
             return
         texto = flujo.original(a, b)
         if not _es_encabezado(texto):
             problemas.append({"tipo": "texto_omitido", "fragmento": texto[:300]})
 
-    for b in bloques[k + 1:]:
+    for j in range(k + 1, len(bloques)):
+        b = bloques[j]
         p = flujo.norma.find(b, fin)
         if p == -1:
             problemas.append({"tipo": "no_literal", "fragmento": b[:120]})
             continue
-        hueco(fin, p)
+        hueco(fin, p, formula[j])
         fin = p + len(b)
-    for b in reversed(bloques[:k]):
+    for j in range(k - 1, -1, -1):
+        b = bloques[j]
         p = flujo.norma.rfind(b, 0, ini)
         if p == -1:
             problemas.append({"tipo": "no_literal", "fragmento": b[:120]})
             continue
-        hueco(p + len(b), ini)
+        hueco(p + len(b), ini, formula[j + 1])
         ini = p
     return problemas
+
+
+_MARCA_SIN_PAGINA = articulado.MARCA_FORMULA.replace(", página {pagina}", "")
 
 
 def encabezado_pegado(md: str) -> list[dict]:
@@ -489,8 +527,7 @@ def texto_entre_unidades(out: Path, clave: str, flujo: Flujo) -> dict[str, list[
         ruta = out / clave / f"{unidad}.md"
         if not ruta.exists():
             continue
-        bloques = [n for b in ruta.read_text(encoding="utf-8").split("\n\n")
-                   if b.strip() and not b.startswith("# ") and (n := _norm(b))]
+        bloques = _bloques(ruta.read_text(encoding="utf-8"))[0]
         if not bloques:
             continue
         ini = flujo.norma.find(bloques[0], fin_prev)

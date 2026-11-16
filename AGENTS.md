@@ -88,6 +88,15 @@ Consentimiento' en el Código Civil) que sigue a un fin de oración y desemboca
 en el siguiente artículo. `PARTE` cuenta como nivel de título, igual que
 `LIBRO`.
 
+## Fórmulas
+
+Las fórmulas compuestas con la fuente Symbol salen del PDF como renglones de
+fragmentos sueltos. `articulado` sustituye cada una por un párrafo
+`[Fórmula: consultar el PDF oficial, página N]` (detector en
+`bloques_de_formula`); lo legible de alrededor ('Donde:', las definiciones de
+variables) se conserva. `cobertura` no busca la marca literal: exige que el
+texto del PDF que sustituye sea fórmula para el mismo detector.
+
 ## Agregar un documento
 
 Una entrada en `extractor/registro.py`. Las leyes y reglamentos de la Cámara de

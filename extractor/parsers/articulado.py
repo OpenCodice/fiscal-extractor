@@ -140,6 +140,8 @@ def _es_nombre_suelto(s: str, continuacion: bool = False) -> bool:
         return False
     if NOTA_REFORMA_RE.match(s):
         return False                      # 'Numeral declarado inválido …' es nota, no nombre
+    if MARCA_FORMULA_RE.match(s):
+        return False
     if _es_encabezado(s) or ARTICULO_RE.match(s) or PAGE_FOOTER_RE.match(s):
         return False
     if re.match(r"\[\s*Art[ií]culo\b", s):
@@ -315,17 +317,106 @@ def _titulo_corrido(paginas: list[str]) -> tuple[str, ...]:
     return (comun,)
 
 
-def limpiar_paginas(paginas: list[str], doc: Documento) -> str:
-    """Texto completo sin encabezados/pies, a partir del texto crudo por página."""
+def limpiar_paginas(paginas: list[str], doc: Documento, formulas: bool = False) -> str:
+    """Texto completo sin encabezados/pies, a partir del texto crudo por página.
+    Con `formulas`, cada fórmula ilegible se sustituye por su marca."""
     fuera = doc.titulos_encabezado + _titulo_corrido(paginas)
-    return "\n".join(_quitar_encabezados(_quitar_marca_girada(t), fuera) for t in paginas)
+    limpias = (_quitar_encabezados(_quitar_marca_girada(t), fuera) for t in paginas)
+    if not formulas:
+        return "\n".join(limpias)
+    # Se detecta sobre el texto ya unido: una fórmula que cruza el salto de
+    # página es una sola y lleva la marca de la página donde empieza.
+    lineas, pagina_de = [], []
+    for n, t in enumerate(limpias, 1):
+        partes = t.split("\n")
+        lineas += partes
+        pagina_de += [n] * len(partes)
+    return sustituir_formulas("\n".join(lineas), pagina_de)
 
 
 def texto_limpio(pdf_path: str, doc: Documento) -> str:
-    """Texto completo del PDF sin encabezados/pies de página."""
+    """Texto que segmenta el parser: sin encabezados/pies y con las fórmulas
+    ilegibles ya sustituidas por su marca."""
     with pdfplumber.open(pdf_path) as pdf:
         paginas = [page.extract_text() or "" for page in pdf.pages]
-    return limpiar_paginas(paginas, doc)
+    return limpiar_paginas(paginas, doc, formulas=True)
+
+
+# Fórmulas matemáticas compuestas en el PDF con fuentes de símbolos: pdfplumber
+# las entrega como renglones de fragmentos sueltos ('i,t', '\uf03d', 'i,t\uf02d 1')
+# sin orden legible. No se pueden reconstruir, así que se sustituyen por una marca
+# que remite a la página del PDF; el texto legible alrededor ('Donde:' y las
+# definiciones de variables) se conserva tal cual.
+MARCA_FORMULA = "[Fórmula: consultar el PDF oficial, página {pagina}]"
+MARCA_FORMULA_RE = re.compile(r"^\[Fórmula: consultar el PDF oficial(?:, página \d+)?\]$")
+# Viñetas de las fuentes Symbol y Wingdings (zona de uso privado): no son álgebra.
+_VINETAS = set("\uf0b7\uf0a7\uf0a8\uf0d8\uf076")
+# Signos de operación de la fuente Symbol ('(', ')', '*', '+', '−', '=', '×', '÷',
+# '√', 'Σ' y las piezas de corchetes y llaves). Una tabla de palomitas o de
+# viñetas también trae glifos de esa zona, pero no estos.
+_SIMBOLO_RE = re.compile(
+    r"[=∑Σ√×÷\uf028\uf029\uf02a\uf02b\uf02d\uf03d\uf0b4\uf0b8\uf0d6\uf0e5\uf0e6-\uf0fb]")
+_PALABRA_RE = re.compile(
+    r"^[(\[¿¡\"“«]*(?:[a-záéíóúüñ]{4,}|[A-ZÁÉÍÓÚÑ][a-záéíóúüñ]{3,})[.,;:)\]\"”»]*$")
+_FUNCIONALES = frozenset("de la el en los las del que por con se al lo su un una es son "
+                         "y o a e".split())
+MIN_LINEAS_FORMULA = 3
+MIN_TOKENS_FORMULA = 5
+MIN_CORTOS_FORMULA = 0.6
+
+
+def _linea_de_formula(s: str) -> bool:
+    """Renglón sin ninguna palabra: ni palabras de cuatro letras o más ni
+    funcionales ('de', 'la', 'y')."""
+    toks = s.split()
+    return bool(toks) and not any(
+        _PALABRA_RE.match(t) or t.strip("()[].,;:\"“”") in _FUNCIONALES for t in toks)
+
+
+def es_formula(lineas: list[str]) -> bool:
+    """¿Un grupo de renglones sin palabras es una fórmula desarmada? Varios
+    renglones, casi todo fragmentos de 1 a 3 caracteres y algún signo de la
+    fuente de símbolos o '='. Una fila de tarifa ('$0.01 $1.92 1.92%') no lleva
+    esos signos y una fórmula legible de un renglón no llega al mínimo."""
+    lineas = [s.strip() for s in lineas if s.strip()]
+    toks = [t for s in lineas for t in s.split() if not set(t) <= _VINETAS]
+    if len(lineas) < MIN_LINEAS_FORMULA or len(toks) < MIN_TOKENS_FORMULA:
+        return False
+    if sum(len(t) <= 3 for t in toks) < MIN_CORTOS_FORMULA * len(toks):
+        return False
+    return any(_SIMBOLO_RE.search(t) for t in toks)
+
+
+def bloques_de_formula(texto: str) -> list[tuple[int, int]]:
+    """Rangos de renglones [ini, fin) que forman cada fórmula del texto."""
+    lineas = texto.split("\n")
+    bloques: list[tuple[int, int]] = []
+    i = 0
+    while i < len(lineas):
+        if not _linea_de_formula(lineas[i]):
+            i += 1
+            continue
+        j = i
+        while j < len(lineas) and (_linea_de_formula(lineas[j]) or not lineas[j].strip()):
+            j += 1
+        while j > i and not lineas[j - 1].strip():
+            j -= 1
+        if es_formula(lineas[i:j]):
+            bloques.append((i, j))
+        i = j
+    return bloques
+
+
+def sustituir_formulas(texto: str, pagina: int | list[int] | None = None) -> str:
+    """El texto con cada fórmula en un párrafo propio con su marca. `pagina` es
+    la página del texto o, renglón por renglón, la de cada uno."""
+    lineas = texto.split("\n")
+    for ini, fin in reversed(bloques_de_formula(texto)):
+        n = pagina[ini] if isinstance(pagina, list) else pagina
+        marca = (MARCA_FORMULA.format(pagina=n) if n is not None
+                 else MARCA_FORMULA.replace(", página {pagina}", ""))
+        lineas[ini:fin] = ["", marca, ""]
+    return "\n".join(lineas)
 
 
 def es_ruido_factory(pdf_path: str, doc: Documento):
@@ -513,7 +604,8 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             # pasar de MAX_LINEAS_ENCABEZADO renglones y aun así es estructura.
             if (_es_encabezado(s) or _es_nota_de_bloque(s)
                     or (s.startswith("[") and len(s) < 150
-                        and not re.match(r"\[\s*Art[ií]culo\b", s))):
+                        and not re.match(r"\[\s*Art[ií]culo\b", s)
+                        and not MARCA_FORMULA_RE.match(s))):
                 continue
             vistas += 1
             if vistas >= max_lineas:
