@@ -53,7 +53,7 @@ editan a mano: si una unidad está mal, se corrige aquí.
 .venv/bin/python -m pytest -q            # rápido, sin PDFs
 ```
 
-Corpus federal (lo corre `leyes-federales/.github/workflows/vigilar.yml`):
+Corpus federal (lo corre `.github/workflows/vigilar-federal.yml`):
 
 ```bash
 .venv/bin/python -m extractor federal planear  --out ../leyes-federales --plan /tmp/plan.json --lote 40
