@@ -105,6 +105,22 @@ jobs:
         id: veredicto
         run: echo "ok=${{ steps.agente.outputs.ok }}" >> "$GITHUB_OUTPUT"
 
+      - name: Guardar el trabajo de la corrida
+        # Si un arreglo del agente se descarta (p. ej. no se pudo publicar), su
+        # parche queda aquí para recuperarlo en vez de repetir la corrida.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trabajo
+          path: |
+            /tmp/agente/*.json
+            /tmp/agente/*.md
+            /tmp/agente/*.log
+            /tmp/agente/*.patch
+            /tmp/verificacion.md
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Validar invariantes (gate)
         # Si la reconstrucción rompe un invariante (regresión del parser,
         # colisión, hueco…), el job falla y NO se abre PR.
