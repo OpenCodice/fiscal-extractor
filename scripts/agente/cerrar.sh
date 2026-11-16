@@ -135,6 +135,36 @@ elif correcciones:
 else:
     asunto, tipo = "Actualización de metadata del corpus fiscal", "metadata"
 
+# Título del commit de cada documento (scripts/commits_por_documento.py): el
+# historial de cada carpeta cuenta solo su propia historia.
+try:
+    docs = json.loads(pathlib.Path(out_dir, "metadata", "documentos.json").read_text(encoding="utf-8"))
+    docs = {d["clave"]: d for d in (docs["documentos"] if isinstance(docs, dict) else docs)}
+except Exception:
+    docs = {}
+
+
+def arts(unidades):
+    u = sorted(x.split("/", 1)[1] for x in unidades)
+    if len(u) > 12:
+        return f"{len(u)} unidades"
+    return ("art. " if len(u) == 1 else "arts. ") + ", ".join(x.lstrip("0") or "0" for x in u)
+
+
+asuntos = {}
+for doc in sorted({c.split("/")[0] for c in cambiadas}):
+    sigla = docs.get(doc, {}).get("sigla") or doc.upper()
+    ref = sorted(c for c in reformadas if c.startswith(doc + "/"))
+    cor = sorted(c for c in correcciones if c.startswith(doc + "/"))
+    if ref:
+        version = docs.get(doc, {}).get("version")
+        asuntos[doc] = f"Reforma {sigla}{f' ({version})' if version else ''}: {arts(ref)}"
+        if cor:
+            asuntos[doc] += f" (+{len(cor)} correcciones de extracción)"
+    else:
+        asuntos[doc] = f"Corrección de extracción {sigla}: {arts(cor)}"
+(t / "asuntos.json").write_text(json.dumps(asuntos, ensure_ascii=False, indent=1), encoding="utf-8")
+
 icono = {"fiel": "✅", "artefacto": "❌", "incierto": "❔"}
 out = ["### 🤖 Verificación del agente contra los PDF", ""]
 if ok == "true":

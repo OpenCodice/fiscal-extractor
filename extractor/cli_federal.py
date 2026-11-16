@@ -147,6 +147,7 @@ def _cmd_cerrar(a) -> int:
     (trabajo / "pr.md").write_text(federal.cuerpo_pr(res, plan, resultados, notas),
                                    encoding="utf-8")
     _escribir_json(trabajo / "cierre.json", res)
+    _escribir_json(trabajo / "asuntos.json", res["asuntos"])
     print(f"Asunto: {res['asunto']}")
     for k in ("altas", "excluidas", "retenidas", "fuentes_fallidas"):
         if res[k]:

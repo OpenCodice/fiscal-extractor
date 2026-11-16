@@ -511,11 +511,29 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
 
     siglas = {c: e["sigla"] for c, e in entradas.items()}
     asunto = _asunto(altas, reformas, correcciones, siglas, retiradas)
-    return {"asunto": asunto, "altas": altas, "reformas": reformas, "retiradas": retiradas,
+    return {"asunto": asunto,
+            "asuntos": asuntos_por_ley(altas, reformas, correcciones, siglas, retiradas),
+            "altas": altas, "reformas": reformas, "retiradas": retiradas,
             "correcciones": correcciones, "excluidas": excluidas,
             "retenidas": retenidas, "fuentes_fallidas": fallidas,
             "reparados": sorted(reparados & set(altas + [c for c, *_ in reformas]
                                                  + [c for c, _ in correcciones]))}
+
+
+def asuntos_por_ley(altas, reformas, correcciones, siglas, retiradas=()) -> dict:
+    """Título del commit de cada ley que cambió: el historial de cada carpeta
+    debe contar solo su propia historia (ver scripts/commits_por_documento.py)."""
+    s = lambda c: siglas.get(c, c)  # noqa: E731
+    asuntos = {c: f"Alta de {s(c)}" for c in altas}
+    for clave, version, arts in reformas:
+        asuntos[clave] = (f"Reforma {s(clave)} (DOF {version or 's/f'}): "
+                          f"{'art.' if len(arts) == 1 else 'arts.'} {_lista_corta(arts, 12)}")
+    for clave, n in correcciones:
+        asuntos[clave] = (f"Corrección de extracción {s(clave)}: {n} "
+                          f"{'artículo' if n == 1 else 'artículos'}")
+    for clave in retiradas:
+        asuntos[clave] = f"Retiro de {s(clave)}: la extracción no reproduce el PDF"
+    return asuntos
 
 
 def _lista_corta(elems: list[str], n: int = 6) -> str:
