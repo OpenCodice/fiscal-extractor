@@ -463,7 +463,54 @@ def auditar(out: str | Path, pdf_por_clave: dict[str, str]) -> dict:
                     + marca_de_agua(texto)
                     if articulado_doc else []):
                 malos[f"{clave}/{md.stem}"] = pr
+        if articulado_doc:
+            for ref, pr in texto_entre_unidades(Path(out), clave, flujo).items():
+                malos.setdefault(f"{clave}/{ref}", []).extend(pr)
     return {"total": total, "con_problemas": malos}
+
+
+# Lo que puede quedar entre dos artículos es estructura: encabezados, sus nombres
+# y notas. Una fracción, un inciso o un importe ahí es texto de un artículo que
+# no se extrajo, y `cobertura`, que mira dentro de cada unidad, no lo ve.
+_TEXTO_DE_ARTICULO = re.compile(
+    r"^[ \t]*(?:[IVXL]{1,6}\s*\.-|[IVXL]{1,6}\.\s+[A-ZÁÉÍÓÚ]|[a-zñ]\)\s*\.?-?\s+[A-ZÁÉÍÓÚa-z])"
+    r"|\$\s?\d", re.MULTILINE)
+
+
+def texto_entre_unidades(out: Path, clave: str, flujo: Flujo) -> dict[str, list[dict]]:
+    """Texto de artículo entre una unidad y la siguiente, en orden del documento."""
+    idx = out / "metadata" / clave / "articulos.json"
+    if not idx.exists():
+        return {}
+    orden = [a["clave"] for a in json.loads(idx.read_text(encoding="utf-8")).get("articulos", [])]
+    problemas: dict[str, list[dict]] = {}
+    fin_prev, prev = 0, None
+    for unidad in orden:
+        ruta = out / clave / f"{unidad}.md"
+        if not ruta.exists():
+            continue
+        bloques = [n for b in ruta.read_text(encoding="utf-8").split("\n\n")
+                   if b.strip() and not b.startswith("# ") and (n := _norm(b))]
+        if not bloques:
+            continue
+        ini = flujo.norma.find(bloques[0], fin_prev)
+        if ini == -1:
+            prev = None
+            continue
+        if prev is not None and ini > fin_prev:
+            # Con sus saltos de línea: la fracción va al inicio de renglón
+            # ('Capítulo IX. En consecuencia' dentro de una nota no lo es).
+            hueco = flujo.texto[flujo.idx[fin_prev]:flujo.idx[ini - 1] + 1]
+            if _TEXTO_DE_ARTICULO.search(hueco):
+                problemas[prev] = [{"tipo": "texto_entre_unidades",
+                                    "fragmento": " ".join(hueco.split())[:300]}]
+        fin = ini
+        for b in bloques:
+            p = flujo.norma.find(b, fin)
+            if p != -1:
+                fin = p + len(b)
+        fin_prev, prev = fin, unidad
+    return problemas
 
 
 ICONO = {"fiel": "✅", "artefacto": "❌", "incierto": "❔"}

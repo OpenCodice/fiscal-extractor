@@ -151,3 +151,39 @@ def test_marca_de_agua():
 def test_inciso_en_mayuscula_no_es_encabezado_pegado():
     from extractor.verificar import encabezado_pegado
     assert encabezado_pegado("# Artículo 130.\n\nLos grados son:\n\nB. Soldado Marinero\n") == []
+
+
+def test_texto_entre_unidades(tmp_path):
+    import json
+    from extractor.verificar import Flujo, texto_entre_unidades
+    pdf = ("Artículo 158.- Se pagarán derechos:\nI.- Por la expedición … $1,000.00\n"
+           "II.- Por la homologación … $1,864.94\nFracción reformada DOF 07-11-2025\n"
+           "CAPÍTULO II\nDe los aeródromos\nArtículo 159.- Otro.\n")
+    (tmp_path / "lfd").mkdir()
+    (tmp_path / "metadata" / "lfd").mkdir(parents=True)
+    (tmp_path / "metadata" / "lfd" / "articulos.json").write_text(
+        json.dumps({"articulos": [{"clave": "158"}, {"clave": "159"}]}))
+    (tmp_path / "lfd" / "159.md").write_text("# Artículo 159.\n\nArtículo 159.- Otro.\n")
+    flujo = Flujo.de(pdf)
+    (tmp_path / "lfd" / "158.md").write_text(
+        "# Artículo 158.\n\nArtículo 158.- Se pagarán derechos:\n\nI.- Por la expedición … $1,000.00\n")
+    assert list(texto_entre_unidades(tmp_path, "lfd", flujo)) == ["158"]
+    (tmp_path / "lfd" / "158.md").write_text(
+        "# Artículo 158.\n\nArtículo 158.- Se pagarán derechos:\n\nI.- Por la expedición … $1,000.00\n\n"
+        "II.- Por la homologación … $1,864.94\n\n_Fracción reformada DOF 07-11-2025_\n")
+    assert texto_entre_unidades(tmp_path, "lfd", flujo) == {}
+
+
+def test_numeral_a_media_nota_no_es_texto_entre_unidades(tmp_path):
+    import json
+    from extractor.verificar import Flujo, texto_entre_unidades
+    pdf = ("Artículo 172.- Uno.\nCAPÍTULO IX\nDe la Comisión\n"
+           "Nota: Se reformó íntegro el actual Capítulo IX. En consecuencia, se\n"
+           "suprimieron las Secciones Primera y Segunda.\nArtículo 173.- Dos.\n")
+    (tmp_path / "lfd").mkdir()
+    (tmp_path / "metadata" / "lfd").mkdir(parents=True)
+    (tmp_path / "metadata" / "lfd" / "articulos.json").write_text(
+        json.dumps({"articulos": [{"clave": "172"}, {"clave": "173"}]}))
+    (tmp_path / "lfd" / "172.md").write_text("# Artículo 172.\n\nArtículo 172.- Uno.\n")
+    (tmp_path / "lfd" / "173.md").write_text("# Artículo 173.\n\nArtículo 173.- Dos.\n")
+    assert texto_entre_unidades(tmp_path, "lfd", Flujo.de(pdf)) == {}

@@ -43,7 +43,7 @@ HEADER_PREFIXES = (
 #   Reglamento de la Ley Aduanera): la validación de secuencia filtra falsos positivos.
 ORDINALES = "Bis|Ter|Qu[aá]ter|Quintus|Quinquies|Sexies|Septies|Octies|Nonies|Decies"
 ARTICULO_RE = re.compile(
-    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art[íi]culos(?=\s+\d+\s*[oº°]?\.-))\.?\s+(\d+)\s*[oº°]?\.?"  # "Artículo"/"ARTÍCULO" + número
+    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art[íi]culos(?=\s+\d+\s*[oº°]?\.-))\.?\s+(\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
     r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-]))([A-Z])(?![A-Za-z]))?"  # letra "-A" PEGADA o " A." (118 A.)
     rf"(?:[\s.\-]+(?i:({ORDINALES}))"               # ordinal
@@ -127,15 +127,27 @@ MARCA_AGUA_RE = re.compile(
 MAX_LINEAS_NOMBRE = 3
 
 
+# Primer renglón de una nota de reforma o de invalidez ('Artículo declarado
+# inválido y suprimido …', 'Derogación del inciso declarada inválida …'), a veces
+# sin 'DOF' hasta el renglón siguiente.
+NOTA_REFORMA_RE = re.compile(
+    r"^(?:[A-ZÁÉÍÓÚa-záéíóú]+|Derogaci[oó]n\s+d(?:el|e la))\s+(?:\w+\s+)?"
+    r"(?:adicionad|reformad|derogad|declarad|suprimid|recuperad)[oa]s?\b")
+
+
 def _es_nombre_suelto(s: str, continuacion: bool = False) -> bool:
     if not s or len(s) > 150 or "DOF" in s or s.startswith("("):
         return False
+    if NOTA_REFORMA_RE.match(s):
+        return False                      # 'Numeral declarado inválido …' es nota, no nombre
     if _es_encabezado(s) or ARTICULO_RE.match(s) or PAGE_FOOTER_RE.match(s):
         return False
     if re.match(r"\[\s*Art[ií]culo\b", s):
         return False                      # '[Artículo 28 Bis. Suprimido]': texto, no nombre
-    if re.fullmatch(r"[IVXLCDM]+", s) or re.match(r"^[IVXLCDM]+\.\s", s):
-        return False                      # numeral solo o fracción 'II. …'
+    if re.fullmatch(r"[IVXLCDM]+", s) or re.match(r"^(?:[IVXLCDM]+|[a-zñ])\s*[.)\-–]", s):
+        return False                      # numeral solo, fracción 'II.-' o inciso 'a)'
+    if "$" in s or "...." in s or "…" in s:
+        return False                      # importes y puntos guía: renglón de tarifa
     # La coma final es de un nombre que sigue en la línea siguiente.
     if s[-1] in ".;:":
         return False
@@ -160,7 +172,10 @@ def _es_nota_de_bloque(s: str) -> bool:
     return bool(DOF_CLAUSE_RE.search(s) or DOF_LARGA_RE.search(s)) and len(s) < 200 \
         or bool(NOTA_SCJN_RE.match(s)) \
         or bool(re.fullmatch(r"\(?\s*(?:Se\s+deroga|Derogad[oa])\s*\)?\.?", s,
-                             re.IGNORECASE))
+                             re.IGNORECASE)) \
+        or bool(re.fullmatch(r"\[\s*Art[ií]culos?\s[^\]]*Suprimidos?\s*\]", s)) \
+        or bool(re.fullmatch(r"Art[ií]culos?\s+\d+(?:\s+(?:al?|y)\s+\d+)?\s*\.?-?\s*"
+                             r"Se\s+derogan?\.?", s, re.IGNORECASE))
 
 
 # Frontera del articulado permanente: el primer encabezado de Transitorios, en
@@ -310,10 +325,44 @@ def fecha_version(pdf_path: str) -> date | None:
     return None
 
 
+# Otro artículo del decreto que expidió la ley ('ARTÍCULO SEGUNDO.- ……….',
+# 'ARTÍCULOS TERCERO A OCTAVO. ………'): los de la ley llevan número, los del
+# decreto ordinal en palabra. Tras el último artículo de la ley ya no es articulado.
+ARTICULO_DECRETO_RE = re.compile(
+    r"^[ \t]*ART[ÍI]CULOS?\s+(?:PRIMERO|SEGUNDO|TERCERO|CUARTO|QUINTO|SEXTO|S[ÉE]PTIMO|"
+    r"OCTAVO|NOVENO|D[ÉE]CIMO|[ÚU]NICO)\b", re.MULTILINE)
+
+
 def _solo_articulado(texto: str) -> str:
     """Recorta antes de los Transitorios (todo lo posterior no es articulado vigente)."""
     m = TRANSITORIOS_RE.search(texto)
-    return texto[: m.start()] if m else texto
+    if m:
+        texto = texto[: m.start()]
+    primero = next((x for x in re.finditer(r"^.*$", texto, re.MULTILINE)
+                    if ARTICULO_RE.match(x.group().strip())), None)
+    if primero:
+        d = ARTICULO_DECRETO_RE.search(texto, primero.end())
+        if d:
+            texto = _sin_rotulo_final(texto[: d.start()])
+    return texto
+
+
+def _sin_rotulo_final(texto: str) -> str:
+    """Quita los renglones finales que solo son el rótulo en mayúsculas del
+    artículo del decreto que sigue ('DISPOSICIONES DE VIGENCIA TEMPORAL DE LA
+    LEY DEL IMPUESTO SOBRE LA' / 'RENTA', antes del 'ARTÍCULO NOVENO')."""
+    lineas = texto.rstrip().split("\n")
+    while lineas:
+        s = lineas[-1].strip()
+        letras = [c for c in s if c.isalpha()]
+        if not s:
+            lineas.pop()
+        elif (letras and all(c.isupper() for c in letras) and s[-1] not in ".;:)"
+              and not ARTICULO_RE.match(s) and not re.fullmatch(r"[IVXLCDM]+\.?", s)):
+            lineas.pop()
+        else:
+            break
+    return "\n".join(lineas) + "\n"
 
 
 def parse(pdf_path: str, doc: Documento) -> list[Unidad]:
