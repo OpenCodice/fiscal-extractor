@@ -50,6 +50,7 @@ def _contexto(*encabezados: str) -> str:
 class Unidad:
     numero: int
     letra: str = ""                  # "", "A".."Z"
+    guion_num: str = ""              # numeral con guion: "58-1" → "1", "195-L-4" → "4"
     ordinal: str = ""                # "", "Bis", "Ter", "Quáter", "Quinquies", ...
     ord_num: str = ""                # numeral tras el ordinal: "137 Bis 1" → "1"
     sub_letra: str = ""              # letra tras ese numeral: "77 Bis 35 A" → "A"
@@ -76,10 +77,12 @@ class Unidad:
 
     @property
     def clave(self) -> str:
-        """Identificador estable: '004', '014-a', '017-h-bis', '137-bis-1'."""
+        """Identificador estable: '004', '014-a', '017-h-bis', '137-bis-1', '058-1', '195-l-4'."""
         partes = [f"{self.numero:03d}"]
         if self.letra:
             partes.append(_ascii(self.letra))
+        if self.guion_num:
+            partes.append(self.guion_num)
         if self.ordinal:
             partes.append(_ascii(self.ordinal))
         if self.ord_num:
@@ -97,13 +100,15 @@ class Unidad:
             core = f"{self.numero}"
         if self.letra:
             core += f"-{self.letra}"
+        if self.guion_num:
+            core += f"-{self.guion_num}"
         if self.ordinal:
             core += f" {self.ordinal}"
         if self.ord_num:
             core += f" {self.ord_num}"
         if self.sub_letra:
             core += f" {self.sub_letra}"
-        if not self.letra and not self.ordinal:
+        if not self.letra and not self.guion_num and not self.ordinal:
             core += "."                       # "Artículo 4o." / "Artículo 14."
         return f"Artículo {core}"
 

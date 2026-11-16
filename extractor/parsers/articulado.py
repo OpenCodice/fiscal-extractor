@@ -38,6 +38,9 @@ HEADER_PREFIXES = (
 #   "Artículo 111 Bis.-"  "Artículo 156-Bis."  "Artículo 17-H Bis."  "Artículo 12."
 # - La letra exige guion previo y NO debe ir seguida de letra: así "-A" es letra
 #   pero "-Bis"/"-BIS" no se confunde con la letra "B".
+# - El numeral con guion va tras el número o la letra ('Artículo 58-1.',
+#   'Artículo 195-L-4.', 'Artículo 195-Z-11 Bis.'): la LFD y la LFPCA intercalan
+#   así artículos entre dos números.
 # - El ordinal (Bis/Ter/...) admite separador espacio, punto o guion, en cualquier caja.
 # - Se tolera un punto espurio tras la palabra ("Artículo. 88.", errata del
 #   Reglamento de la Ley Aduanera): la validación de secuencia filtra falsos positivos.
@@ -46,6 +49,7 @@ ARTICULO_RE = re.compile(
     r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art[íi]culos(?=\s+\d+\s*[oº°]?\.-))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
     r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-]))([A-Z])(?![A-Za-z]))?"  # letra "-A" PEGADA o " A." (118 A.)
+    r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
     rf"(?:[\s.\-]+(?i:({ORDINALES}))"               # ordinal
     r"(?:[\s\-]+(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1") y letra ("Bis 35 A.-")
     r"(?:\s*\.?-?(?:\s|$|\()|\.-(?=\S))"             # separador final (o ".-" pegado al texto)
@@ -150,8 +154,10 @@ def _es_nombre_suelto(s: str, continuacion: bool = False) -> bool:
         return False                      # numeral solo, fracción 'II.-' o inciso 'a)'
     if "$" in s or "...." in s or "…" in s:
         return False                      # importes y puntos guía: renglón de tarifa
-    # La coma final es de un nombre que sigue en la línea siguiente.
-    if s[-1] in ".;:":
+    # La coma final es de un nombre que sigue en la línea siguiente. Una comilla
+    # de cierre no oculta el fin de oración: 'moneda nacional.”' es el final de
+    # un párrafo citado, no un rótulo.
+    if s.rstrip("\"”»'’")[-1:] in ".;:":
         return False
     inicio = s.lstrip('"“«[')[:1]
     return inicio.islower() if continuacion else inicio.isupper()
@@ -258,14 +264,21 @@ def _es_fragmento_marca(s: str) -> bool:
         and not re.fullmatch(r"[IVX]+|\d{2,}(?: \d+)*|\d(?: \d+)*(?: \d{2,})(?: \d+)*|[ivx]+", s)
 
 
+# Definición de una variable tras una fórmula ('i : Cuota prevista…'): el
+# renglón suelto de arriba ('t') es la letra del símbolo t_i, no marca de agua.
+_DEFINICION_VARIABLE_RE = re.compile(r"^[\w*,]{1,3}(?: [\w*,]{1,3})? ?: \S")
+
+
 def _quitar_marca_girada(page_text: str) -> str:
     lineas = page_text.splitlines()
     if sum(_es_fragmento_marca(ln.strip()) for ln in lineas) < 8:
         return page_text
     salida = []
-    for ln in lineas:
+    for i, ln in enumerate(lineas):
         if _es_fragmento_marca(ln.strip()):
-            continue
+            siguiente = lineas[i + 1].strip() if i + 1 < len(lineas) else ""
+            if not _DEFINICION_VARIABLE_RE.match(siguiente):
+                continue
         if len(ln.strip()) > 12:
             ln = _FRAGMENTOS_COLA_RE.sub("", _FRAGMENTOS_MEDIO_RE.sub("", ln))
         salida.append(ln)
@@ -578,7 +591,7 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
         am = ARTICULO_RE.match(s)
         if not am:
             return False
-        numero, sufijo = int(am.group(1).replace(",", "")), bool(am.group(2) or am.group(3))
+        numero, sufijo = int(am.group(1).replace(",", "")), bool(am.group(2) or am.group(3) or am.group(4))
         return ((numero == esperado and not sufijo)
                 or (actual is not None and numero == actual.numero and sufijo))
 
@@ -720,10 +733,11 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
         if am:
             numero = int(am.group(1).replace(",", ""))
             letra = (am.group(2) or "").upper()
-            ordinal = (am.group(3) or "").title()
-            ord_num = am.group(4) or ""           # numeral tras el ordinal: "Bis 1"
-            sub_letra = am.group(5) or ""         # letra tras el numeral: "Bis 35 A"
-            tiene_sufijo = bool(letra or ordinal)
+            guion_num = am.group(3) or ""         # numeral con guion: "58-1", "195-L-4"
+            ordinal = (am.group(4) or "").title()
+            ord_num = am.group(5) or ""           # numeral tras el ordinal: "Bis 1"
+            sub_letra = am.group(6) or ""         # letra tras el numeral: "Bis 35 A"
+            tiene_sufijo = bool(letra or guion_num or ordinal)
             # Aceptar solo el siguiente esperado (bare) o una variante del actual.
             # Así se descartan las citas "Artículo 89 de la Constitución".
             es_siguiente = numero == esperado and not tiene_sufijo
@@ -731,14 +745,16 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
                            and tiene_sufijo)
             # Una cita al inicio de renglón ("Artículo 46 Bis 3 de la presente
             # Ley") repite una clave ya abierta: no es un artículo nuevo.
-            if es_variante and (numero, letra, ordinal, ord_num, sub_letra) in abiertos:
+            clave = (numero, letra, guion_num, ordinal, ord_num, sub_letra)
+            if es_variante and clave in abiertos:
                 es_variante = False
             if es_siguiente or es_variante:
-                abiertos.add((numero, letra, ordinal, ord_num, sub_letra))
+                abiertos.add(clave)
                 en_bloque = nota_previa = False
                 flush(actual)
                 actual = Unidad(
-                    numero=numero, letra=letra, ordinal=ordinal, ord_num=ord_num,
+                    numero=numero, letra=letra, guion_num=guion_num, ordinal=ordinal,
+                    ord_num=ord_num,
                     sub_letra=sub_letra, titulo=jer["titulo"], capitulo=jer["capitulo"],
                     seccion=jer["seccion"], epigrafe=jer["epigrafe"],
                 )
