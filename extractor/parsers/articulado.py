@@ -253,7 +253,7 @@ _FRAGMENTOS_MEDIO_RE = re.compile(r"\s(?:d e|0 7 e s)(?=\s)")
 
 def _es_fragmento_marca(s: str) -> bool:
     return bool(s) and len(s) <= 8 and _FRAGMENTO_RE.fullmatch(s) is not None \
-        and not re.fullmatch(r"[IVX]+|\d{2,}|[ivx]+", s)
+        and not re.fullmatch(r"[IVX]+|\d{2,}(?: \d+)*|\d(?: \d+)*(?: \d{2,})(?: \d+)*|[ivx]+", s)
 
 
 def _quitar_marca_girada(page_text: str) -> str:
@@ -403,9 +403,41 @@ def parse(pdf_path: str, doc: Documento) -> list[Unidad]:
 NIVELES = ("titulo", "capitulo", "seccion", "epigrafe")
 
 
+_ORDINALES_ART = ("PRIMERO", "SEGUNDO", "TERCERO", "CUARTO", "QUINTO", "SEXTO",
+                  "S[ÉE]PTIMO", "OCTAVO", "NOVENO", "D[ÉE]CIMO")
+_ART_ORDINAL_RE = re.compile(
+    rf"^([ \t]*)ART[ÍI]CULO\s+({'|'.join(_ORDINALES_ART)})\b(?=\s*\.?-)", re.MULTILINE)
+
+
+_FIRMA_CONGRESO_RE = re.compile(r"^.*\b[DS]\. ?[PS]\.-.*$", re.MULTILINE)
+
+
+def _articulos_ordinales(texto: str) -> str:
+    """Leyes breves expedidas como decreto cuyos artículos van en ordinal en
+    palabra ('ARTICULO PRIMERO.- …'): si el texto no tiene ningún artículo con
+    número, esos renglones se numeran ('Artículo 1.- …') antes de segmentar. El
+    texto del artículo no cambia, solo el rótulo."""
+    antes = TRANSITORIOS_RE.search(texto)
+    cuerpo, resto = (texto[: antes.start()], texto[antes.start():]) if antes else (texto, "")
+    if any(ARTICULO_RE.match(ln.strip()) for ln in cuerpo.splitlines()):
+        return texto
+
+    def num(m: re.Match) -> str:
+        palabra = m.group(2).upper().replace("É", "E")
+        i = next(k for k, o in enumerate(_ORDINALES_ART, 1)
+                 if re.fullmatch(o.replace("[ÉE]", "E"), palabra))
+        return f"{m.group(1)}Artículo {i}"
+    # Las firmas del Congreso ('…, D. P.- …, S. P.- …Rúbricas."') y la fórmula de
+    # promulgación que siguen al último artículo no son del artículo.
+    firma = _FIRMA_CONGRESO_RE.search(cuerpo)
+    if firma:
+        cuerpo = cuerpo[: firma.start()]
+    return _ART_ORDINAL_RE.sub(num, cuerpo) + resto
+
+
 def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
     """Segmenta texto ya limpio en unidades. Separado para poder probarlo sin PDF."""
-    texto = _solo_articulado(clean_text)
+    texto = _solo_articulado(_articulos_ordinales(clean_text))
     lineas = texto.splitlines()
 
     unidades: list[Unidad] = []
