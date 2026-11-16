@@ -273,6 +273,10 @@ def _quitar_marca_girada(page_text: str) -> str:
     lineas = page_text.splitlines()
     if sum(_es_fragmento_marca(ln.strip()) for ln in lineas) < 8:
         return page_text
+    # Una tabla de cuotas con encabezados girados ('$' sueltos en renglones
+    # propios) también deja renglones cortos: ahí son datos, no marca de agua.
+    if sum(ln.strip() == "$" for ln in lineas) >= 2:
+        return page_text
     salida = []
     for i, ln in enumerate(lineas):
         if _es_fragmento_marca(ln.strip()):
