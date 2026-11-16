@@ -31,6 +31,12 @@ env:
   # Repo del extractor (código). Ajusta si el owner/nombre difiere.
   EXTRACTOR_REPO: https://github.com/OpenCodice/fiscal-extractor.git
 
+# Una corrida a la vez (el programador, su vigilante o una a mano pueden
+# coincidir); la siguiente espera en cola.
+concurrency:
+  group: vigilar-fiscal-mexicano
+  cancel-in-progress: false
+
 jobs:
   vigilar:
     runs-on: ubuntu-latest

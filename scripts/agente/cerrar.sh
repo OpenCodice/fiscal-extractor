@@ -82,11 +82,17 @@ PY
           -c user.email="${GITHUB_ACTOR_ID:-0}+${GITHUB_ACTOR:-opencodice-ci}@users.noreply.github.com" \
           commit -q -m "Reparación automática: ${titulo:-ajuste del extractor a un cambio de formato del PDF}"
       destino="${EXTRACTOR_PUSH_URL:-https://x-access-token:${EXTRACTOR_TOKEN:-}@github.com/${EXTRACTOR_SLUG:-}.git}"
-      if git push -q "$destino" HEAD:main; then
+      # Otras corridas (un job por estado) pueden haber publicado su propio
+      # arreglo mientras tanto: se rebasa sobre el main más reciente.
+      export GIT_AUTHOR_NAME="${GITHUB_ACTOR:-opencodice-ci}" GIT_COMMITTER_NAME="${GITHUB_ACTOR:-opencodice-ci}"
+      export GIT_AUTHOR_EMAIL="${GITHUB_ACTOR_ID:-0}+${GITHUB_ACTOR:-opencodice-ci}@users.noreply.github.com"
+      export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+      if git pull -q --rebase "$destino" main && git push -q "$destino" HEAD:main; then
         reparado=true
       else
+        git rebase --abort 2>/dev/null || true
         git reset -q --hard HEAD~1
-        descartar "no se pudo publicar el arreglo en el extractor"
+        descartar "no se pudo publicar el arreglo en el extractor (chocó con otro arreglo publicado mientras tanto)"
         regenerar
       fi
     fi
