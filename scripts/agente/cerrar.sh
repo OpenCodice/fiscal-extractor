@@ -27,7 +27,7 @@ regenerar() {
 descartar() {
   echo "::warning::Arreglo del agente descartado: $1"
   motivo_descarte="$1"
-  git diff > "$TRABAJO/arreglo-descartado.patch" || true
+  [ -s "$TRABAJO/arreglo-descartado.patch" ] || git diff > "$TRABAJO/arreglo-descartado.patch" || true
   git checkout -q -- . && git clean -fdq
 }
 
@@ -91,6 +91,8 @@ PY
         reparado=true
       else
         git rebase --abort 2>/dev/null || true
+        # El arreglo ya está en un commit: se guarda antes de deshacerlo.
+        git format-patch -1 --stdout > "$TRABAJO/arreglo-descartado.patch" || true
         git reset -q --hard HEAD~1
         descartar "no se pudo publicar el arreglo en el extractor (chocó con otro arreglo publicado mientras tanto)"
         regenerar
