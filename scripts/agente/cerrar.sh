@@ -44,6 +44,14 @@ PY
 
 reparado=false
 motivo_descarte=""
+# La vigilancia corre en este mismo repo: el agente solo puede publicar cambios
+# al extractor y a sus pruebas, nunca a workflows, scripts ni Workers. Archivos
+# nuevos sueltos (copias de PDF, notas de trabajo) no se publican.
+git ls-files --others --exclude-standard | grep -vE '^(extractor|tests)/' | while IFS= read -r f; do rm -f -- "$f"; done
+fuera=$( { git diff --name-only HEAD; git ls-files --deleted; } | sort -u | grep -vE '^(extractor|tests)/' || true)
+if [ -n "$fuera" ]; then
+  descartar "toca archivos fuera de extractor/ y tests/: $(echo "$fuera" | head -3 | tr '\n' ' ')"
+fi
 if [ -n "$(git status --porcelain)" ]; then
   pip install -q pytest > /dev/null 2>&1 || true
   if ! python -m pytest -q > "$TRABAJO/pytest.log" 2>&1; then
