@@ -77,3 +77,7 @@ regresión barato.
 | 6 | Verificación contra el PDF (`verificar`, `auditar`) y agente de CI que repara el parser (`scripts/agente/`) | ✅ en `vigilar-fiscal.yml`, con fusión automática de los PR verificados |
 
 Para trabajar en este repo, ver [`AGENTS.md`](AGENTS.md).
+
+## Licencia
+
+[MIT](LICENSE).
