@@ -43,11 +43,11 @@ HEADER_PREFIXES = (
 #   Reglamento de la Ley Aduanera): la validación de secuencia filtra falsos positivos.
 ORDINALES = "Bis|Ter|Qu[aá]ter|Quintus|Quinquies|Sexies|Septies|Octies|Nonies|Decies"
 ARTICULO_RE = re.compile(
-    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art[íi]culos(?=\s+\d+\s*[oº°]?\.-))\.?\s+(\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
+    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art[íi]culos(?=\s+\d+\s*[oº°]?\.-))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
     r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-]))([A-Z])(?![A-Za-z]))?"  # letra "-A" PEGADA o " A." (118 A.)
     rf"(?:[\s.\-]+(?i:({ORDINALES}))"               # ordinal
-    r"(?:\s+(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1") y letra ("Bis 35 A.-")
+    r"(?:[\s\-]+(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1") y letra ("Bis 35 A.-")
     r"(?:\s*\.?-?(?:\s|$|\()|\.-(?=\S))"             # separador final (o ".-" pegado al texto)
 )
 
@@ -190,6 +190,7 @@ TRANSITORIOS_RE = re.compile(
     r"|^[ \t]*(?:(?:Art[íi]culos?|Disposiciones)\s+)?" + _TRANSITORIOS_TC + r"[ \t]*[:.]?[ \t]*$"
     # Compilación de los decretos de reforma al final: 'ARTÍCULOS TRANSITORIOS DE
     # DECRETOS DE REFORMA' (el título puede envolverse en varias líneas).
+    r"|^[ \t]*Disposiciones\s+transitorias[ \t]*[:.]?[ \t]*$"
     r"|^[ \t]*(?:ART[ÍI]CULOS\s+)?TRANSITORIOS\s+DE(?:L|\s+LOS)?\s+DECRETOS?\b",
     re.MULTILINE,
 )
@@ -240,6 +241,35 @@ def fechas_reforma_en(texto: str) -> list[date]:
     return sorted(fechas)
 
 
+# Marca de agua girada ('DIARIO OFICIAL' / 'Viernes 15 de junio de 2007') que
+# pdfplumber reparte en fragmentos de 1 a 3 caracteres: unos en renglones
+# propios y otros pegados al final de un renglón de texto. Solo se limpia en las
+# páginas donde hay muchos renglones así (la marca está presente).
+_FRAGMENTO_RE = re.compile(r"(?:[A-Za-zÁÉÍÓÚáéíóúñ0-9()]{1,3})(?: [A-Za-zÁÉÍÓÚáéíóúñ0-9()]{1,3})*")
+_FRAGMENTOS_COLA_RE = re.compile(
+    r"(?:\s+(?:d e|0 7 e s|1 5|2 0|dV|ie|rn|ju|io|ió|e c|c c|IA|IO|IC|[DRFL]))+$")
+_FRAGMENTOS_MEDIO_RE = re.compile(r"\s(?:d e|0 7 e s)(?=\s)")
+
+
+def _es_fragmento_marca(s: str) -> bool:
+    return bool(s) and len(s) <= 8 and _FRAGMENTO_RE.fullmatch(s) is not None \
+        and not re.fullmatch(r"[IVX]+|\d{2,}|[ivx]+", s)
+
+
+def _quitar_marca_girada(page_text: str) -> str:
+    lineas = page_text.splitlines()
+    if sum(_es_fragmento_marca(ln.strip()) for ln in lineas) < 8:
+        return page_text
+    salida = []
+    for ln in lineas:
+        if _es_fragmento_marca(ln.strip()):
+            continue
+        if len(ln.strip()) > 12:
+            ln = _FRAGMENTOS_COLA_RE.sub("", _FRAGMENTOS_MEDIO_RE.sub("", ln))
+        salida.append(ln)
+    return "\n".join(salida)
+
+
 def _quitar_encabezados(page_text: str, titulos: tuple[str, ...]) -> str:
     fuera = tuple(t.strip() for t in titulos)
     lineas = []
@@ -288,7 +318,7 @@ def _titulo_corrido(paginas: list[str]) -> tuple[str, ...]:
 def limpiar_paginas(paginas: list[str], doc: Documento) -> str:
     """Texto completo sin encabezados/pies, a partir del texto crudo por página."""
     fuera = doc.titulos_encabezado + _titulo_corrido(paginas)
-    return "\n".join(_quitar_encabezados(t, fuera) for t in paginas)
+    return "\n".join(_quitar_encabezados(_quitar_marca_girada(t), fuera) for t in paginas)
 
 
 def texto_limpio(pdf_path: str, doc: Documento) -> str:
@@ -425,7 +455,7 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
         am = ARTICULO_RE.match(s)
         if not am:
             return False
-        numero, sufijo = int(am.group(1)), bool(am.group(2) or am.group(3))
+        numero, sufijo = int(am.group(1).replace(",", "")), bool(am.group(2) or am.group(3))
         return ((numero == esperado and not sufijo)
                 or (actual is not None and numero == actual.numero and sufijo))
 
@@ -564,7 +594,7 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
 
         am = ARTICULO_RE.match(stripped)
         if am:
-            numero = int(am.group(1))
+            numero = int(am.group(1).replace(",", ""))
             letra = (am.group(2) or "").upper()
             ordinal = (am.group(3) or "").title()
             ord_num = am.group(4) or ""           # numeral tras el ordinal: "Bis 1"
