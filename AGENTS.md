@@ -27,6 +27,12 @@ editan a mano: si una unidad está mal, se corrige aquí.
   se genera del índice de LeyesBiblio y vive en `leyes-federales/fuentes.json`
   (no en `registro.py`). `--registro <archivo>` (o un `fuentes.json` en el repo
   de `--out`) sustituye el corpus fiscal en cualquier comando.
+- `.github/workflows/vigilar-fiscal.yml` y `vigilar-federal.yml` — la vigilancia
+  de `fiscal-mexicano` y `leyes-federales`. Viven aquí, no en los repos de
+  datos, para que el historial de esos repos solo tenga cambios de texto legal.
+  Las lanza cada lunes el Worker `scheduler` (constitucion-extractor/scheduler/)
+  y abren en el repo de datos un PR con un commit por documento
+  (`scripts/commits_por_documento.py`), que `revisar-pr` fusiona con rebase.
 - `scripts/agente/` — el agente de CI: `brief.md` (su encargo), `correr.sh`
   (lo lanza) y `cerrar.sh` (compuertas deterministas, publica su arreglo). Para
   el corpus federal, `brief-federal.md`, `correr-federal.sh`,

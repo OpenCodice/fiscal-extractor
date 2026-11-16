@@ -43,7 +43,8 @@ def agrupar(rutas: list[str], documentos: set[str]) -> tuple[dict[str, list[str]
 
 
 def main(repo: str, asuntos_json: str, asunto_resto: str) -> int:
-    asuntos = json.loads(Path(asuntos_json).read_text(encoding="utf-8"))
+    a = Path(asuntos_json)
+    asuntos = json.loads(a.read_text(encoding="utf-8")) if a.exists() else {}
     rutas = cambios(repo)
     # Un documento es cualquier carpeta de primer nivel con artículos (.md); así
     # también se separan los que cambiaron sin título declarado.

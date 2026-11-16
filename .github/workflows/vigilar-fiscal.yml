@@ -1,0 +1,211 @@
+name: Vigilar corpus fiscal
+
+# Vigila las fuentes oficiales del corpus fiscal (Cámara de Diputados para leyes,
+# códigos y reglamentos; SAT para la RMF y los criterios) y abre un PR cuando el
+# texto vigente cambia. La detección la hace git: se reconstruye el repo y se
+# compara; NO se comparan bytes de los PDF.
+#
+# El PR trae solo texto + metadata (reconstrucción determinista y gratuita).
+# El validador corre como gate: si los invariantes fallan, no se abre PR.
+#
+# Vive en el extractor, no en el repo de datos, para que el historial de
+# fiscal-mexicano solo tenga cambios de texto legal. Lo lanza cada lunes el Worker
+# `scheduler` (constitucion-extractor/scheduler/); el PR se abre en fiscal-mexicano con
+# PR_TOKEN, un commit por documento, y `revisar-pr` de allá lo fusiona con
+# rebase para conservarlos.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reintento:
+        description: 'Reintento automático tras una falla'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  TIENE_CLAUDE: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+  # Repo del extractor (código). Ajusta si el owner/nombre difiere.
+  EXTRACTOR_REPO: https://github.com/OpenCodice/fiscal-extractor.git
+
+jobs:
+  vigilar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repo de datos
+        uses: actions/checkout@v5
+        with:
+          repository: OpenCodice/fiscal-mexicano
+          token: ${{ secrets.PR_TOKEN }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Clonar extractor e instalar dependencias
+        run: |
+          git clone --depth 1 "$EXTRACTOR_REPO" /tmp/extractor
+          pip install -r /tmp/extractor/requirements.txt
+
+      - name: Descargar fuentes y reconstruir el corpus
+        id: reconstruir
+        # Exit 3 = alguna fuente no se pudo resolver/descargar pero el resto sí
+        # se reconstruyó: se sigue (el PR de lo que sí cambió vale) y el paso
+        # final pone el job en rojo para que el fallo no pase inadvertido.
+        run: |
+          cd /tmp/extractor
+          set +e
+          PYTHONPATH=/tmp/extractor python -m extractor actualizar \
+            --out "$GITHUB_WORKSPACE" --pdf-dir /tmp/pdfs
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo "fuentes_fallidas=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          exit "$code"
+
+      - name: Agente — verificar contra el PDF y reparar el extractor si hace falta
+        timeout-minutes: 90
+        if: env.TIENE_CLAUDE == 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OUT: ${{ github.workspace }}
+          PDF_DIR: /tmp/pdfs
+        run: bash /tmp/extractor/scripts/agente/correr.sh
+
+      - name: Compuertas del agente y veredicto
+        id: agente
+        if: env.TIENE_CLAUDE == 'true'
+        env:
+          EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
+          EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
+          REPORTE: /tmp/verificacion.md
+          OUT: ${{ github.workspace }}
+          PDF_DIR: /tmp/pdfs
+        run: |
+          if bash /tmp/extractor/scripts/agente/cerrar.sh; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Veredicto de verificación
+        id: veredicto
+        run: echo "ok=${{ steps.agente.outputs.ok }}" >> "$GITHUB_OUTPUT"
+
+      - name: Validar invariantes (gate)
+        # Si la reconstrucción rompe un invariante (regresión del parser,
+        # colisión, hueco…), el job falla y NO se abre PR.
+        run: |
+          PYTHONPATH=/tmp/extractor python -m extractor validar \
+            --out "$GITHUB_WORKSPACE"
+
+      - name: Actualizar la tabla de documentos del README
+        # Refresca los enlaces a los PDF y las fechas de última reforma desde la
+        # metadata recién reconstruida, para que entren en el mismo PR.
+        run: python "$GITHUB_WORKSPACE/scripts/gen_readme.py"
+
+      - name: ¿Cambió el texto vigente?
+        id: cambios
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "hay_cambios=true" >> "$GITHUB_OUTPUT"
+            git status --short | head -40
+          else
+            echo "hay_cambios=false" >> "$GITHUB_OUTPUT"
+            echo "Sin cambios: el corpus coincide con las fuentes."
+          fi
+
+      - name: Generar cuerpo del PR
+        if: steps.cambios.outputs.hay_cambios == 'true'
+        run: |
+          python /tmp/extractor/scripts/pr_summary.py "$GITHUB_WORKSPACE" > /tmp/cuerpo.md
+          if [ -f /tmp/verificacion.md ]; then
+            { echo; cat /tmp/verificacion.md; } >> /tmp/cuerpo.md
+          fi
+          cat /tmp/cuerpo.md
+
+      - name: Un commit por documento
+        # El historial de cada documento debe contar solo su propia historia:
+        # un commit por ley con su título (reforma, corrección, alta) y uno
+        # aparte para lo compartido (índices, README).
+        if: steps.cambios.outputs.hay_cambios == 'true' && steps.veredicto.outputs.ok == 'true'
+        run: |
+          git -C "$GITHUB_WORKSPACE" config user.name "${{ github.actor }}"
+          git -C "$GITHUB_WORKSPACE" config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          python /tmp/extractor/scripts/commits_por_documento.py "$GITHUB_WORKSPACE" /tmp/agente/asuntos.json "Índice del corpus fiscal y README al día"
+
+      - name: Abrir Pull Request
+        id: pr
+        # Solo se publica lo verificado. Lo que no pasó las compuertas no se
+        # publica: el texto vigente se queda como está y la siguiente vigilancia
+        # lo vuelve a intentar, con el agente reparando el extractor.
+        if: steps.cambios.outputs.hay_cambios == 'true' && steps.veredicto.outputs.ok == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          # Con un PAT (secret PR_TOKEN) el PR nace atribuido a un usuario real,
+          # así dispara `revisar-pr` (gate) como un PR humano. Si el secret no
+          # existe, cae al GITHUB_TOKEN (el PR se abre pero sin checks).
+          token: ${{ secrets.PR_TOKEN || github.token }}
+          branch: actualizacion/corpus-fiscal-automatica
+          base: main
+          title: '🧾 Cambio en el corpus fiscal (detección automática)'
+          body-path: /tmp/cuerpo.md
+          labels: |
+            actualizacion
+            automatico
+            verificado
+            ${{ steps.agente.outputs.tipo == 'correccion' && 'correccion-extraccion' || '' }}
+          delete-branch: true
+
+      - name: Anotar lo que no se publicó
+        if: steps.cambios.outputs.hay_cambios == 'true' && steps.veredicto.outputs.ok != 'true'
+        run: |
+          {
+            echo "## Cambios no publicados"
+            echo "La extracción no pasó las compuertas; se conserva el texto vigente y la próxima vigilancia lo reintenta."
+            if [ -f /tmp/verificacion.md ]; then cat /tmp/verificacion.md; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Alertar fuentes fallidas
+        if: steps.reconstruir.outputs.fuentes_fallidas == 'true'
+        run: |
+          echo "::error::Alguna fuente no se pudo resolver o descargar (URL muerta o cambió la página del SAT). Revisa el log del paso de descarga."
+          exit 1
+
+  salud:
+    needs: vigilar
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Reintentar una vez si falló
+        # Casi todas las fallas son de red o de la fuente oficial: se reintenta
+        # solo, una vez. Si el reintento también falla, la siguiente vigilancia
+        # semanal lo vuelve a intentar.
+        if: (needs.vigilar.result == 'failure') && inputs.reintento != true
+        run: gh workflow run vigilar-fiscal.yml -R "$GITHUB_REPOSITORY" --ref main -f reintento=true
+
+      - name: Dejar constancia si también falló el reintento
+        if: (needs.vigilar.result == 'failure') && inputs.reintento == true
+        run: |
+          titulo="🚨 Falló: ${{ github.workflow }}"
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          n=$(gh issue list -R "$GITHUB_REPOSITORY" --state open \
+                --search "in:title \"$titulo\"" --json number -q '.[0].number')
+          if [ -n "$n" ]; then
+            gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "Volvió a fallar tras reintentar: $url"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$titulo" \
+              --body "Falló dos veces seguidas; la vigilancia de la próxima semana lo reintenta: $url"
+          fi
