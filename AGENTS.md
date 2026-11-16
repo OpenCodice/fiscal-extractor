@@ -33,6 +33,8 @@ editan a mano: si una unidad está mal, se corrige aquí.
   Las lanza cada lunes el Worker `scheduler` (constitucion-extractor/scheduler/)
   y abren en el repo de datos un PR con un commit por documento
   (`scripts/commits_por_documento.py`), que `revisar-pr` fusiona con rebase.
+- `scripts/readme_fiscal.py` y `readme_federal.py` — regeneran las tablas del
+  README de cada repo de datos; las corre su vigilancia.
 - `scripts/agente/` — el agente de CI: `brief.md` (su encargo), `correr.sh`
   (lo lanza) y `cerrar.sh` (compuertas deterministas, publica su arreglo). Para
   el corpus federal, `brief-federal.md`, `correr-federal.sh`,

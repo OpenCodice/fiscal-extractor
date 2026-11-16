@@ -205,7 +205,7 @@ jobs:
         run: |
           cd /tmp/extractor
           python -m extractor federal cerrar --plan "$PLAN" --out "$OUT" --trabajo "$AGENTE_DIR" --pdf-dir "$PDF_DIR"
-          python "$OUT/scripts/gen_readme.py"
+          python /tmp/extractor/scripts/readme_federal.py "$OUT"
           echo "reparado=$([ -f "$AGENTE_DIR/reparacion.json" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: Validar invariantes (gate)

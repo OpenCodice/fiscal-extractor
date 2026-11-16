@@ -131,7 +131,7 @@ jobs:
       - name: Actualizar la tabla de documentos del README
         # Refresca los enlaces a los PDF y las fechas de última reforma desde la
         # metadata recién reconstruida, para que entren en el mismo PR.
-        run: python "$GITHUB_WORKSPACE/scripts/gen_readme.py"
+        run: python /tmp/extractor/scripts/readme_fiscal.py "$GITHUB_WORKSPACE"
 
       - name: ¿Cambió el texto vigente?
         id: cambios
