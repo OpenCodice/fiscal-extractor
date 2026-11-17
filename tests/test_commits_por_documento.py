@@ -214,3 +214,67 @@ def test_contexto_federal_reforma_y_retiro(entorno):
     assert titulos == ["Retiro de LFT: fuera del corpus",
                        "Reforma LGS (DOF 2026-02-01): art. 1",
                        "Registro de fuentes al día"]
+
+
+def _registro_con(e, doc, clave):
+    """Registro que confirma la corrección de `clave` de `doc` (la errata
+    'lectrua' que corrige el extractor v2)."""
+    im = cpd.impacto
+    antes = _git(e["datos"], "show", f"HEAD:{doc}/{clave}.md")
+    reg = e["tmp"] / "registro"
+    im.escribir([{"documento": doc, "clave": clave, "pdf": cpd.sha256(e["pdfs"] / f"{doc}.pdf"),
+                  "antes": im.huella(antes), "despues": im.huella(antes.replace("lectrua", "lectura")),
+                  "veredicto": "mejora"}], reg, "prueba")
+    return reg
+
+
+def _correr_con(e, registro):
+    (e["pdfs"] / "descargas.json").write_text(json.dumps(
+        {p.stem: f"https://x/{p.stem}.pdf" for p in e["pdfs"].glob("*.pdf")}))
+    base = _git(e["datos"], "rev-parse", "HEAD").strip()
+    cpd.main([str(e["datos"]), "--titulo-indice", "Índice del corpus fiscal y README al día",
+              "--extractor-dir", str(e["ext"]), "--pdf-dir", str(e["pdfs"]),
+              "--verificadas", str(registro)])
+    assert not _git(e["datos"], "status", "--porcelain")
+    assert vc.main(str(e["datos"]), base) == 0
+    return [_git(e["datos"], "log", "-1", "--format=%s", c).strip()
+            for c in _git(e["datos"], "log", "--reverse", "--format=%H", f"{base}..HEAD").split()]
+
+
+def test_correcciones_sin_confirmar_no_se_publican(entorno):
+    e = entorno
+    _publicar(e, {
+        "cor": (e["v1"], "version|2026-01-01\n001|Una lectrua.\n"),
+        "sep": (e["v1"], "version|2026-01-01\n001|Una lectrua.\n002|Dos.\n"),
+    })
+    publicado = json.loads((e["datos"] / "metadata" / "documentos.json").read_text())
+    _construir(e, e["v2"], "cor", "version|2026-01-01\n001|Una lectrua.\n")
+    _construir(e, e["v2"], "sep", "version|2026-03-01\n001|Una lectrua.\n002|Dos reformado.\n")
+    titulos = _correr_con(e, e["tmp"] / "vacio")
+    assert titulos == ["Reforma SEP (DOF 2026-03-01): art. 2",
+                       "Índice del corpus fiscal y README al día"]
+    docs = {d["clave"]: d for d in json.loads(
+        (e["datos"] / "metadata" / "documentos.json").read_text())["documentos"]}
+    viejo = {d["clave"]: d for d in publicado["documentos"]}
+    assert docs["cor"]["extractor_sha"] == viejo["cor"]["extractor_sha"] == e["v1"]
+    assert docs["sep"]["extractor_sha"] == e["v1"]
+    assert docs["sep"]["pdf_sha256"] == cpd.sha256(e["pdfs"] / "sep.pdf")
+    assert "lectrua" in (e["datos"] / "cor" / "001.md").read_text()
+
+
+def test_correccion_confirmada_se_publica(entorno):
+    e = entorno
+    _publicar(e, {"cor": (e["v1"], "version|2026-01-01\n001|Una lectrua.\n")})
+    _construir(e, e["v2"], "cor", "version|2026-01-01\n001|Una lectrua.\n")
+    titulos = _correr_con(e, _registro_con(e, "cor", "001"))
+    assert titulos[0] == "Corrección de extracción COR: art. 1"
+
+
+def test_solo_metadata_es_metadatos(entorno):
+    e = entorno
+    _publicar(e, {"cor": (e["v2"], "version|2026-01-01\n001|Uno.\n")})
+    idx = e["datos"] / "metadata" / "cor" / "articulos.json"
+    d = json.loads(idx.read_text())
+    idx.write_text(json.dumps({**d, "etiqueta": "Cor"}))
+    titulos = _correr(e)
+    assert [t for t, _ in titulos][0] == "Metadatos de COR: articulos.json"

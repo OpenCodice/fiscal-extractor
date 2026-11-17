@@ -18,7 +18,10 @@ lee sin interpretar texto libre:
 
 Todo sale de código determinista: del árbol antes y después del commit (que se
 lee con un "lector": ruta → bytes o None) y de la causa del cambio, que decide
-el pipeline (cambió el PDF, el extractor o ambos). El mismo cálculo sirve para
+el pipeline (cambió el PDF, el extractor o ambos). Un cambio del extractor que
+no toca el texto de ningún artículo (solo metadata: el nombre del periódico
+oficial, los pasajes, el índice) es `metadatos`, no `correccion`: la bitácora
+lo muestra aparte, como cambio menor. El mismo cálculo sirve para
 los commits nuevos, para validar los de un PR y para reconstruir los trailers
 del historial.
 
@@ -34,7 +37,7 @@ from typing import Callable, Iterable
 
 Lector = Callable[[str], "bytes | None"]
 
-TIPOS_DOCUMENTO = ("reforma", "correccion", "alta", "retiro")
+TIPOS_DOCUMENTO = ("reforma", "correccion", "metadatos", "alta", "retiro")
 TIPOS = TIPOS_DOCUMENTO + ("indice",)
 
 # Orden canónico de los trailers en el mensaje.
@@ -45,6 +48,7 @@ LISTAS = {"reforma": ("Articulos-Adicionados", "Articulos-Modificados", "Articul
           "correccion": ("Articulos-Corregidos",)}
 
 MAX_EN_TITULO = 12
+MAX_ARCHIVOS_EN_TITULO = 4
 
 _FECHA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -328,8 +332,44 @@ def texto_articulos(etiquetas: list[str]) -> str:
     return ("art. " if len(etiquetas) == 1 else "arts. ") + ", ".join(etiquetas)
 
 
+def texto_archivos(archivos: list[str]) -> str:
+    if not archivos:
+        return "sin archivos"
+    if len(archivos) > MAX_ARCHIVOS_EN_TITULO:
+        return f"{len(archivos)} archivos"
+    return ", ".join(archivos)
+
+
+def archivos_metadata(documento: str, rutas: Iterable[str]) -> list[str]:
+    """Archivos del documento que no son artículos, relativos a su carpeta de
+    metadata ('articulos.json') o, fuera de ella, a la del documento
+    ('fuente/ruido.json')."""
+    meta = _dir_metadata(documento)
+    raiz = {"cpeum": "", "estatal": f"{documento}/"}.get(esquema_de(documento), f"{documento}/")
+    nombres = set()
+    for r in rutas:
+        if clave_articulo(r, documento) is not None:
+            continue
+        if r.startswith(meta):
+            nombres.add(r[len(meta):])
+        elif r.startswith(raiz):
+            nombres.add(r[len(raiz):])
+    return sorted(nombres)
+
+
+def tipo_sin_reforma(documento: str, rutas: Iterable[str], leer_antes: Lector,
+                     leer_despues: Lector) -> str:
+    """Mismo PDF, otro extractor: 'correccion' si cambia el texto de algún
+    artículo; si solo cambia metadata, 'metadatos'."""
+    return "correccion" if cambios_de_articulos(documento, rutas, leer_antes, leer_despues) \
+        else "metadatos"
+
+
 def titulo(tipo: str, sigla: str, *, medio: str | None = None, fecha: str | None = None,
-           etiquetas: list[str] | None = None, motivo: str | None = None) -> str:
+           etiquetas: list[str] | None = None, motivo: str | None = None,
+           archivos: list[str] | None = None) -> str:
+    if tipo == "metadatos":
+        return f"Metadatos de {sigla}: {texto_archivos(archivos or [])}"
     if tipo == "reforma":
         return (f"Reforma {sigla} ({medio_corto(medio)} {fecha or 's/f'}): "
                 f"{texto_articulos(etiquetas or [])}")
@@ -358,7 +398,7 @@ def calcular(documento: str, tipo: str, rutas: Iterable[str], leer_antes: Lector
     a = info(documento, leer_antes)
     d = info(documento, leer_despues) if tipo != "retiro" else a
     cambios = cambios_de_articulos(documento, rutas, leer_antes, leer_despues) \
-        if tipo in LISTAS else {}
+        if tipo in LISTAS or tipo == "metadatos" else {}
     listas = clasificar(tipo, cambios)
     fechas, origen = publicaciones(tipo, a["reformas"], d["reformas"], d["version"])
     t: list[tuple[str, str]] = [("Documento", documento), ("Tipo", tipo)]
@@ -378,11 +418,14 @@ def calcular(documento: str, tipo: str, rutas: Iterable[str], leer_antes: Lector
         t.append(("Extractor", extractor))
     if separacion and tipo == "reforma":
         t.append(("Separacion", separacion))
+    if tipo == "metadatos" and cambios:
+        raise ValueError(f"Tipo metadatos pero cambia el texto de: {', '.join(sorted(cambios)[:5])}")
     claves = sorted(cambios)
     etiquetas = [etiqueta(cambios[c][1] if cambios[c][1] is not None else cambios[c][0], c)
                  for c in claves]
     tit = titulo(tipo, d["sigla"], medio=d["medio"], fecha=fechas[0] if fechas else None,
-                 etiquetas=etiquetas, motivo=motivo)
+                 etiquetas=etiquetas, motivo=motivo,
+                 archivos=archivos_metadata(documento, rutas) if tipo == "metadatos" else None)
     return tit, t
 
 
@@ -458,7 +501,7 @@ def validar(titulo_commit: str, trailers: list[tuple[str, str]], rutas: list[str
     por_existencia = tipo_por_existencia(doc, leer_antes, leer_despues)
     if tipo in ("alta", "retiro") and por_existencia != tipo:
         errores.append(f"Tipo {tipo} pero el documento {'ya existía' if tipo == 'alta' else 'sigue existiendo'}")
-    if tipo in ("reforma", "correccion") and por_existencia:
+    if tipo in ("reforma", "correccion", "metadatos") and por_existencia:
         errores.append(f"Tipo {tipo} pero el commit es un{'a' if por_existencia == 'alta' else ''} {por_existencia}")
 
     fuente, sha = valor(trailers, "Fuente"), valor(trailers, "Fuente-Sha256")
@@ -479,6 +522,17 @@ def validar(titulo_commit: str, trailers: list[tuple[str, str]], rutas: list[str
     for f in valores(trailers, "Publicacion"):
         if not _FECHA.match(f):
             errores.append(f"Publicacion mal formada: {f!r}")
+
+    if tipo in ("correccion", "metadatos"):
+        corregidos = cambios_de_articulos(doc, rutas, leer_antes, leer_despues)
+        if tipo == "metadatos" and corregidos:
+            return errores + [f"Tipo metadatos pero cambia el texto de: "
+                              f"{', '.join(sorted(corregidos)[:5])}"]
+        # Los commits publicados antes de que existiera `metadatos` dicen
+        # `correccion` aunque no corrijan ningún artículo; solo se validan así
+        # en modo no estricto.
+        if tipo == "correccion" and not corregidos and estricto:
+            errores.append("corrección sin artículos corregidos: es Tipo metadatos")
 
     # Lo demás se recalcula del árbol y debe coincidir exactamente.
     try:

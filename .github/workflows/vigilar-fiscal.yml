@@ -87,7 +87,36 @@ jobs:
           PDF_DIR: /tmp/pdfs
         run: bash /tmp/extractor/scripts/agente/correr.sh
 
-      - name: Compuertas del agente y veredicto
+      - name: Caché de los PDF publicados
+        # Medir el impacto de un arreglo reconstruye todo lo publicado desde su
+        # PDF exacto (scripts/impacto_corpus.py); los ya descargados se guardan.
+        uses: actions/cache@v4
+        with:
+          path: /tmp/pdfs-corpus
+          key: pdfs-corpus-${{ github.run_id }}
+          restore-keys: pdfs-corpus-
+
+      - name: Compuertas del arreglo del agente
+        # Sin secretos: pruebas, cobertura e impacto del arreglo en todo lo
+        # publicado (fiscal-mexicano y leyes-federales).
+        id: compuertas
+        if: env.TIENE_CLAUDE == 'true'
+        env:
+          OUT: ${{ github.workspace }}
+          PDF_DIR: /tmp/pdfs
+        run: |
+          bash /tmp/extractor/scripts/agente/cerrar.sh compuertas
+          echo "arreglo=$(python3 -c 'import json; print(json.load(open("/tmp/agente/arreglo.json"))["estado"])' 2>/dev/null || echo ninguno)" >> "$GITHUB_OUTPUT"
+
+      - name: Agente — confirmar el impacto del arreglo en el corpus
+        if: steps.compuertas.outputs.arreglo == 'impacto'
+        timeout-minutes: 180
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          IMPACTO: /tmp/agente/impacto-arreglo
+        run: bash /tmp/extractor/scripts/agente/impacto.sh
+
+      - name: Publicar el arreglo y veredicto
         id: agente
         if: env.TIENE_CLAUDE == 'true'
         env:
@@ -97,7 +126,7 @@ jobs:
           OUT: ${{ github.workspace }}
           PDF_DIR: /tmp/pdfs
         run: |
-          if bash /tmp/extractor/scripts/agente/cerrar.sh; then
+          if bash /tmp/extractor/scripts/agente/cerrar.sh publicar; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
             echo "ok=false" >> "$GITHUB_OUTPUT"
@@ -119,6 +148,11 @@ jobs:
             /tmp/agente/*.md
             /tmp/agente/*.log
             /tmp/agente/*.patch
+            /tmp/agente/impacto-*/resumen.json
+            /tmp/agente/impacto-*/pendientes.json
+            /tmp/agente/impacto-*/veredicto*.json
+            /tmp/agente/revision/*/veredicto*.json
+            /tmp/agente/revision/*/resultado.json
             /tmp/verificacion.md
           if-no-files-found: ignore
           retention-days: 30
@@ -170,16 +204,68 @@ jobs:
         run: |
           git -C "$GITHUB_WORKSPACE" config user.name "${{ github.actor }}"
           git -C "$GITHUB_WORKSPACE" config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           python /tmp/extractor/scripts/commits_por_documento.py "$GITHUB_WORKSPACE" \
             --pdf-dir /tmp/pdfs --extractor-dir /tmp/extractor \
             --titulo-indice "Índice del corpus fiscal y README al día"
+
+      - name: Correcciones por confirmar
+        # Una corrección (mismo PDF, otro extractor) solo se publica si cada
+        # unidad que cambia está confirmada como mejora en el registro del
+        # extractor (scripts/impacto.py). Lo que falte lo juzga el agente.
+        id: correcciones
+        if: steps.commits.outcome == 'success'
+        run: |
+          python /tmp/extractor/scripts/impacto.py pendientes-commits "$GITHUB_WORKSPACE" \
+            --base "${{ steps.commits.outputs.base }}" --trabajo /tmp/agente/impacto-vigilancia --pdf-dir /tmp/pdfs \
+            --veredicto-agente /tmp/agente/veredicto.json \
+            --extractor "OpenCodice/fiscal-extractor@$(git -C /tmp/extractor rev-parse HEAD)"
+
+      - name: Agente — confirmar las correcciones
+        if: steps.correcciones.outputs.pendientes == 'true' && env.TIENE_CLAUDE == 'true'
+        timeout-minutes: 120
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          IMPACTO: /tmp/agente/impacto-vigilancia
+        run: bash /tmp/extractor/scripts/agente/impacto.sh
+
+      - name: Registrar y exigir las correcciones confirmadas
+        id: exigir
+        if: steps.commits.outcome == 'success'
+        env:
+          EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
+          EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
+        run: |
+          if [ "${{ steps.correcciones.outputs.pendientes }}" = true ]; then
+            python /tmp/extractor/scripts/impacto.py cerrar --trabajo /tmp/agente/impacto-vigilancia \
+              --extractor "OpenCodice/fiscal-extractor@$(git -C /tmp/extractor rev-parse HEAD)" \
+              --reporte /tmp/agente/impacto-vigilancia.md || true
+          fi
+          bash /tmp/extractor/scripts/agente/publicar_registro.sh "Correcciones verificadas del corpus fiscal"
+          python /tmp/extractor/scripts/impacto.py exigir "$GITHUB_WORKSPACE" \
+            --base "${{ steps.commits.outputs.base }}" || true
+
+      - name: Rehacer los commits sin las correcciones no confirmadas
+        if: steps.exigir.outputs.rehacer == 'true'
+        run: |
+          git reset -q --mixed "${{ steps.commits.outputs.base }}"
+          python /tmp/extractor/scripts/commits_por_documento.py "$GITHUB_WORKSPACE" \
+            --pdf-dir /tmp/pdfs --extractor-dir /tmp/extractor \
+            --titulo-indice "Índice del corpus fiscal y README al día" \
+            --verificadas /tmp/extractor/verificaciones/impacto
+          [ -f /tmp/agente/impacto-vigilancia.md ] && cat /tmp/agente/impacto-vigilancia.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: ¿Quedó algo que publicar?
+        id: publicable
+        if: steps.commits.outcome == 'success'
+        run: echo "si=$([ "$(git rev-list --count "${{ steps.commits.outputs.base }}..HEAD")" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: Abrir Pull Request
         id: pr
         # Solo se publica lo verificado. Lo que no pasó las compuertas no se
         # publica: el texto vigente se queda como está y la siguiente vigilancia
         # lo vuelve a intentar, con el agente reparando el extractor.
-        if: steps.cambios.outputs.hay_cambios == 'true' && steps.veredicto.outputs.ok == 'true'
+        if: steps.publicable.outputs.si == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
           # Con un PAT (secret PR_TOKEN) el PR nace atribuido a un usuario real,

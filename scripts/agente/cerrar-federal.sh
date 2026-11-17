@@ -1,18 +1,29 @@
 #!/usr/bin/env bash
-# Compuertas deterministas después del agente en el corpus federal. Restaura el
-# repo de datos (el agente no puede tocarlo), decide si su arreglo se publica en
-# el extractor y deja `resultados.json` con la auditoría que vale.
+# Compuertas deterministas después del agente en el corpus federal, en dos
+# fases (dos pasos del workflow, con el agente de impacto entre ellas):
 #
-# Entorno: OUT, PDF_DIR, PLAN; opcionales AGENTE_DIR, EXTRACTOR_TOKEN +
-# EXTRACTOR_SLUG (para publicar el arreglo), EXTRACTOR_PUSH_URL (destino
-# alterno, para pruebas).
+#   cerrar-federal.sh compuertas — sin secretos. Restaura el repo de datos (el
+#     agente no puede tocarlo); si el agente cambió el extractor: pruebas,
+#     reevaluación de los documentos con fallas, la muestra de regresión y el
+#     impacto del arreglo en TODO lo publicado (leyes-federales y
+#     fiscal-mexicano, scripts/impacto_corpus.py).
+#   cerrar-federal.sh publicar — con EXTRACTOR_TOKEN. Pasa al registro el
+#     veredicto de impacto y publica el arreglo solo si cada unidad publicada
+#     que cambia es una mejora. Deja `resultados.json` con la auditoría que vale.
+#
+# Entorno: OUT, PDF_DIR, PLAN; opcionales AGENTE_DIR, PDF_CACHE,
+# EXTRACTOR_TOKEN + EXTRACTOR_SLUG (para publicar el arreglo), EXTRACTOR_PUSH_URL
+# (destino alterno, para pruebas).
 set -uo pipefail
+
+FASE="${1:?uso: cerrar-federal.sh compuertas|publicar}"
 
 EXTRACTOR="$(cd "$(dirname "$0")/../.." && pwd)"
 TRABAJO="${AGENTE_DIR:-/tmp/agente}"
 cd "$EXTRACTOR"
 export PYTHONPATH="$EXTRACTOR"
 
+IMPACTO="$TRABAJO/impacto-arreglo"
 [ -d "$TRABAJO/datos-antes" ] || exit 0       # el agente no intervino
 
 restaurar() {
@@ -23,6 +34,7 @@ restaurar() {
 descartar() {
   echo "::warning::Arreglo del agente descartado: $1"
   echo "$1" > "$TRABAJO/descarte.txt"
+  rm -f "$TRABAJO/arreglo-ok.txt"
   [ -s "$TRABAJO/arreglo-descartado.patch" ] || git diff > "$TRABAJO/arreglo-descartado.patch" || true
   git checkout -q -- . && git clean -fdq
   restaurar
@@ -39,35 +51,36 @@ print(str(v).lower() if isinstance(v, bool) else v)
 PY
 }
 
-restaurar
-
-# La vigilancia corre en este mismo repo: el agente solo puede publicar cambios
-# al extractor y a sus pruebas, nunca a workflows, scripts ni Workers. Archivos
-# nuevos sueltos (copias de PDF, notas de trabajo) no se publican.
-git ls-files --others --exclude-standard | grep -vE '^(extractor|tests)/' | while IFS= read -r f; do rm -f -- "$f"; done
-fuera=$( { git diff --name-only HEAD; git ls-files --deleted; } | sort -u | grep -vE '^(extractor|tests)/' || true)
-if [ -n "$fuera" ]; then
-  descartar "toca archivos fuera de extractor/ y tests/: $(echo "$fuera" | head -3 | tr '\n' ' ')"
-fi
-
-if [ -z "$(git status --porcelain)" ]; then
-  echo "El agente no cambió el extractor."
-else
+compuertas() {
+  rm -f "$TRABAJO/arreglo-estado.txt" "$TRABAJO/arreglo-ok.txt"
+  restaurar
+  # La vigilancia corre en este mismo repo: el agente solo puede publicar
+  # cambios al extractor y a sus pruebas, nunca a workflows, scripts ni
+  # Workers. Archivos nuevos sueltos (copias de PDF, notas) no se publican.
+  git ls-files --others --exclude-standard | grep -vE '^(extractor|tests)/' | while IFS= read -r f; do rm -f -- "$f"; done
+  fuera=$( { git diff --name-only HEAD; git ls-files --deleted; } | sort -u | grep -vE '^(extractor|tests)/' || true)
+  if [ -n "$fuera" ]; then
+    descartar "toca archivos fuera de extractor/ y tests/: $(echo "$fuera" | head -3 | tr '\n' ' ')"
+  fi
+  if [ -z "$(git status --porcelain)" ]; then
+    echo "El agente no cambió el extractor."
+    return 0
+  fi
   pip install -q pytest > /dev/null 2>&1 || true
   if ! python -m pytest -q > "$TRABAJO/pytest.log" 2>&1; then
     descartar "las pruebas no pasan"
-  else
-    python -m extractor federal reevaluar --plan "$PLAN" --out "$OUT" --pdf-dir "$PDF_DIR" \
-      --trabajo "$TRABAJO" --json "$TRABAJO/nuevo.json"
-    bash "$EXTRACTOR/scripts/agente/muestra-federal.sh" "$TRABAJO/muestra-nuevo.json"
-    veredicto=$(python - "$TRABAJO" <<'PY'
+    return 0
+  fi
+  python -m extractor federal reevaluar --plan "$PLAN" --out "$OUT" --pdf-dir "$PDF_DIR" \
+    --trabajo "$TRABAJO" --json "$TRABAJO/nuevo.json"
+  bash "$EXTRACTOR/scripts/agente/muestra-federal.sh" "$TRABAJO/muestra-nuevo.json"
+  veredicto=$(python - "$TRABAJO" <<'PY'
 import json, sys
 t = sys.argv[1]
 cargar = lambda n: json.load(open(f"{t}/{n}"))
 nuevo = cargar("nuevo.json")
-# Una regresión solo cabe en lo que antes salía bien: la muestra de leyes
-# publicadas. Los documentos con fallas quedan fuera (o conservan su versión
-# publicada) si no salen limpios, así que un problema distinto en ellos no daña.
+# La muestra es la primera alarma, barata; el impacto en todo lo publicado
+# viene después.
 try:
     rotas = set(cargar("muestra-nuevo.json")["con_problemas"]) - set(cargar("muestra-base.json")["con_problemas"])
 except FileNotFoundError:
@@ -82,46 +95,73 @@ else:
     print("OK " + " ".join(fieles))
 PY
 )
-    case "$veredicto" in
-      ROMPE*) descartar "rompe la cobertura de: ${veredicto#ROMPE }" ;;
-      NADA*)  descartar "${veredicto#NADA }" ;;
-      OK*)
-        reparados="${veredicto#OK }"
-        if [ -z "${EXTRACTOR_PUSH_URL:-}" ] && { [ -z "${EXTRACTOR_TOKEN:-}" ] || [ -z "${EXTRACTOR_SLUG:-}" ]; }; then
-          descartar "sin credenciales para publicar el arreglo en el extractor"
-        else
-          titulo="$(campo titulo_commit)"
-          git add -A
-          # El parche se guarda antes de publicar: si falla, no se pierde.
-          git diff --cached > "$TRABAJO/arreglo.patch"
-          partida="$(git rev-parse HEAD)"
-          # La identidad vale también para el rebase, no solo para el commit.
-          export GIT_AUTHOR_NAME="${GITHUB_ACTOR:-opencodice-ci}" GIT_COMMITTER_NAME="${GITHUB_ACTOR:-opencodice-ci}"
-          export GIT_AUTHOR_EMAIL="${GITHUB_ACTOR_ID:-0}+${GITHUB_ACTOR:-opencodice-ci}@users.noreply.github.com"
-          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
-          git commit -q -m "Reparación automática (leyes federales): ${titulo:-ajuste del extractor a un formato de PDF}"
-          destino="${EXTRACTOR_PUSH_URL:-https://x-access-token:${EXTRACTOR_TOKEN:-}@github.com/${EXTRACTOR_SLUG:-}.git}"
-          if git pull -q --rebase "$destino" main && git push -q "$destino" HEAD:main; then
-            python - "$TRABAJO" "$titulo" "$(git rev-parse HEAD)" $reparados <<'PY'
+  case "$veredicto" in
+    ROMPE*) descartar "rompe la cobertura de: ${veredicto#ROMPE }"; return 0 ;;
+    NADA*)  descartar "${veredicto#NADA }"; return 0 ;;
+  esac
+  echo "${veredicto#OK }" > "$TRABAJO/arreglo-ok.txt"
+  # El arreglo cambia el extractor de todo lo publicado: se reconstruye cada
+  # documento desde su PDF y cada unidad que cambie tiene que confirmarse como
+  # mejora antes de que el arreglo entre.
+  rm -rf "$IMPACTO"
+  python scripts/impacto_corpus.py --trabajo "$IMPACTO" --federal "$(git -C "$OUT" rev-parse --show-toplevel)" \
+    --pdf-dir "$PDF_DIR" --cache "${PDF_CACHE:-/tmp/pdfs-corpus}" > "$TRABAJO/impacto-arreglo.log" 2>&1
+  rc=$?
+  cat "$TRABAJO/impacto-arreglo.log"
+  case "$rc" in
+    0) echo listo > "$TRABAJO/arreglo-estado.txt" ;;
+    1) echo impacto > "$TRABAJO/arreglo-estado.txt" ;;
+    *) descartar "en el resto del corpus: $(grep '^✗' "$TRABAJO/impacto-arreglo.log" | head -3 | tr '\n' ' ')" ;;
+  esac
+}
+
+publicar() {
+  estado="$(cat "$TRABAJO/arreglo-estado.txt" 2>/dev/null || echo ninguno)"
+  if [ "$estado" = impacto ]; then
+    if python scripts/impacto.py cerrar --trabajo "$IMPACTO" \
+        --extractor "OpenCodice/fiscal-extractor@$(git rev-parse HEAD)" \
+        --reporte "$TRABAJO/impacto-arreglo.md"; then
+      estado=listo
+    else
+      descartar "no todo lo que cambia en el corpus quedó confirmado como mejora: $(tail -n +2 "$TRABAJO/impacto-arreglo.md" | head -c 400)"
+    fi
+  fi
+  [ "$estado" = listo ] && [ -s "$TRABAJO/arreglo-ok.txt" ] || return 0
+  reparados="$(cat "$TRABAJO/arreglo-ok.txt")"
+  if [ -z "${EXTRACTOR_PUSH_URL:-}" ] && { [ -z "${EXTRACTOR_TOKEN:-}" ] || [ -z "${EXTRACTOR_SLUG:-}" ]; }; then
+    descartar "sin credenciales para publicar el arreglo en el extractor"
+    return 0
+  fi
+  titulo="$(campo titulo_commit)"
+  git add -A
+  # El parche se guarda antes de publicar: si falla, no se pierde.
+  git diff --cached > "$TRABAJO/arreglo.patch"
+  partida="$(git rev-parse HEAD)"
+  # La identidad vale también para el rebase, no solo para el commit.
+  export GIT_AUTHOR_NAME="${GITHUB_ACTOR:-opencodice-ci}" GIT_COMMITTER_NAME="${GITHUB_ACTOR:-opencodice-ci}"
+  export GIT_AUTHOR_EMAIL="${GITHUB_ACTOR_ID:-0}+${GITHUB_ACTOR:-opencodice-ci}@users.noreply.github.com"
+  export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+  git commit -q -m "Reparación automática (leyes federales): ${titulo:-ajuste del extractor a un formato de PDF}"
+  destino="${EXTRACTOR_PUSH_URL:-https://x-access-token:${EXTRACTOR_TOKEN:-}@github.com/${EXTRACTOR_SLUG:-}.git}"
+  if git pull -q --rebase "$destino" main && git push -q "$destino" HEAD:main; then
+    # shellcheck disable=SC2086
+    python - "$TRABAJO" "$titulo" "$(git rev-parse HEAD)" $reparados <<'PY'
 import json, sys
 t, titulo, sha, *reparados = sys.argv[1:]
 json.dump({"reparados": reparados, "titulo": titulo, "sha": sha},
           open(f"{t}/reparacion.json", "w"), ensure_ascii=False)
 PY
-            echo "Arreglo publicado; quedaron fieles: $reparados"
-          else
-            git rebase --abort 2>/dev/null || true
-            git reset -q --hard "$partida"
-            cp "$TRABAJO/arreglo.patch" "$TRABAJO/arreglo-descartado.patch"
-            descartar "no se pudo publicar el arreglo en el extractor"
-          fi
-        fi
-        ;;
-    esac
+    echo "Arreglo publicado; quedaron fieles: $reparados"
+  else
+    git rebase --abort 2>/dev/null || true
+    git reset -q --hard "$partida"
+    cp "$TRABAJO/arreglo.patch" "$TRABAJO/arreglo-descartado.patch"
+    descartar "no se pudo publicar el arreglo en el extractor"
   fi
-fi
+}
 
-python - "$TRABAJO" <<'PY'
+notas() {
+  python - "$TRABAJO" <<'PY'
 import json, pathlib, sys
 t = pathlib.Path(sys.argv[1])
 try:
@@ -138,8 +178,18 @@ else:
     l.append("")
     for d in v.get("documentos", [])[:60]:
         l.append(f"- `{d.get('clave')}` — {d.get('nota', '')}")
+if (t / "impacto-arreglo.md").exists():
+    l += ["", "Impacto del arreglo en el resto del corpus: "
+          + (t / "impacto-arreglo.md").read_text(encoding="utf-8").strip()]
 if (t / "descarte.txt").exists():
     l += ["", f"⚠️ Se descartó el arreglo del agente: {(t / 'descarte.txt').read_text().strip()}."]
 (t / "notas-agente.md").write_text("\n".join(l) + "\n", encoding="utf-8")
 PY
+}
+
+case "$FASE" in
+  compuertas) compuertas ;;
+  publicar) publicar; notas ;;
+  *) echo "fase desconocida: $FASE" >&2; exit 64 ;;
+esac
 exit 0

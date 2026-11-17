@@ -15,9 +15,19 @@ produjo la versión publicada: primero la reforma (lo que ese extractor ve
 cambiar en el PDF) y luego la corrección (lo que cambia el extractor nuevo).
 El PDF anterior no se guarda, así que el orden inverso no es reconstruible.
 
+Una corrección que no toca el texto de ningún artículo es `metadatos`. Con
+`--verificadas`, una corrección solo se publica si cada artículo que cambia
+está confirmado como mejora en el registro de `scripts/impacto.py`. Si no: un
+documento que solo tenía la corrección se queda como está publicado; uno que
+además tenía reforma publica solo la reforma, construida con el extractor de
+su versión publicada. En los dos casos su registro (`fuentes.json`,
+`metadata/documentos.json`) conserva el extractor anterior, para que la
+siguiente vigilancia lo vuelva a intentar, y `fuentes.json` lo anota en
+`revision_pendiente`.
+
 Uso:
   commits_por_documento.py <repo> --extractor-dir D --titulo-indice "…" \\
-      (--pdf-dir P | --contexto contexto.json)
+      (--pdf-dir P | --contexto contexto.json) [--verificadas verificaciones/impacto]
 
 `--pdf-dir` (fiscal-mexicano): los PDF que dejó `actualizar` y su
 `descargas.json`; la causa se deduce de `metadata/documentos.json`, que guarda
@@ -34,9 +44,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import impacto  # noqa: E402
 import trailers as tr  # noqa: E402
 
 
@@ -147,9 +159,74 @@ def construir_con(extractor_dir: str, sha: str, repo: str, doc: str, pdf: str,
     return datos
 
 
+def sin_confirmar(repo: str, doc: str, ctx: dict, registro: dict | None) -> list[str]:
+    """Artículos de la corrección que hay ahora en el árbol que el registro no
+    confirma como mejora (vacío si no se exige)."""
+    if registro is None:
+        return []
+    corregidos = tr.cambios_de_articulos(doc, cambios(repo, doc, f"metadata/{doc}"),
+                                         tr.lector_git(repo, "HEAD"), tr.lector_fs(repo))
+    return impacto.faltantes(registro, doc, ctx.get("sha256") or "-", corregidos)
+
+
+def _restaurar_doc(repo: str, doc: str) -> None:
+    for rel in (doc, f"metadata/{doc}"):
+        _git(repo, "checkout", "-q", "HEAD", "--", rel, check=False)
+        _git(repo, "clean", "-fdq", "--", rel)
+
+
+def _entrada_indice(repo: str, doc: str) -> dict | None:
+    """La entrada de metadata/documentos.json que `build` deriva del índice
+    del documento en disco (escribir_indice_maestro)."""
+    d = tr._json(tr.lector_fs(repo), f"metadata/{doc}/articulos.json")
+    if not isinstance(d, dict):
+        return None
+    return {"clave": d.get("documento", doc), "etiqueta": d.get("etiqueta"), "sigla": d.get("sigla"),
+            "tipo": d.get("tipo"), "num_articulos": d.get("num_articulos"), "version": d.get("version")}
+
+
+def retener_en_indices(repo: str, doc: str, motivo: str, *, extractor_sha: str | None) -> None:
+    """Deja el registro del documento como corresponde a lo que sí se publica:
+    sus cifras según el índice que quedó en disco y el extractor de su versión
+    publicada."""
+    previo = _git(repo, "show", "HEAD:fuentes.json", check=False)
+    ruta = Path(repo) / "fuentes.json"
+    if ruta.exists() and previo:
+        anterior = {e["clave"]: e for e in json.loads(previo)["documentos"]}.get(doc)
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+        for e in datos["documentos"]:
+            if e["clave"] == doc and anterior:
+                for campo in ("extractor", "extractor_sha"):
+                    if campo in anterior:
+                        e[campo] = anterior[campo]
+                if extractor_sha is None:
+                    for campo in ("version", "unidades", "pdf"):
+                        if campo in anterior:
+                            e[campo] = anterior[campo]
+                e["revision_pendiente"] = {"fecha": date.today().isoformat(),
+                                           "motivo": motivo}
+        ruta.write_text(json.dumps(datos, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    ruta = Path(repo) / "metadata" / "documentos.json"
+    entrada = _entrada_indice(repo, doc)
+    if ruta.exists() and entrada:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+        for e in datos["documentos"]:
+            if e["clave"] == doc:
+                e.update(entrada)
+        ruta.write_text(json.dumps(datos, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _motivo(faltan: list[str]) -> str:
+    return ("La corrección de extracción no quedó confirmada contra el PDF "
+            f"(arts. {', '.join(faltan[:8])}{' y más' if len(faltan) > 8 else ''}); "
+            "se conserva el texto publicado.")
+
+
 def commits_documento(repo: str, doc: str, ctx: dict, *, extractor_repo: str,
-                      extractor_dir: str | None, build: dict, trabajo: Path) -> list[str]:
-    """Hace el commit (o los dos) de un documento; devuelve sus tipos."""
+                      extractor_dir: str | None, build: dict, trabajo: Path,
+                      registro: dict | None = None) -> list[str]:
+    """Hace el commit (o los dos) de un documento; devuelve sus tipos (vacío
+    si no se publica)."""
     antes, despues = tr.lector_git(repo, "HEAD"), tr.lector_fs(repo)
     actual = tr.extractor_id(extractor_repo, ctx["extractor_sha"]) if ctx.get("extractor_sha") else None
     rutas = cambios(repo, doc, f"metadata/{doc}")
@@ -195,10 +272,26 @@ def commits_documento(repo: str, doc: str, ctx: dict, *, extractor_repo: str,
                 r2 = cambios(repo, doc, f"metadata/{doc}")
                 if not r2:
                     return ["reforma"]
-                commit(repo, r2, mensaje_doc(repo, doc, "correccion", r2, ctx, actual))
-                return ["reforma", "correccion"]
+                faltan = sin_confirmar(repo, doc, ctx, registro)
+                if faltan:
+                    _restaurar_doc(repo, doc)
+                    ctx["extractor_sha"] = anterior
+                    retener_en_indices(repo, doc, _motivo(faltan), extractor_sha=anterior)
+                    print(f"  · {doc}: solo la reforma; {_motivo(faltan)}")
+                    return ["reforma"]
+                tipo2 = tr.tipo_sin_reforma(doc, r2, tr.lector_git(repo, "HEAD"), tr.lector_fs(repo))
+                commit(repo, r2, mensaje_doc(repo, doc, tipo2, r2, ctx, actual))
+                return ["reforma", tipo2]
 
     tipo = "correccion" if decision == "correccion" else "reforma"
+    if tipo == "correccion":
+        faltan = sin_confirmar(repo, doc, ctx, registro)
+        if faltan:
+            _restaurar_doc(repo, doc)
+            retener_en_indices(repo, doc, _motivo(faltan), extractor_sha=None)
+            print(f"  · {doc}: no se publica; {_motivo(faltan)}")
+            return []
+        tipo = tr.tipo_sin_reforma(doc, rutas, antes, despues)
     sep = "no-disponible" if decision == "sin-separacion" else None
     commit(repo, rutas, mensaje_doc(repo, doc, tipo, rutas, ctx, actual, sep))
     return [tipo]
@@ -281,7 +374,10 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--pdf-dir")
     g.add_argument("--contexto")
     ap.add_argument("--salida", default=None, help="JSON con los commits hechos")
+    ap.add_argument("--verificadas", default=None,
+                    help="registro de correcciones confirmadas (scripts/impacto.py)")
     a = ap.parse_args(argv)
+    registro = impacto.cargar(a.verificadas) if a.verificadas else None
 
     repo = a.repo
     if a.conservar_indice:
@@ -303,9 +399,12 @@ def main(argv: list[str] | None = None) -> int:
             d = ctx.get(doc) or {"extractor_sha": actual_sha}
             hechos[doc] = commits_documento(
                 repo, doc, d, extractor_repo=a.extractor_repo,
-                extractor_dir=a.extractor_dir, build=build, trabajo=Path(tmp))
-            print(f"{doc}: {' + '.join(hechos[doc])} — "
-                  f"{_git(repo, 'log', '-1', '--format=%s').strip()}")
+                extractor_dir=a.extractor_dir, build=build, trabajo=Path(tmp), registro=registro)
+            if hechos[doc]:
+                print(f"{doc}: {' + '.join(hechos[doc])} — "
+                      f"{_git(repo, 'log', '-1', '--format=%s').strip()}")
+            else:
+                del hechos[doc]
     for r in (repo, a.extractor_dir):
         _git(r, "worktree", "prune", check=False)
     if a.pdf_dir:

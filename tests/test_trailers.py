@@ -234,3 +234,60 @@ def test_validar_fuente_de_constitucion():
     titulo, t = tr.calcular(doc, "reforma", rutas, a, d,
                             fuente_sha256=tr.sha256_bytes(b"viejo"), **kw)
     assert any("fuente/" in e for e in tr.validar(titulo, t, rutas, a, d, "estatal"))
+
+
+# ------------------------------------------------------------------ metadatos
+
+def _solo_metadata():
+    antes = _lgs_antes()
+    despues = {**antes, "metadata/lgs/pasajes.jsonl": '{"id": 1}\n',
+               "metadata/lgs/articulos.json": antes["metadata/lgs/articulos.json"].replace(
+                   '"LGS"', '"LGS", "extra": 1')}
+    rutas = sorted(r for r in despues if antes.get(r) != despues[r])
+    return rutas, tr.lector_dict(antes), tr.lector_dict(despues)
+
+
+def test_metadatos_titulo_y_trailers():
+    rutas, a, d = _solo_metadata()
+    assert tr.tipo_sin_reforma("lgs", rutas, a, d) == "metadatos"
+    titulo, t = tr.calcular("lgs", "metadatos", rutas, a, d, fuente="https://x/LGS.pdf",
+                            fuente_sha256=SHA, extractor=EXT)
+    assert titulo == "Metadatos de LGS: articulos.json, pasajes.jsonl"
+    assert [k for k, _ in t] == ["Documento", "Tipo", "Medio", "Fuente", "Fuente-Sha256",
+                                 "Extractor"]
+    assert tr.validar(titulo, t, rutas, a, d, "corpus") == []
+
+
+def test_metadatos_de_constitucion_estatal():
+    doc = "zacatecas/constitucion"
+    antes = {**_meta(f"{doc}/metadata/", "2026-09-01", [], fuente="Congreso — Zacatecas"),
+             f"{doc}/articulos/001.md": "# Artículo 1\n\nUno.\n"}
+    despues = {**antes, **_meta(f"{doc}/metadata/", "2026-09-01", [],
+                                fuente="Periódico Oficial — Zacatecas"),
+               f"{doc}/fuente/ruido.json": "{}"}
+    rutas = sorted(r for r in despues if antes.get(r) != despues[r])
+    titulo, _ = tr.calcular(doc, "metadatos", rutas, tr.lector_dict(antes), tr.lector_dict(despues))
+    assert titulo == "Metadatos de zacatecas: articulos.json, fuente/ruido.json"
+    assert tr.texto_archivos(list("abcde")) == "5 archivos"
+
+
+def test_metadatos_no_puede_cambiar_articulos():
+    antes = _lgs_antes()
+    despues = {**antes, "lgs/004.md": "# Artículo 4o.\n\nOtra lectura.\n"}
+    rutas = ["lgs/004.md"]
+    a, d = tr.lector_dict(antes), tr.lector_dict(despues)
+    assert tr.tipo_sin_reforma("lgs", rutas, a, d) == "correccion"
+    t = [("Documento", "lgs"), ("Tipo", "metadatos"), ("Medio", "DOF"), ("Fuente", "https://x"),
+         ("Fuente-Sha256", SHA), ("Extractor", EXT)]
+    errores = tr.validar("Metadatos de LGS: sin archivos", t, rutas, a, d, "corpus")
+    assert any("cambia el texto" in e for e in errores)
+
+
+def test_correccion_sin_articulos_solo_vale_en_el_historial():
+    rutas, a, d = _solo_metadata()
+    t = [("Documento", "lgs"), ("Tipo", "correccion"), ("Medio", "DOF"),
+         ("Fuente", "https://x/LGS.pdf"), ("Fuente-Sha256", SHA), ("Extractor", EXT)]
+    titulo = "Corrección de extracción LGS: solo metadata"
+    assert any("es Tipo metadatos" in e for e in tr.validar(titulo, t, rutas, a, d, "corpus"))
+    historico = [x for x in t if x[0] not in ("Fuente", "Fuente-Sha256", "Extractor")]
+    assert tr.validar(titulo, historico, rutas, a, d, "corpus", estricto=False) == []

@@ -1,0 +1,96 @@
+name: Impacto de cambios al extractor
+
+# Cada cambio que llega a main en extractor/ (un commit a mano, o un arreglo del
+# agente ya verificado) se mide contra todo lo publicado: se reconstruye cada
+# documento de fiscal-mexicano y leyes-federales desde el PDF exacto de su
+# versión publicada y cada unidad que cambiaría se confirma contra el PDF
+# (scripts/impacto_corpus.py y scripts/agente/impacto.sh). El veredicto queda en verificaciones/impacto/.
+# Las vigilancias solo publican correcciones confirmadas como mejora; lo que
+# aquí se rechaza se queda sin publicar y el job falla para que se vea.
+
+on:
+  push:
+    branches: [main]
+    paths: ['extractor/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: impacto-fiscal-extractor
+  cancel-in-progress: false
+
+env:
+  TIENE_CLAUDE: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+
+jobs:
+  impacto:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install -q -r requirements.txt
+
+      - name: Caché de los PDF publicados
+        uses: actions/cache@v4
+        with:
+          path: /tmp/pdfs-corpus
+          key: pdfs-corpus-${{ github.run_id }}
+          restore-keys: pdfs-corpus-
+
+      - name: Reconstruir todo lo publicado con este extractor
+        id: corpus
+        run: |
+          set +e
+          python scripts/impacto_corpus.py --trabajo /tmp/impacto --cache /tmp/pdfs-corpus
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Agente — confirmar las correcciones contra el PDF
+        if: steps.corpus.outputs.rc == '1' && env.TIENE_CLAUDE == 'true'
+        timeout-minutes: 180
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          IMPACTO: /tmp/impacto
+        run: bash scripts/agente/impacto.sh
+
+      - name: Registrar el veredicto
+        id: registro
+        if: steps.corpus.outputs.rc == '1'
+        env:
+          EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
+          EXTRACTOR_SLUG: ${{ github.repository }}
+        run: |
+          set +e
+          python scripts/impacto.py cerrar --trabajo /tmp/impacto \
+            --extractor "OpenCodice/fiscal-extractor@$GITHUB_SHA" --reporte /tmp/impacto.md
+          rc=$?
+          echo "ok=$([ "$rc" -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          bash scripts/agente/publicar_registro.sh "Impacto de ${GITHUB_SHA::7} en el corpus fiscal y las leyes federales"
+
+      - name: Resultado
+        if: always()
+        run: |
+          {
+            echo "## Impacto en el corpus fiscal y las leyes federales"
+            python3 - <<'PY' || true
+          import json
+          r = json.load(open("/tmp/impacto/resumen.json"))
+          sin_pdf = f" ({len(r['sin_pdf'])} sin su PDF publicado)" if r.get("sin_pdf") else ""
+          print(f"{r['documentos']} documentos{sin_pdf}; cambian {r['cambios']} unidades en "
+                f"{len(r['tocados'])}: {', '.join(r['tocados'])}")
+          for x in r["errores"] + r["regresiones"]:
+              print(f"- {x}")
+          PY
+            [ -f /tmp/impacto.md ] && cat /tmp/impacto.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          rc="${{ steps.corpus.outputs.rc }}"
+          if [ "$rc" = 2 ] || { [ "$rc" = 1 ] && [ "${{ steps.registro.outputs.ok }}" != true ]; }; then
+            echo "::error::Hay correcciones que no quedaron confirmadas como mejora: las vigilancias no las publican."
+            exit 1
+          fi

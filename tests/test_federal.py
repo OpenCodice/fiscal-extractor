@@ -215,3 +215,18 @@ def test_planear_incluye_lo_publicado_que_se_declara_fuera(tmp_path, monkeypatch
     monkeypatch.setitem(federal.FUERA_DEL_CORPUS, "lgs", "tabla")
     plan = federal.planear(tmp_path, _docs()[1:], consultar=lambda _u: CAB)
     assert [(d["clave"], d["motivo"]) for d in plan["documentos"]][:1] == [("lgs", "fuera")]
+
+
+def test_cerrar_excluye_un_alta_con_hallazgos_y_aplaza_la_no_revisada(repo):
+    for clave in ("lft", "cpf"):
+        (repo / clave).mkdir()
+        (repo / clave / "001.md").write_text("# Artículo 1o.\n\nUno.\n")
+    plan = _plan(repo, [_d("lft", "nuevo"), _d("cpf", "nuevo")])
+    motivo = "La revisión completa contra el PDF encontró defectos de extracción: 001: pie colado"
+    res = federal.cerrar(plan, str(repo), {"lft": {**R_OK, "revision": motivo},
+                                           "cpf": {**R_OK, "aplazada": True}})
+    assert res["altas"] == [] and res["aplazadas"] == ["cpf"]
+    fuentes = {d["clave"]: d for d in json.loads((repo / "fuentes.json").read_text())["documentos"]}
+    assert fuentes["lft"]["estado"] == "excluida" and fuentes["lft"]["motivo"] == motivo
+    assert "cpf" not in fuentes                       # la siguiente corrida la planea otra vez
+    assert not (repo / "lft").exists() and not (repo / "cpf").exists()

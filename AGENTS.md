@@ -36,15 +36,40 @@ editan a mano: si una unidad está mal, se corrige aquí.
 - `scripts/commits_por_documento.py` — un commit por documento con sus
   trailers (y uno `Tipo: indice` para lo compartido). `scripts/trailers.py` los
   calcula y `scripts/validar_commits.py` los comprueba desde `revisar-pr` de
-  cada repo de datos. Los dos existen idénticos en `constitucion-extractor` (y
-  `tests/test_trailers.py`): un cambio se hace en los dos.
+  cada repo de datos. Con `--verificadas`, una corrección sin confirmar no se
+  publica (si había reforma, sale solo la reforma, construida con el extractor
+  anterior). `trailers.py`, `validar_commits.py`, `impacto.py`, `revision.py`,
+  `agente/impacto.sh`, `agente/brief-impacto.md`, `agente/brief_revision.py` y
+  `agente/publicar_registro.sh` existen idénticos en `constitucion-extractor`
+  (y `tests/test_trailers.py`, `tests/test_impacto.py`): un cambio se hace en
+  los dos.
 - `scripts/readme_fiscal.py` y `readme_federal.py` — regeneran las tablas del
   README de cada repo de datos; las corre su vigilancia.
 - `scripts/agente/` — el agente de CI: `brief.md` (su encargo), `correr.sh`
-  (lo lanza) y `cerrar.sh` (compuertas deterministas, publica su arreglo). Para
-  el corpus federal, `brief-federal.md`, `correr-federal.sh`,
-  `cerrar-federal.sh` y `muestra-federal.sh`: ahí el agente solo entra cuando
-  la auditoría determinista falla.
+  (lo lanza) y `cerrar.sh` (compuertas deterministas en dos fases:
+  `compuertas` sin secretos y `publicar`, que sube su arreglo). Para el corpus
+  federal, `brief-federal.md`, `correr-federal.sh`, `cerrar-federal.sh` (las
+  mismas dos fases) y `muestra-federal.sh`: ahí el agente repara solo cuando la
+  auditoría determinista falla. `brief-revision.md` / `revision-federal.sh` +
+  `brief-revision-federal.md`: la revisión completa de un alta.
+  `impacto.sh` + `brief-impacto.md`: el agente que solo juzga si cada
+  corrección es mejora. `publicar_registro.sh` sube a main los registros de
+  `verificaciones/`.
+- `scripts/impacto.py` — registro de correcciones confirmadas
+  (`verificaciones/impacto/*.jsonl`: documento, unidad, sha256 del PDF y del
+  texto antes y después, veredicto), su exigencia sobre los commits de una
+  vigilancia (`pendientes-commits`, `cerrar`, `exigir`) y el agrupado de
+  cambios iguales para que el agente revise pocos.
+- `scripts/impacto_corpus.py` — reconstruye cada documento publicado de
+  fiscal-mexicano y leyes-federales desde el PDF exacto de su versión
+  publicada (por sha256; caché en `--cache`) y lista cada unidad que cambiaría
+  (y regresiones de cobertura).
+- `scripts/revision.py` — revisión completa de un alta: bloques de unidades
+  con el texto crudo de sus páginas, y el resultado en
+  `verificaciones/altas/*.jsonl`.
+- `.github/workflows/impacto.yml` — en cada push a main que toca `extractor/`
+  (un commit a mano incluido) mide su impacto en todo lo publicado y confirma
+  las correcciones con el agente.
 
 ## Comandos
 
@@ -102,7 +127,11 @@ Extractor: OpenCodice/fiscal-extractor@b897ca4
   luego la `correccion`. El PDF anterior no se guarda, así que el orden inverso
   no es reconstruible. Si no se sabe con qué extractor se publicó, todo es
   reforma con `Separacion: no-disponible`. `alta` / `retiro` cuando el
-  documento aparece o desaparece.
+  documento aparece o desaparece. Una corrección que no cambia el texto de
+  ninguna unidad (solo metadata) es `metadatos`, con título `Metadatos de
+  <SIGLA>: <archivos>`; los `correccion` sin artículos ya publicados no se
+  reescriben y el validador los sigue aceptando (en commits nuevos los
+  rechaza).
 - De dónde sale la causa: en fiscal, `metadata/documentos.json` guarda por
   documento `pdf_sha256` y `extractor_sha` de su versión publicada (`build` no
   los escribe; `commits_por_documento.py --conservar-indice` los trae de HEAD) y
@@ -132,8 +161,20 @@ Fuente ni Extractor.
   vigilancia reconstruye y audita todo ese corpus.
 - Prefiere un patrón general a un caso especial por unidad, y agrega una prueba
   de regresión en `tests/`.
-- Un cambio aquí modifica texto ya publicado en la siguiente vigilancia. Es lo
-  esperado; ese commit sale como corrección de extracción (`Tipo: correccion`).
+- Un cambio aquí modifica texto ya publicado, y eso solo se publica como
+  corrección (`Tipo: correccion`) si cada unidad que cambia está confirmada
+  como mejora contra el PDF en `verificaciones/impacto/`. Al llegar a main,
+  `impacto.yml` reconstruye todo lo publicado (unos 330 documentos), lista lo
+  que cambia y el agente lo juzga; lo rechazado o sin juzgar no se publica (la
+  vigilancia rehace sus commits sin esa corrección y el documento conserva su
+  versión y su extractor anteriores, con `revision_pendiente`). Antes de hacer
+  push, mide el impacto con `python scripts/impacto_corpus.py --trabajo
+  /tmp/impacto --fiscal ../fiscal-mexicano --federal ../leyes-federales
+  --pdf-dir <PDFs> --cache /tmp/pdfs-corpus` (los PDF de la Cámara solo se
+  descargan desde México o EE. UU.; si no, lanza `impacto.yml`).
+- Un arreglo del agente en la vigilancia pasa por lo mismo antes de entrar: si
+  algo de lo que cambia en el corpus empeora o no se puede confirmar, se
+  descarta entero.
 - No relajes `verificar.py` ni pruebas existentes para que algo pase.
 
 ## Encabezados en el articulado
@@ -162,4 +203,10 @@ texto del PDF que sustituye sea fórmula para el mismo detector.
 
 Una entrada en `extractor/registro.py`. Las leyes y reglamentos de la Cámara de
 Diputados usan `_ley(...)` y el parser `articulado` sin más código. Después:
-`build`, `validar` y `auditar` hasta dejarlo en cero problemas.
+`build`, `validar` y `auditar` hasta dejarlo en cero problemas. La vigilancia
+no lo publica solo con eso: el agente lo revisa entero contra el PDF, por
+bloques (`scripts/revision.py`), y un alta con hallazgos (o que no se pudo
+revisar) se queda fuera de esa corrida. Las leyes federales nuevas pasan por lo
+mismo (`revision-federal.sh`, hasta 3 por corrida; las demás se aplazan): con
+hallazgos quedan `excluida` en `fuentes.json` con su motivo y se reintentan
+cuando cambia el PDF o el extractor.

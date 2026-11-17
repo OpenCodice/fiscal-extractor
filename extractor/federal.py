@@ -314,7 +314,10 @@ def evaluar(out: str | Path, clave: str, pdf: str) -> dict:
 
 
 def es_fiel(r: dict) -> bool:
-    return not r.get("error") and not r.get("problemas") and not r.get("invariantes")
+    """Pasa las compuertas deterministas y, si es un alta, la revisión
+    completa contra el PDF (`revision`: el motivo si no la pasó)."""
+    return (not r.get("error") and not r.get("problemas") and not r.get("invariantes")
+            and not r.get("revision"))
 
 
 def extraer(plan_path: str, out: str, pdf_dir: str, *, claves: list[str],
@@ -400,6 +403,8 @@ def _restaurar(out: Path, clave: str) -> None:
 def motivo_exclusion(r: dict) -> str:
     if r.get("error"):
         return r["error"]
+    if r.get("revision"):
+        return r["revision"]
     partes = []
     if r.get("invariantes"):
         partes.append("invariantes rotos: " + "; ".join(r["invariantes"][:3]))
@@ -444,6 +449,7 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
 
     altas, reformas, correcciones, excluidas, retenidas, fallidas = [], [], [], [], [], []
     retiradas: list[str] = []            # publicadas que salen del corpus
+    aplazadas: list[str] = []            # altas cuya revisión completa queda para otra corrida
     for clave, motivo in FUERA_DEL_CORPUS.items():
         e = entradas.get(clave)
         if e and e.get("estado") == "incluida":
@@ -474,6 +480,12 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
             prev["pdf"] = huella_pdf
             continue
         publicada = prev is not None and prev.get("estado") == "incluida"
+        if r.get("aplazada") and not publicada:
+            # Su revisión completa no cupo en esta corrida: queda como si no
+            # se hubiera procesado y la siguiente la planea otra vez.
+            _restaurar(out_p, clave)
+            aplazadas.append(clave)
+            continue
         if es_fiel(r):
             reparada = clave in reparados
             sha_doc = sha_rep if reparada else sha_plan
@@ -545,7 +557,7 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
     return {"asunto": asunto, "contexto": contexto,
             "altas": altas, "reformas": reformas, "retiradas": retiradas,
             "correcciones": correcciones, "excluidas": excluidas,
-            "retenidas": retenidas, "fuentes_fallidas": fallidas,
+            "retenidas": retenidas, "fuentes_fallidas": fallidas, "aplazadas": aplazadas,
             "reparados": sorted(reparados & set(altas + [c for c, *_ in reformas]
                                                  + [c for c, _ in correcciones]))}
 

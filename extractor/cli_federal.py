@@ -81,8 +81,9 @@ def _cmd_extraer(a) -> int:
         if r.get("error_fuente") or r.get("sin_cambio"):
             continue
         _copiar_doc(Path(a.out), staging / "datos", clave)
-        if not federal.es_fiel(r):
-            # El agente necesitará el PDF (y su texto por página, que es lo caro).
+        if not federal.es_fiel(r) or r.get("motivo") in ("nuevo", "reintento"):
+            # El agente necesitará el PDF (y su texto por página, que es lo
+            # caro): para repararlo o, en un alta, para su revisión completa.
             (staging / "pdfs").mkdir(parents=True, exist_ok=True)
             for ext in (".pdf", ".paginas.json"):
                 f = Path(a.pdf_dir) / f"{clave}{ext}"
@@ -158,7 +159,8 @@ def _cmd_cerrar(a) -> int:
             print(f"  {k}: {len(res[k])}")
     _salida_gh(asunto=res["asunto"].replace("\n", " "),
                fuentes_fallidas="true" if res["fuentes_fallidas"] else "false",
-               retenidas="true" if res["retenidas"] else "false")
+               retenidas="true" if res["retenidas"] else "false",
+               aplazadas="true" if res["aplazadas"] else "false")
     return 0
 
 
