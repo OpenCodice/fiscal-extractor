@@ -34,9 +34,6 @@ NOTA_NORMATECA_RE = re.compile(
 # Marcadores de fracción / inciso / apartado: "I.", "a)", "1.", "A. ".
 STRUCT_MARKER_RE = re.compile(r"^(?:[IVXLCDM]+\.|[a-z]\)|\d+\.|[A-Z]\.\s)")
 SENTENCE_END_RE = re.compile(r"[.:;]$")
-# Inciso con punto ('a. Un programa de gobierno…'): empieza en minúscula pero
-# abre su propio renglón.
-INCISO_PUNTO_RE = re.compile(r"^[a-zñ]{1,2}\.\s")
 
 
 def _is_reform_note(line: str) -> bool:
@@ -52,16 +49,15 @@ def _note_is_complete(note: str) -> bool:
 
 
 def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = None,
-                   continuacion_minuscula: bool = False) -> str:
+                   rotulo: re.Pattern = ARTICULO_RE) -> str:
     """Devuelve el cuerpo de la unidad como párrafos, sin la línea de encabezado.
 
     Las notas de reforma quedan en *cursiva* como anotación al pie de su bloque.
     `notas` reconoce además las notas propias de una fuente estatal
     ('(REFORMADO, G.O. 25 DE MAYO DE 2000)'), que no llevan 'DOF' y anotan el
     párrafo que les sigue: cada una es su propio párrafo, hasta el paréntesis
-    que la cierra. Con `continuacion_minuscula`, un renglón que empieza en
-    minúscula sigue el párrafo anterior aunque este cierre en ';' o '.': ninguna
-    oración empieza en minúscula ('…designe el Consejero; y' / 'y').
+    que la cierra. `rotulo` reconoce el encabezado del artículo en el primer
+    renglón (el de las leyes estatales admite más formas).
     """
     lines = [ln.rstrip() for ln in body.splitlines()]
 
@@ -69,7 +65,7 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
     # renglón se conserva.
     if lines:
         first = lines[0]
-        m = ARTICULO_RE.match(first)
+        m = rotulo.match(first)
         lines[0] = first[m.end():] if m else first
 
     blocks: list[str] = []
@@ -128,8 +124,7 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             buf.append(s)
             i += 1
             continue
-        if buf and SENTENCE_END_RE.search(buf[-1]) and not (
-                continuacion_minuscula and s[:1].islower() and not INCISO_PUNTO_RE.match(s)):
+        if buf and SENTENCE_END_RE.search(buf[-1]):
             flush_buf()
         buf.append(s)
         i += 1

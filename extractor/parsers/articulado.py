@@ -47,6 +47,22 @@ HEADER_PREFIXES = (
 #   Reglamento de la Ley Aduanera): la validación de secuencia filtra falsos positivos.
 ORDINALES = "Bis|Ter|Qu[aá]ter|Quintus|Quinquies|Sexies|Septies|Octies|Nonies|Decies"
 ARTICULO_RE = re.compile(
+    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art[íi]culos(?=\s+\d+\s*[oº°]?\.-))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
+
+    r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-]))([A-Z])(?![A-Za-z]))?"  # letra "-A" PEGADA o " A." (118 A.)
+    r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
+    rf"(?:[\s.\-]+(?i:({ORDINALES}))"               # ordinal
+    r"(?:[\s\-]+(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1") y letra ("Bis 35 A.-")
+    r"(?:\s*\.?-?(?:\s|$|\()|\.-(?=\S))"             # separador final (o ".-" pegado al texto)
+)
+
+# Las leyes estatales (ver estatal.py) admiten además lo que sus PDF escriben y
+# los de la Cámara no: el rótulo en plural ('ARTÍCULOS 50.-', 'Artículos 175.'),
+# el punto pegado al texto ('Artículo 127.Se deroga.', 'Artículo 36.A través'),
+# dos puntos ('Artículo 276 Quater: Comete'), el guion separado ('ARTÍCULO 29
+# BIS. - ') y el numeral tras punto ('Artículo 176-Bis. 3.'). Es otra regex
+# para no cambiar la lectura de las leyes federales.
+ARTICULO_ESTATAL_RE = re.compile(
     r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
     r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-]))([A-Z])(?![A-Za-z]))?"  # letra "-A" PEGADA o " A." (118 A.)
@@ -79,7 +95,7 @@ TITULO_RE = re.compile(r"^T[IÍ]TULO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]
                        rf"|^T[íi]tulo\s+{_NUMERAL_TC}{_BIS_TC}\s*$")
 _ORDINAL_MAY = (r"PRIMER[OA]|SEGUND[OA]|TERCER[OA]|CUART[OA]|QUINT[OA]|SEXT[OA]|"
                  r"S[EÉ]PTIM[OA]|OCTAV[OA]|NOVEN[OA]|D[EÉ]CIM[OA]")
-CAPITULO_RE = re.compile(rf"^C[AÁ]P[IÍ]TULO\s+([IVXLCDM]+|[ÚU]NICO|{_ORDINAL_MAY})\b.*$"
+CAPITULO_RE = re.compile(rf"^CAP[IÍ]TULO\s+([IVXLCDM]+|[ÚU]NICO|{_ORDINAL_MAY})\b.*$"
                          rf"|^Cap[íi]tulo\s+(?:{_NUMERAL_TC}|[ÚU]nico){_BIS_TC}\s*$")
 # Libro: nivel sobre el Título en los códigos (Código Penal, Código Civil).
 LIBRO_RE = re.compile(r"^LIBRO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]+)?\s*$"
@@ -99,12 +115,12 @@ APARTADO_RE = re.compile(r"^(?:APARTADO|Apartado)\s+(?:[A-Z]|[IVXLC]+)\s*$")
 # Title-case (normateca SAT) basta con que inicie en mayúscula sin nota DOF ni
 # puntuación de cierre ('De las Facultades previstas en la Ley Federal…' lleva
 # minúsculas a media frase, así que exigir caja palabra por palabra no sirve).
-def _es_nombre_encabezado(s: str, estricto: bool = True) -> bool:
+def _es_nombre_encabezado(s: str, estricto: bool = True, estatal: bool = False) -> bool:
     if not s or len(s) > 120:
         return False
     if TITULO_RE.match(s) or CAPITULO_RE.match(s) or SECCION_RE.match(s):
         return False
-    if ARTICULO_RE.match(s) or PAGE_FOOTER_RE.match(s):
+    if (ARTICULO_ESTATAL_RE if estatal else ARTICULO_RE).match(s) or PAGE_FOOTER_RE.match(s):
         return False
     letras = [c for c in s if c.isalpha()]
     if not letras:
@@ -142,24 +158,25 @@ NOTA_REFORMA_RE = re.compile(
     r"(?:adicionad|reformad|derogad|declarad|suprimid|recuperad)[oa]s?\b")
 
 
-def _es_nombre_suelto(s: str, continuacion: bool = False) -> bool:
+def _es_nombre_suelto(s: str, continuacion: bool = False, estatal: bool = False) -> bool:
     if not s or len(s) > 150 or "DOF" in s or s.startswith("("):
         return False
     if NOTA_REFORMA_RE.match(s):
         return False                      # 'Numeral declarado inválido …' es nota, no nombre
     if MARCA_FORMULA_RE.match(s):
         return False
-    if _es_encabezado(s) or ARTICULO_RE.match(s) or PAGE_FOOTER_RE.match(s):
+    if (_es_encabezado(s) or (ARTICULO_ESTATAL_RE if estatal else ARTICULO_RE).match(s)
+            or PAGE_FOOTER_RE.match(s)):
         return False
     if re.match(r"\[\s*Art[ií]culo\b", s):
         return False                      # '[Artículo 28 Bis. Suprimido]': texto, no nombre
     if re.fullmatch(r"[IVXLCDM]+", s) or re.match(r"^(?:[IVXLCDM]+|[a-zñ])\s*[.)\-–]", s):
         return False                      # numeral solo, fracción 'II.-' o inciso 'a)'
-    if re.match(rf"^[IVXLCDM]+\s+(?:{ORDINALES})\b", s, re.IGNORECASE):
+    if estatal and re.match(rf"^[IVXLCDM]+\s+(?:{ORDINALES})\b", s, re.IGNORECASE):
         return False                      # fracción intercalada 'XIII Bis.', 'VI Quater'
     if "$" in s or "...." in s or "…" in s:
         return False                      # importes y puntos guía: renglón de tarifa
-    if re.search(r";\s*[yoeu]?$", s):
+    if estatal and re.search(r";\s*[yoeu]?$", s):
         return False                      # fin de una fracción enumerada ('…las mujeres; y')
     # La coma final es de un nombre que sigue en la línea siguiente. Una comilla
     # de cierre no oculta el fin de oración: 'moneda nacional.”' es el final de
@@ -400,7 +417,8 @@ def limpiar_paginas(paginas: list[str], doc: Documento, formulas: bool = False) 
     """Texto completo sin encabezados/pies, a partir del texto crudo por página.
     Con `formulas`, cada fórmula ilegible se sustituye por su marca."""
     fuera = doc.titulos_encabezado + _titulo_corrido(paginas)
-    paginas = _sin_numero_de_pagina(paginas)
+    if doc.medio:
+        paginas = _sin_numero_de_pagina(paginas)
     # Las leyes estatales no traen el encabezado de la Cámara, y en ellas un
     # renglón que empieza con 'Secretaría General' es texto ('…el apoyo de la /
     # Secretaría General y sus Coordinaciones'). Algunos de sus PDF escriben
@@ -579,13 +597,17 @@ def fecha_version(pdf_path: str, doc: Documento | None = None) -> date | None:
 # decreto ordinal en palabra. Tras el último artículo de la ley ya no es articulado.
 ARTICULO_DECRETO_RE = re.compile(
     r"^[ \t]*ART[ÍI]CULOS?\s+(?:PRIMERO|SEGUNDO|TERCERO|CUARTO|QUINTO|SEXTO|S[ÉE]PTIMO|"
-    r"OCTAVO|NOVENO|D[ÉE]CIMO|[ÚU]NICO)\b"
-    # 'VER ARTICULO SEGUNDO TRANSITORIO DEL DECRETO…' es una cita partida por el
-    # renglón (notas del editor en la CDMX), no otro artículo del decreto.
-    r"(?!\s+TRANSITORIO)", re.MULTILINE)
+    r"OCTAVO|NOVENO|D[ÉE]CIMO|[ÚU]NICO)\b", re.MULTILINE)
+# En las leyes estatales, 'VER ARTICULO SEGUNDO TRANSITORIO DEL DECRETO…' es una
+# cita partida por el renglón (notas del editor en la CDMX), no otro artículo
+# del decreto.
+ARTICULO_DECRETO_ESTATAL_RE = re.compile(ARTICULO_DECRETO_RE.pattern + r"(?!\s+TRANSITORIO)",
+                                         re.MULTILINE)
+# Capítulo con la errata 'CÁPITULO' (Código Civil de la CDMX).
+CAPITULO_ESTATAL_RE = re.compile(r"^C[AÁ]P" + CAPITULO_RE.pattern[4:])
 
 
-def _solo_articulado(texto: str) -> str:
+def _solo_articulado(texto: str, estatal: bool = False) -> str:
     """Recorta antes de los Transitorios (todo lo posterior no es articulado vigente)."""
     m = TRANSITORIOS_RE.search(texto)
     if m:
@@ -593,7 +615,8 @@ def _solo_articulado(texto: str) -> str:
     primero = next((x for x in re.finditer(r"^.*$", texto, re.MULTILINE)
                     if ARTICULO_RE.match(x.group().strip())), None)
     if primero:
-        d = ARTICULO_DECRETO_RE.search(texto, primero.end())
+        d = (ARTICULO_DECRETO_ESTATAL_RE if estatal else ARTICULO_DECRETO_RE).search(
+            texto, primero.end())
         if d:
             texto = _sin_rotulo_final(texto[: d.start()])
     return texto
@@ -631,7 +654,7 @@ def es_rotulo_corto(s: str, maximo: int = EPIGRAFE_MAX_ESTATAL) -> bool:
 
 def parse(pdf_path: str, doc: Documento) -> list[Unidad]:
     """Parsea el PDF de una ley/código/reglamento y devuelve sus unidades."""
-    return parse_texto(texto_limpio(pdf_path, doc), huecos=doc.huecos,
+    return parse_texto(texto_limpio(pdf_path, doc), huecos=doc.huecos, estatal=bool(doc.medio),
                        epigrafe_max=EPIGRAFE_MAX_ESTATAL if doc.medio else None,
                        notas=re.compile(doc.notas) if doc.notas else None,
                        notas_previas=re.compile(doc.notas_previas) if doc.notas_previas else None)
@@ -677,11 +700,11 @@ def _articulos_ordinales(texto: str) -> str:
 _CITA_TRAS_NUMERO_RE = re.compile(r"^\s*[a-záéíóúñ]")
 
 
-def _ultima_aparicion(lineas: list[str]) -> dict[int, int]:
+def _ultima_aparicion(lineas: list[str], art: re.Pattern = ARTICULO_RE) -> dict[int, int]:
     """Número de artículo (sin sufijo) → último renglón donde abre un artículo."""
     ult: dict[int, int] = {}
     for i, raw in enumerate(lineas):
-        am = ARTICULO_RE.match(raw.strip())
+        am = art.match(raw.strip())
         if am and not (am.group(2) or am.group(3) or am.group(4)):
             ult[int(am.group(1).replace(",", ""))] = i
     return ult
@@ -720,7 +743,7 @@ def _notas_al_final(u: Unidad | None, notas_previas: re.Pattern | None) -> list[
     notas = grupos
     if not notas:
         return []
-    m = ARTICULO_RE.match(lineas[0].strip())
+    m = ARTICULO_ESTATAL_RE.match(lineas[0].strip())
     queda = "\n".join(lineas[:j])
     primera = lineas[0].strip()[m.end():] if m else lineas[0]
     if not (primera.strip() or any(ln.strip() for ln in lineas[1:j])):
@@ -742,7 +765,7 @@ def _notas_antes(lineas: list[str], notas_previas: re.Pattern | None) -> list[st
 def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 notas: re.Pattern | None = None,
                 notas_previas: re.Pattern | None = None,
-                epigrafe_max: int | None = None) -> list[Unidad]:
+                epigrafe_max: int | None = None, estatal: bool = False) -> list[Unidad]:
     """Segmenta texto ya limpio en unidades. Separado para poder probarlo sin PDF.
 
     La numeración se exige continua (así se descartan las citas a otros
@@ -758,14 +781,23 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
     artículo ('(REFORMADO, G.O. …)') abren ese artículo en vez de cerrar el
     anterior: quedan como su primer párrafo, en el mismo orden que en el PDF.
 
+    `estatal` lee además lo que escriben los PDF estatales y no los de la Cámara
+    (rótulos de `ARTICULO_ESTATAL_RE`, 'CÁPITULO', notas que siguen en otro
+    renglón, fracciones 'XIII Bis.' que no son epígrafe…). Sin él, la lectura de
+    las leyes federales es la de siempre.
+
     `epigrafe_max` limita el largo de un rótulo sin palabra clave: en las
     fuentes cuyos párrafos no siempre cierran con punto, el último renglón de un
     artículo ('…se atenderá el principio de paridad') parecería un epígrafe del
     siguiente y su texto se perdería.
     """
-    texto = _solo_articulado(_articulos_ordinales(clean_text))
+    ART = ARTICULO_ESTATAL_RE if estatal else ARTICULO_RE
+    texto = _solo_articulado(_articulos_ordinales(clean_text), estatal)
     lineas = texto.splitlines()
-    ultima = _ultima_aparicion(lineas) if huecos else {}
+    ultima = _ultima_aparicion(lineas, ART) if huecos else {}
+
+    def nombre_suelto(s: str, continuacion: bool = False) -> bool:
+        return _es_nombre_suelto(s, continuacion, estatal)
 
     def salto_valido(numero: int, i: int, resto: str) -> bool:
         """¿Se puede saltar de `esperado` a `numero` en el renglón `i`?"""
@@ -838,7 +870,7 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
 
     def abre_articulo(s: str, i: int | None = None) -> bool:
         """¿`s` (renglón `i`) abre un artículo que la secuencia aceptaría ahora mismo?"""
-        am = ARTICULO_RE.match(s)
+        am = ART.match(s)
         if not am:
             return False
         numero, sufijo = int(am.group(1).replace(",", "")), bool(am.group(2) or am.group(3) or am.group(4))
@@ -861,12 +893,12 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 return True
             # El renglón que sigue a una nota sin cerrar es parte de la nota.
             sigue_nota = en_nota
-            en_nota = (es_nota_bloque(s) or sigue_nota) and not s.endswith((".", ")"))
+            en_nota = estatal and (es_nota_bloque(s) or sigue_nota) and not s.endswith((".", ")"))
             if sigue_nota:
                 continue
             if solo_estructura and not (
-                    _es_encabezado(s) or es_nota_bloque(s) or _es_nombre_suelto(s)
-                    or _es_nombre_suelto(s, continuacion=True)
+                    _es_encabezado(s) or es_nota_bloque(s) or nombre_suelto(s)
+                    or nombre_suelto(s, continuacion=True)
                     or re.fullmatch(r"[IVXLCDM]+", s)):
                 return False
             # Encabezados, notas y nombres entre corchetes no cuentan: un bloque
@@ -886,7 +918,8 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
         if (TITULO_RE.match(s) or LIBRO_RE.match(s) or PARTE_RE.match(s)) and (
                 actual is None or len(s) < 35):
             return "titulo"
-        if CAPITULO_RE.match(s) and (actual is None or len(s) < 30):
+        if (CAPITULO_ESTATAL_RE if estatal else CAPITULO_RE).match(s) and (
+                actual is None or len(s) < 30):
             return "capitulo"
         if SECCION_RE.match(s) and (actual is None or len(s) < 35):
             return "seccion"
@@ -916,8 +949,8 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 p.isupper() for p in (*partes, stripped)) and not partes[-1].endswith((".", ";", ":"))
             acumulable = not partes or (
                 not estricto and len(partes) < (MAX_LINEAS_NOMBRE if en_mayusculas else 2))
-            if (acumulable and _es_nombre_encabezado(stripped, estricto=estricto)
-                    and not es_nota_bloque(stripped)):
+            if (acumulable and _es_nombre_encabezado(stripped, estricto=estricto, estatal=estatal)
+                    and not (estatal and es_nota_bloque(stripped))):
                 pendiente = (nivel, encabezado, partes + [stripped])
                 continue
             # Muchas leyes de la Cámara ponen el encabezado en MAYÚSCULAS y el
@@ -931,18 +964,18 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 "]" in p for p in partes)
             if corchete_abierto and len(partes) < MAX_LINEAS_NOMBRE and (
                     not stripped.endswith((".", ";", ":")) or stripped.endswith("]")) and (
-                    "DOF" not in stripped) and not ARTICULO_RE.match(stripped):
+                    "DOF" not in stripped) and not ART.match(stripped):
                 pendiente = (nivel, encabezado, partes + [stripped])
                 continue
-            if estricto and len(partes) < MAX_LINEAS_NOMBRE and _es_nombre_suelto(
+            if estricto and len(partes) < MAX_LINEAS_NOMBRE and nombre_suelto(
                     stripped, continuacion=bool(partes)) and desemboca_en_articulo(i):
                 pendiente = (nivel, encabezado, partes + [stripped])
                 continue
             # Un rótulo de dos partes que cierra con punto ('De los contratos
             # preparatorios.- La promesa.') también es nombre si el artículo sigue
             # justo debajo; una oración ('Las personas morales deberán …') no.
-            if (estricto and not partes and stripped.endswith(".") and ".- " in stripped
-                    and _es_nombre_suelto(stripped[:-1]) and siguiente_abre(i)):
+            if (estatal and estricto and not partes and stripped.endswith(".") and ".- " in stripped
+                    and nombre_suelto(stripped[:-1]) and siguiente_abre(i)):
                 pendiente = (nivel, encabezado, [stripped])
                 continue
             pendiente = None
@@ -974,7 +1007,7 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 # hasta el siguiente artículo.
                 (re.fullmatch(r"[IVXLCDM]+", stripped)
                  and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))
-                or (_es_nombre_suelto(stripped) and not stripped.endswith(",")
+                or (nombre_suelto(stripped) and not stripped.endswith(",")
                     and (epigrafe_max is None or es_rotulo_corto(stripped, epigrafe_max))
                     and (anterior.endswith((".", ";", ":")) or es_nota_bloque(anterior))
                     and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))):
@@ -983,11 +1016,12 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             en_bloque = True
             continue
 
-        if (en_bloque and nota_previa and stripped and not nota_previa.endswith((".", ")"))
+        if (estatal and en_bloque and nota_previa and stripped
+                and not nota_previa.endswith((".", ")"))
                 and not abre_articulo(stripped, i)):
             nota_previa = stripped      # la nota sigue: 'ARTÍCULO 14 DE LAS DISPOSICIONES …'
             continue
-        if en_bloque and not ARTICULO_RE.match(stripped):
+        if en_bloque and not ART.match(stripped):
             if not stripped:
                 continue
             if previas_bloque and not _parentesis_cerrados(previas_bloque[-1]):
@@ -1004,13 +1038,13 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 nota_previa = stripped                      # la nota sigue en otra línea
                 continue
             nota_previa = False
-            if (_es_nombre_suelto(stripped) or _es_nombre_suelto(stripped, continuacion=True)
+            if (nombre_suelto(stripped) or nombre_suelto(stripped, continuacion=True)
                     or re.fullmatch(r"[IVXLCDM]+", stripped)):
                 ampliar_nombre(stripped)
                 previas_bloque.clear()
                 continue
 
-        am = ARTICULO_RE.match(stripped)
+        am = ART.match(stripped)
         if am:
             numero = int(am.group(1).replace(",", ""))
             letra = (am.group(2) or "").upper()
@@ -1025,7 +1059,7 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     and (numero, letra, guion_num, ordinal, "", "") not in abiertos):
                 ord_num = sub_letra = ""
                 line = stripped[:am.end(4)] + "\n" + stripped[am.end(4):].lstrip(" .")
-                am = ARTICULO_RE.match(line)
+                am = ART.match(line)
             tiene_sufijo = bool(letra or guion_num or ordinal)
             # Aceptar solo el siguiente esperado (bare) o una variante del actual.
             # Así se descartan las citas "Artículo 89 de la Constitución".

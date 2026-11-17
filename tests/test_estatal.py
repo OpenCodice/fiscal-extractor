@@ -12,9 +12,10 @@ from extractor import disposicion, federal
 from extractor.estatal import ESTATAL
 from extractor.estatales import ENTIDADES, cdmx, clave_de, documentos, fuera
 from extractor.fuentes import url_vigente
-from extractor.normalize import normalize_body
-from extractor.parsers.articulado import (_sin_numero_de_pagina, FECHA_TABLA_RE,
-                                          VERSION_ESTATAL_RE, fechas_en_notas, parse_texto)
+from extractor.normalize import normalize_body as _normalize_body
+from extractor.parsers.articulado import (_sin_numero_de_pagina, ARTICULO_ESTATAL_RE,
+                                          FECHA_TABLA_RE, VERSION_ESTATAL_RE, fechas_en_notas)
+from extractor.parsers.articulado import parse_texto as _parse_texto
 from extractor.registro import Documento, a_dict
 from extractor.verificar import Flujo, cobertura, encabezado_pegado
 
@@ -22,6 +23,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 import trailers as tr  # noqa: E402
 
 NOTAS = re.compile(cdmx.NOTAS)
+
+
+def parse_texto(texto, *a, **k):
+    """El parser como lo usa una ley estatal (`estatal=True`)."""
+    return _parse_texto(texto, *a, estatal=True, **k)
+
+
+def normalize_body(cuerpo, etiqueta, *a, **k):
+    return _normalize_body(cuerpo, etiqueta, *a, rotulo=ARTICULO_ESTATAL_RE, **k)
 PREVIAS = re.compile(cdmx.NOTAS_PREVIAS)
 
 
@@ -263,19 +273,6 @@ def test_rotulos_estatales_en_plural_y_con_guion_separado():
     assert normalize_body(us[2].cuerpo, us[2].etiqueta) == "Tres."
 
 
-def test_renglon_en_minuscula_continua_el_parrafo():
-    cuerpo = "Artículo 7.- I. Por el Consejero que designe;\ny\nII. Otra.\n"
-    assert normalize_body(cuerpo, "", continuacion_minuscula=True).split("\n\n") == [
-        "I. Por el Consejero que designe; y", "II. Otra."]
-    assert normalize_body(cuerpo, "").split("\n\n")[1] == "y"
-
-
-def test_inciso_con_punto_no_es_continuacion():
-    cuerpo = "Artículo 8.- VI. Requisitos:\na. Un programa;\nb. Una agenda.\n"
-    assert normalize_body(cuerpo, "", continuacion_minuscula=True).split("\n\n") == [
-        "VI. Requisitos:", "a. Un programa;", "b. Una agenda."]
-
-
 def test_leyes_estatales_sin_prefijos_de_la_camara_y_acentos_compuestos():
     from extractor.parsers.articulado import limpiar_paginas
     doc = documentos(["jalisco"])[0]
@@ -283,3 +280,15 @@ def test_leyes_estatales_sin_prefijos_de_la_camara_y_acentos_compuestos():
               "Arti\u0301culo 5. Los tribunales.\n")
     texto = limpiar_paginas([pagina], doc)
     assert "Secretaría General y sus" in texto and "Artículo 5." in texto
+
+
+def test_lectura_federal_sin_cambios():
+    # Sin `estatal`, ni el rótulo en plural ni el punto pegado abren artículo.
+    texto = "Artículo 1.- Uno.\nARTÍCULOS 2.- Dos.\nArtículo 3.Tres.\n"
+    assert [u.clave for u in _parse_texto(texto)] == ["001"]
+
+
+def test_rotulo_estatal_no_es_epigrafe():
+    texto = "Artículo 233.\n1. Uno.\nArtículo 234.Derogado\nArtículo 235.\n1. Tres.\n"
+    assert [u.clave for u in parse_texto(texto, start=233, epigrafe_max=80)] == [
+        "233", "234", "235"]
