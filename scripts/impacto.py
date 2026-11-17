@@ -29,6 +29,7 @@ Uso:
       [--veredicto-agente V --extractor OpenCodice/x@sha]
   impacto.py cerrar --trabajo T --extractor OpenCodice/x@sha [--registro DIR]
   impacto.py exigir <repo> --base REV [--registro DIR]
+  impacto.py ya-confirmadas <repo> --documento D --pdf P [--documento D2 --pdf P2]...
 
 Este archivo existe idéntico en constitucion-extractor y en fiscal-extractor
 (scripts/impacto.py): cualquier cambio se hace en los dos.
@@ -466,6 +467,30 @@ def cmd_exigir(a) -> int:
     return 1 if malos else 0
 
 
+def cmd_ya_confirmadas(a) -> int:
+    """Sale 0 si todo lo que cambió en el árbol de trabajo de estos documentos
+    son correcciones ya confirmadas contra el mismo PDF: entonces el agente de
+    la vigilancia no tiene nada nuevo que revisar."""
+    if len(a.documento) != len(a.pdf):
+        raise SystemExit("cada --documento lleva su --pdf")
+    registro = cargar(a.registro)
+    antes, despues = tr.lector_git(a.repo, "HEAD"), tr.lector_fs(a.repo)
+    total = 0
+    for doc, pdf in zip(a.documento, a.pdf):
+        rutas = [r for r in _git(a.repo, "status", "--porcelain", "-z", "--no-renames", "-uall")
+                 .split("\0") if r]
+        rutas = [r[3:] for r in rutas]
+        cambios = tr.cambios_de_articulos(doc, rutas, antes, despues)
+        sha = tr.sha256_bytes(Path(pdf).read_bytes()) if Path(pdf).exists() else "-"
+        f = faltantes(registro, doc, sha, cambios)
+        if f:
+            print(f"{doc}: {len(f)} de {len(cambios)} artículos sin confirmar")
+            return 1
+        total += len(cambios)
+    print(f"Los {total} artículos cambiados son correcciones ya confirmadas contra el PDF.")
+    return 0 if total else 1
+
+
 def _salida_gh(**pares) -> None:
     import os
     if os.environ.get("GITHUB_OUTPUT"):
@@ -496,9 +521,14 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("repo")
     e.add_argument("--base", required=True)
     e.add_argument("--registro", default=str(REGISTRO))
+    y = sub.add_parser("ya-confirmadas")
+    y.add_argument("repo")
+    y.add_argument("--documento", action="append", default=[])
+    y.add_argument("--pdf", action="append", default=[])
+    y.add_argument("--registro", default=str(REGISTRO))
     a = ap.parse_args(argv)
     return {"pendientes-commits": cmd_pendientes_commits, "cerrar": cmd_cerrar,
-            "exigir": cmd_exigir}[a.cmd](a)
+            "exigir": cmd_exigir, "ya-confirmadas": cmd_ya_confirmadas}[a.cmd](a)
 
 
 if __name__ == "__main__":

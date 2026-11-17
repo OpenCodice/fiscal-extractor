@@ -143,3 +143,25 @@ def test_bloques_ubicar_y_cerrar(tmp_path, monkeypatch):
     (repo / "lgs" / "006.md").write_text("# Artículo 6\n\nEl artículo número 6 dispone lo siguiente.\n")
     ok, motivo = rv.cerrar(repo, "lgs", str(pdf), t, registro=reg)
     assert not ok and "no cubrió 1 de 3" in motivo
+
+
+def test_ya_confirmadas_en_el_arbol_de_trabajo(tmp_path):
+    repo = tmp_path / "datos"
+    (repo / "lgs").mkdir(parents=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    c = _cambio("004")
+    (repo / "lgs" / "004.md").write_text(c.antes)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "publicado")
+    (repo / "lgs" / "004.md").write_text(c.despues)
+    pdf = tmp_path / "lgs.pdf"
+    pdf.write_bytes(b"%PDF lgs")
+    reg = tmp_path / "reg"
+    args = ["ya-confirmadas", str(repo), "--documento", "lgs", "--pdf", str(pdf), "--registro", str(reg)]
+    assert im.main(args) == 1
+    im.escribir([{"documento": "lgs", "clave": "004", "pdf": tr.sha256_bytes(b"%PDF lgs"),
+                  "antes": im.huella(c.antes), "despues": im.huella(c.despues),
+                  "veredicto": "mejora"}], reg, "x")
+    assert im.main(args) == 0

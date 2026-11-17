@@ -74,6 +74,19 @@ done < "$TRABAJO/altas.txt"
 huella_datos > "$TRABAJO/datos.sha"
 [ -s "$TRABAJO/cambiados.txt" ] || exit 0
 
+# Si todo lo que cambió son correcciones que ya se confirmaron contra estos
+# mismos PDF (impacto.yml las juzgó al entrar el cambio del extractor), no hay
+# nada nuevo que revisar.
+args=()
+for doc in $(sed -E 's/^.. "?([^/]+)\/.*/\1/' "$TRABAJO/cambiados.txt" | sort -u); do
+  args+=(--documento "$doc" --pdf "$PDF_DIR/$doc.pdf")
+done
+if python scripts/impacto.py ya-confirmadas "$(git -C "$OUT" rev-parse --show-toplevel)" "${args[@]}"; then
+  echo '{"fiel": true, "reparado": false, "resumen": "Todas las unidades cambiadas son correcciones ya confirmadas contra estos PDF (verificaciones/impacto/).", "unidades": []}' \
+    > "$TRABAJO/veredicto.json"
+  exit 0
+fi
+
 python - "$TRABAJO" "$EXTRACTOR" "$OUT" "$PDF_DIR" <<'PY'
 import pathlib, sys
 trabajo, extractor, out, pdf_dir = sys.argv[1:5]
