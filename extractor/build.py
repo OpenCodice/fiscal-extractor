@@ -35,7 +35,8 @@ from .disposicion import dir_metadata, dir_unidades, es_estatal, indices, rel_un
 def render_markdown(u: Unidad, doc: Documento | None = None) -> str:
     """Texto de la unidad: encabezado + cuerpo en párrafos. Sin metadata."""
     notas = re.compile(doc.notas) if doc is not None and doc.notas else None
-    body = normalize_body(u.cuerpo, u.etiqueta, notas)
+    body = normalize_body(u.cuerpo, u.etiqueta, notas,
+                          continuacion_minuscula=doc is not None and bool(doc.medio))
     return f"# {u.etiqueta}\n\n{body}\n"
 
 

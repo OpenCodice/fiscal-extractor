@@ -48,14 +48,17 @@ def _note_is_complete(note: str) -> bool:
     return bool(NOTE_COMPLETE_RE.search(note.strip()))
 
 
-def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = None) -> str:
+def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = None,
+                   continuacion_minuscula: bool = False) -> str:
     """Devuelve el cuerpo de la unidad como párrafos, sin la línea de encabezado.
 
     Las notas de reforma quedan en *cursiva* como anotación al pie de su bloque.
     `notas` reconoce además las notas propias de una fuente estatal
     ('(REFORMADO, G.O. 25 DE MAYO DE 2000)'), que no llevan 'DOF' y anotan el
     párrafo que les sigue: cada una es su propio párrafo, hasta el paréntesis
-    que la cierra.
+    que la cierra. Con `continuacion_minuscula`, un renglón que empieza en
+    minúscula sigue el párrafo anterior aunque este cierre en ';' o '.': ninguna
+    oración empieza en minúscula ('…designe el Consejero; y' / 'y').
     """
     lines = [ln.rstrip() for ln in body.splitlines()]
 
@@ -122,7 +125,8 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             buf.append(s)
             i += 1
             continue
-        if buf and SENTENCE_END_RE.search(buf[-1]):
+        if buf and SENTENCE_END_RE.search(buf[-1]) and not (
+                continuacion_minuscula and s[:1].islower()):
             flush_buf()
         buf.append(s)
         i += 1

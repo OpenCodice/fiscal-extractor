@@ -46,14 +46,14 @@ HEADER_PREFIXES = (
 #   Reglamento de la Ley Aduanera): la validación de secuencia filtra falsos positivos.
 ORDINALES = "Bis|Ter|Qu[aá]ter|Quintus|Quinquies|Sexies|Septies|Octies|Nonies|Decies"
 ARTICULO_RE = re.compile(
-    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art[íi]culos(?=\s+\d+\s*[oº°]?\.-))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
+    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
     r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-]))([A-Z])(?![A-Za-z]))?"  # letra "-A" PEGADA o " A." (118 A.)
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
     rf"(?:[\s.\-]+(?i:({ORDINALES}))"               # ordinal
     r"(?:(?:[\s\-]+|\.\s?)(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1", "Bis. 3") y letra ("Bis 35 A.-")
-    r"(?:\s*\.?-?(?:\s|$|\()|\.-(?=\S)"            # separador final (o ".-" pegado al texto)
-    r"|\.(?=[A-ZÁÉÍÓÚÑ][a-záéíóúñ])"                   # o el punto pegado: "Artículo 127.Se deroga."
+    r"(?:\s*\.?\s?-?(?:\s|$|\()|\.-(?=\S)"         # separador final ("29 BIS. - ", o ".-" pegado)
+    r"|\.(?=[A-ZÁÉÍÓÚÑ](?:[a-záéíóúñ]|\s))"            # o el punto pegado: "127.Se deroga.", "36.A través"
     r"|:(?=\s))"                                     # o dos puntos: "Artículo 276 Quater: Comete"
 )
 
@@ -608,9 +608,22 @@ def _sin_rotulo_final(texto: str) -> str:
     return "\n".join(lineas) + "\n"
 
 
+# Los epígrafes de las leyes estatales ('De quiénes pueden solicitar el registro
+# y de la calificación registral', 'Juicio para la protección de los derechos
+# político-electorales del Ciudadano') caben en un renglón corto y no llevan
+# coma; el final de un párrafo sin punto ('En este último caso, declarará
+# también improcedente la solicitud de divorcio') sí suele llevarla.
+EPIGRAFE_MAX_ESTATAL = 80
+
+
+def es_rotulo_corto(s: str, maximo: int = EPIGRAFE_MAX_ESTATAL) -> bool:
+    return len(s) <= maximo and "," not in s
+
+
 def parse(pdf_path: str, doc: Documento) -> list[Unidad]:
     """Parsea el PDF de una ley/código/reglamento y devuelve sus unidades."""
     return parse_texto(texto_limpio(pdf_path, doc), huecos=doc.huecos,
+                       epigrafe_max=EPIGRAFE_MAX_ESTATAL if doc.medio else None,
                        notas=re.compile(doc.notas) if doc.notas else None,
                        notas_previas=re.compile(doc.notas_previas) if doc.notas_previas else None)
 
@@ -719,7 +732,8 @@ def _notas_antes(lineas: list[str], notas_previas: re.Pattern | None) -> list[st
 
 def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 notas: re.Pattern | None = None,
-                notas_previas: re.Pattern | None = None) -> list[Unidad]:
+                notas_previas: re.Pattern | None = None,
+                epigrafe_max: int | None = None) -> list[Unidad]:
     """Segmenta texto ya limpio en unidades. Separado para poder probarlo sin PDF.
 
     La numeración se exige continua (así se descartan las citas a otros
@@ -734,6 +748,11 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
     Con `notas_previas`, las notas de reforma que el PDF pone justo antes de un
     artículo ('(REFORMADO, G.O. …)') abren ese artículo en vez de cerrar el
     anterior: quedan como su primer párrafo, en el mismo orden que en el PDF.
+
+    `epigrafe_max` limita el largo de un rótulo sin palabra clave: en las
+    fuentes cuyos párrafos no siempre cierran con punto, el último renglón de un
+    artículo ('…se atenderá el principio de paridad') parecería un epígrafe del
+    siguiente y su texto se perdería.
     """
     texto = _solo_articulado(_articulos_ordinales(clean_text))
     lineas = texto.splitlines()
@@ -947,6 +966,7 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 (re.fullmatch(r"[IVXLCDM]+", stripped)
                  and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))
                 or (_es_nombre_suelto(stripped) and not stripped.endswith(",")
+                    and (epigrafe_max is None or es_rotulo_corto(stripped, epigrafe_max))
                     and (anterior.endswith((".", ";", ":")) or es_nota_bloque(anterior))
                     and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))):
             fijar("epigrafe", stripped)

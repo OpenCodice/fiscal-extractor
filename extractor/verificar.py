@@ -267,10 +267,11 @@ def encabezado_pegado(md: str, estatal: bool = False) -> list[dict]:
     del PDF, así que `cobertura` no lo ve, pero es estructura (el nombre de un
     capítulo, un epígrafe) pegada al artículo anterior.
 
-    En las leyes estatales (`estatal`) dos formas del propio texto del artículo
-    no son encabezado: su cuerpo derogado en mayúsculas ('ARTICULO 451.- SE
-    DEROGA') y una enumeración que el PDF deja abierta ('…de concejales; y',
-    seguida del título siguiente)."""
+    En las leyes estatales (`estatal`), cuyos párrafos no siempre cierran con
+    punto, tres formas del propio texto del artículo no son encabezado: su
+    cuerpo derogado en mayúsculas ('ARTICULO 451.- SE DEROGA'), una enumeración
+    que el PDF deja abierta ('…de concejales; y') y un párrafo largo o con coma
+    (`articulado.es_rotulo_corto`)."""
     bloques = [b.strip() for b in md.split("\n\n") if b.strip() and not b.startswith("# ")]
     while bloques and bloques[-1].startswith("_"):
         bloques.pop()                       # notas de reforma en cursiva
@@ -279,7 +280,10 @@ def encabezado_pegado(md: str, estatal: bool = False) -> list[dict]:
     b = bloques[-1]
     if (len(b) > 150 or "DOF" in b or re.search(r"[.;:)…”\"»]$", b)
             or (estatal and (re.search(r";\s*[yoeu]$", b) or re.fullmatch(
-                r"\(?\s*(?:SE\s+DEROGA|DEROGADO)\b.*", b, re.IGNORECASE)))
+                r"\(?\s*(?:SE\s+DEROGA|DEROGADO)\b.*", b, re.IGNORECASE)
+                # El último párrafo sin punto que no puede ser rótulo (el parser
+                # usa la misma regla para los epígrafes).
+                or not articulado.es_rotulo_corto(b)))
             or re.match(r"^(?:[IVXLCDM]+|[a-zñ]{1,2}|[A-Z]|\d+)\s*[.)\-]", b)
             or not b[:1].isupper()
             # Una tabla que cierra el artículo ('Años de servicios … 10 80% 11

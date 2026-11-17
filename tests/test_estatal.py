@@ -234,3 +234,30 @@ def test_cerrar_estatal_registra_lo_declarado_fuera(tmp_path):
     for clave, motivo in ESTATAL.fuera.items():
         assert fuentes[clave]["estado"] == "excluida" and fuentes[clave]["motivo"] == motivo
     assert not (repo / "metadata").exists()            # sin índice maestro en leyes-estatales
+
+
+def test_ultimo_parrafo_sin_punto_no_es_epigrafe():
+    texto = ("Artículo 31.- La o el Presidente responderá ante el Pleno.\n"
+             "En la elección de la Presidencia de la Mesa Directiva se atenderá el principio de paridad\n"
+             "Artículo 32.- Otro.\n"
+             "Artículo 33.- Fin.\nDe la prelación\nArtículo 34.- Sigue.\n")
+    us = parse_texto(texto, start=31, epigrafe_max=80)
+    assert "principio de paridad" in us[0].cuerpo and not us[1].epigrafe
+    assert us[3].epigrafe == "De la prelación"
+    texto = "Artículo 1.- Uno.\nEn este caso, declarará improcedente la solicitud\nArtículo 2.- Dos.\n"
+    assert "improcedente" in parse_texto(texto, epigrafe_max=80)[0].cuerpo
+
+
+def test_rotulos_estatales_en_plural_y_con_guion_separado():
+    texto = ("ARTÍCULO 49.- Uno.\nARTÍCULOS 50.- Dos.\nARTÍCULO 50 BIS. - Tres.\n"
+             "Artículo 51.A través de esto.\nArtículos 52. Los requisitos.\n")
+    us = parse_texto(texto, start=49)
+    assert [u.clave for u in us] == ["049", "050", "050-bis", "051", "052"]
+    assert normalize_body(us[2].cuerpo, us[2].etiqueta) == "Tres."
+
+
+def test_renglon_en_minuscula_continua_el_parrafo():
+    cuerpo = "Artículo 7.- I. Por el Consejero que designe;\ny\nII. Otra.\n"
+    assert normalize_body(cuerpo, "", continuacion_minuscula=True).split("\n\n") == [
+        "I. Por el Consejero que designe; y", "II. Otra."]
+    assert normalize_body(cuerpo, "").split("\n\n")[1] == "y"
