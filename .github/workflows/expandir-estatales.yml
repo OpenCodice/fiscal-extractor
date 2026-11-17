@@ -1,0 +1,353 @@
+name: Expandir leyes estatales
+
+# Ronda de expansión: suma un estado al corpus de leyes estatales sin que nadie
+# trabaje en una computadora. Un agente encuentra el portal oficial de leyes
+# vigentes del siguiente estado de extractor/estatales/pendientes.json y
+# escribe su módulo (extractor/estatales/<estado>.py) y sus pruebas; código
+# determinista decide si entra (scripts/expansion.py): solo esos archivos,
+# pruebas en verde, build + auditar de cada ley sobre su PDF descargado desde un
+# clon limpio (lo que no quede limpio pasa a FUERA) y nada de lo publicado
+# cambia. Si entra, se publica en main y se lanza su vigilancia, que da de alta
+# cada ley tras su revisión completa (vigilar-leyes-estatales.yml).
+#
+# Un estado por ronda, y solo cuando la cadena anterior terminó: ninguna
+# vigilar-leyes-estatales en curso ni PR suyo abierto, ni leyes declaradas sin
+# alta todavía (en ese caso relanza la vigilancia de esos estados y espera a la
+# siguiente ronda). Falla cerrado: un error deja todo sin publicar y el estado
+# se reintenta en la ronda siguiente, hasta el tope de intentos de la lista. La
+# lanza cada miércoles el Worker `scheduler` (constitucion-extractor/scheduler/).
+
+on:
+  workflow_dispatch:
+    inputs:
+      estado:
+        description: 'Este estado (slug de pendientes.json) en vez del siguiente de la lista'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: expandir-estatales
+  cancel-in-progress: false
+
+env:
+  EXTRACTOR_REPO: https://github.com/OpenCodice/fiscal-extractor.git
+  DATOS: OpenCodice/leyes-estatales
+  RAMA: reforma/leyes-estatales
+  TRABAJO: /tmp/expansion
+  PDF_CACHE: /tmp/pdfs-corpus
+
+jobs:
+  ronda:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    permissions:
+      contents: read
+      actions: write
+    env:
+      TIENE_CLAUDE: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: ¿Terminó la cadena anterior?
+        id: cadena
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          corriendo=$(gh run list -R "$GITHUB_REPOSITORY" -w vigilar-leyes-estatales.yml -L 20 \
+                        --json status -q '[.[] | select(.status != "completed")] | length')
+          abiertos=$(gh pr list -R "$DATOS" --head "$RAMA" --state open --json number -q length)
+          echo "Vigilancias en curso: $corriendo; PR abiertos: $abiertos"
+          if [ "$corriendo" != 0 ] || [ "$abiertos" != 0 ]; then
+            echo "La cadena anterior sigue en curso: esta ronda no empieza un estado nuevo." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "libre=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "libre=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clonar extractor y leyes-estatales
+        if: steps.cadena.outputs.libre == 'true'
+        id: extractor
+        run: |
+          git clone -q "$EXTRACTOR_REPO" /tmp/extractor
+          git clone -q --depth 1 --filter=blob:none --sparse "https://github.com/$DATOS.git" /tmp/datos
+          pip install -q -r /tmp/extractor/requirements.txt pytest
+
+      - name: Altas pendientes
+        if: steps.cadena.outputs.libre == 'true'
+        id: altas
+        env:
+          EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
+        run: python /tmp/extractor/scripts/expansion.py listo --out /tmp/datos
+
+      - name: Retomar la cadena
+        # Quedan leyes declaradas sin alta (una tanda que no continuó): se
+        # relanza su vigilancia y el estado nuevo espera a la siguiente ronda.
+        if: steps.altas.outputs.pendientes != '' && steps.altas.outputs.pendientes != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ESTADOS: ${{ steps.altas.outputs.estados }}
+        run: |
+          gh workflow run vigilar-leyes-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f estados="$ESTADOS"
+          echo "Quedan altas pendientes en: $ESTADOS. Se relanzó su vigilancia; el estado nuevo espera a la siguiente ronda." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Elegir el estado y contar el intento
+        id: elegir
+        if: steps.altas.outputs.pendientes == '0' && env.TIENE_CLAUDE == 'true'
+        env:
+          ESTADO_PEDIDO: ${{ inputs.estado }}
+          EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
+          EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
+        run: |
+          curl -fsSL -o /tmp/egress-worker.js \
+            https://raw.githubusercontent.com/OpenCodice/constitucion-extractor/main/egress-mx/worker.js \
+            || echo "::warning::No se pudo leer la lista de dominios de egress-mx."
+          cd /tmp/extractor
+          python scripts/expansion.py elegir --estado "$ESTADO_PEDIDO" --permitidos /tmp/egress-worker.js
+          estado=$(grep '^estado=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)
+          [ -n "$estado" ] || exit 0
+          NOMBRE="$(grep '^nombre=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)" ESTADO="$estado" \
+            bash scripts/agente/expandir.sh intento
+          echo "partida=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Caché de los PDF publicados
+        if: steps.elegir.outputs.hay == 'true'
+        uses: actions/cache@v4
+        with:
+          path: /tmp/pdfs-corpus
+          key: pdfs-corpus-${{ github.run_id }}
+          restore-keys: pdfs-corpus-
+
+      - name: PDF de lo publicado y medición sin el módulo
+        # Antes del agente y con el extractor de partida: la caché de PDF (con
+        # EGRESS_MX_TOKEN) y el impacto que ya tiene main sin el módulo nuevo,
+        # para compararlo después con el impacto que tenga con él.
+        if: steps.elegir.outputs.hay == 'true'
+        timeout-minutes: 60
+        env:
+          EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
+        run: |
+          cd /tmp/extractor
+          python scripts/impacto_corpus.py --solo-pdfs --trabajo "$TRABAJO/pdfs" --cache "$PDF_CACHE"
+
+      - name: Puerta local hacia egress-mx
+        # El agente no recibe EGRESS_MX_TOKEN: si el sitio del estado está en
+        # la lista del Worker, descarga por esta puerta, que lee el token de un
+        # archivo que borra al arrancar.
+        if: steps.elegir.outputs.hay == 'true'
+        env:
+          EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
+        run: |
+          [ -n "$EGRESS_MX_TOKEN" ] || exit 0
+          umask 077
+          printf '%s' "$EGRESS_MX_TOKEN" > /tmp/egress-token
+          env -u EGRESS_MX_TOKEN nohup python3 -I /tmp/extractor/scripts/agente/proxy_mx.py /tmp/egress-token 8765 \
+            > /tmp/proxy-mx.log 2>&1 &
+          sleep 2
+          curl -s -o /dev/null -w 'puerta: %{http_code}\n' "http://127.0.0.1:8765/?url=https%3A%2F%2Fwww.congresogto.gob.mx%2F" || true
+
+      - name: Agente — escribir el módulo del estado
+        if: steps.elegir.outputs.hay == 'true'
+        timeout-minutes: 160
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ESTADO: ${{ steps.elegir.outputs.estado }}
+          NOMBRE: ${{ steps.elegir.outputs.nombre }}
+          MODULO: ${{ steps.elegir.outputs.modulo }}
+          PISTA: ${{ steps.elegir.outputs.pista }}
+          PERMITIDOS: ${{ steps.elegir.outputs.permitidos }}
+          PROXY_MX: http://127.0.0.1:8765
+        run: bash /tmp/extractor/scripts/agente/expandir.sh agente
+
+      - name: Lo que el agente no puede tocar
+        # Fuera de su alcance: solo cuentan su módulo y sus pruebas nuevas. Si
+        # hizo commits o tocó cualquier otra cosa, se deshace todo y no se
+        # publica nada.
+        id: cerco
+        if: steps.elegir.outputs.hay == 'true'
+        env:
+          PARTIDA: ${{ steps.elegir.outputs.partida }}
+          MODULO: ${{ steps.elegir.outputs.modulo }}
+        run: |
+          pkill -f proxy_mx.py || true
+          cd /tmp/extractor
+          fuera=""
+          [ "$(git rev-parse HEAD)" = "$PARTIDA" ] || fuera="commits propios en el extractor"
+          otros=$(git status --porcelain=v1 -uall --no-renames | grep -vE "^\?\? (extractor/estatales/${MODULO}\.py|tests/test_estatal_${MODULO}[a-z0-9_]*\.py)$" || true)
+          [ -z "$otros" ] || fuera="tocó otros archivos: $(echo "$otros" | head -3 | tr '\n' ' ')"
+          if [ -n "$fuera" ]; then
+            echo "::error::El agente $fuera"
+            git reset -q --hard "$PARTIDA"; git clean -fdq
+            echo "motivo=el agente $fuera" >> "$GITHUB_OUTPUT"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 - "$TRABAJO/veredicto.json" >> "$GITHUB_OUTPUT" <<'PY'
+          import json, re, sys
+          try:
+              v = json.load(open(sys.argv[1], encoding="utf-8"))
+          except Exception:
+              v = {}
+          r = v.get("resultado") if v.get("resultado") in ("modulo", "egress", "sin-fuente") else "ninguno"
+          dominio = str(v.get("dominio") or "").strip().lower()
+          dominio = dominio if re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", dominio) else ""
+          motivo = " ".join(str(v.get("motivo") or "").split())[:300]
+          print(f"resultado={r}\ndominio={dominio}\nmotivo={motivo}\nok=true")
+          PY
+
+      - name: Compuertas — forma del módulo y pruebas
+        id: forma
+        if: steps.cerco.outputs.ok == 'true' && steps.cerco.outputs.resultado == 'modulo'
+        env:
+          ESTADO: ${{ steps.elegir.outputs.estado }}
+          MODULO: ${{ steps.elegir.outputs.modulo }}
+        run: |
+          cd /tmp/extractor
+          test -f "extractor/estatales/$MODULO.py" || { echo "::error::No hay módulo."; exit 1; }
+          ls tests/test_estatal_${MODULO}*.py > /dev/null 2>&1 \
+            && grep -qE '^def test_' tests/test_estatal_${MODULO}*.py \
+            || { echo "::error::No hay pruebas nuevas."; exit 1; }
+          python -m pytest -q > "$TRABAJO/pytest.log" 2>&1 || { tail -n 40 "$TRABAJO/pytest.log"; exit 1; }
+          tail -n 1 "$TRABAJO/pytest.log"
+          python scripts/expansion.py registro --estado "$ESTADO" --salida "$TRABAJO/registro.json"
+
+      - name: Compuertas — descargar cada PDF desde un clon limpio
+        # Con EGRESS_MX_TOKEN, así que no importa nada del agente: lee su
+        # registro como datos con el extractor de partida.
+        if: steps.forma.outcome == 'success'
+        env:
+          EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
+          PARTIDA: ${{ steps.elegir.outputs.partida }}
+        run: |
+          git clone -q "$EXTRACTOR_REPO" /tmp/limpio
+          git -C /tmp/limpio checkout -q "$PARTIDA"
+          python3 -I -S /tmp/limpio/scripts/expansion.py descargar --registro "$TRABAJO/registro.json" \
+            --pdfs "$TRABAJO/pdfs-estado" --resultado "$TRABAJO/descargas.json"
+
+      - name: Compuertas — build y auditar; lo que no quede limpio, a FUERA
+        id: construir
+        if: steps.forma.outcome == 'success'
+        env:
+          ESTADO: ${{ steps.elegir.outputs.estado }}
+        run: |
+          cd /tmp/extractor
+          if python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if any("error" in r for r in d.values()) else 1)' "$TRABAJO/descargas.json"; then
+            # Una descarga que falla es un error de la ronda, no de la ley:
+            # no se publica nada y el estado se reintenta.
+            echo "::error::No se pudieron descargar todos los PDF."; exit 1
+          fi
+          python scripts/expansion.py construir --registro "$TRABAJO/registro.json" \
+            --pdfs "$TRABAJO/pdfs-estado" --descargas "$TRABAJO/descargas.json" --out "$TRABAJO/construccion"
+          python scripts/expansion.py fuera --estado "$ESTADO" --construccion "$TRABAJO/construccion/resultado.json"
+          limpias=$(grep '^limpias=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)
+          [ "${limpias:-0}" -gt 0 ] || { echo "::error::Ninguna ley quedó limpia."; exit 1; }
+          python scripts/expansion.py registro --estado "$ESTADO" --salida "$TRABAJO/registro-final.json"
+          python -m pytest -q > "$TRABAJO/pytest.log" 2>&1 || { tail -n 40 "$TRABAJO/pytest.log"; exit 1; }
+
+      - name: Compuertas — nada de lo publicado cambia
+        # Reconstruye todo lo publicado (fiscal, federal y estatal) con el
+        # extractor y el módulo nuevo. Sin cambios, pasa. Si hay alguno (p. ej.
+        # una corrección de main aún sin confirmar), tiene que ser idéntico a lo
+        # que cambia sin el módulo.
+        id: impacto
+        if: steps.construir.outcome == 'success'
+        timeout-minutes: 120
+        env:
+          PARTIDA: ${{ steps.elegir.outputs.partida }}
+        run: |
+          cd /tmp/extractor
+          python scripts/impacto_corpus.py --trabajo "$TRABAJO/impacto-con" --cache "$PDF_CACHE" \
+            > "$TRABAJO/impacto-con.log" 2>&1 && rc=0 || rc=$?
+          tail -n 15 "$TRABAJO/impacto-con.log"
+          if [ "$rc" = 0 ] && [ "$(cat "$TRABAJO/impacto-con/cambios.json")" = "[]" ]; then exit 0; fi
+          [ "$rc" -le 2 ] || { echo "::error::No se pudo medir el impacto."; exit 1; }
+          echo "Hay cambios en lo publicado: se mide sin el módulo para comparar."
+          cd /tmp/limpio
+          python scripts/impacto_corpus.py --trabajo "$TRABAJO/impacto-sin" --cache "$PDF_CACHE" \
+            > "$TRABAJO/impacto-sin.log" 2>&1 || true
+          tail -n 5 "$TRABAJO/impacto-sin.log"
+          python /tmp/limpio/scripts/expansion.py impacto-igual "$TRABAJO/impacto-sin" "$TRABAJO/impacto-con"
+
+      - name: Publicar el módulo
+        id: publicar
+        if: steps.impacto.outcome == 'success'
+        env:
+          EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
+          EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
+          ESTADO: ${{ steps.elegir.outputs.estado }}
+          NOMBRE: ${{ steps.elegir.outputs.nombre }}
+          MODULO: ${{ steps.elegir.outputs.modulo }}
+          CORRIDA: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LIMPIAS: ${{ steps.construir.outputs.limpias }}
+          FUERA: ${{ steps.construir.outputs.fuera }}
+        run: |
+          bash /tmp/extractor/scripts/agente/expandir.sh publicar --leyes "$LIMPIAS" --fuera "${FUERA:-0}" --corrida "$CORRIDA"
+          echo "sha=$(cat "$TRABAJO/publicado.txt")" >> "$GITHUB_OUTPUT"
+
+      - name: Lanzar la vigilancia del estado nuevo
+        if: steps.publicar.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ESTADO: ${{ steps.elegir.outputs.estado }}
+        run: |
+          gh workflow run vigilar-leyes-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f estados="$ESTADO"
+          echo "Módulo de $ESTADO publicado (${{ steps.publicar.outputs.sha }}); vigilancia lanzada." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Anotar el resultado sin módulo
+        # Egress: el sitio rechaza IP extranjeras y su dominio no está en el
+        # Worker; solo se acepta si desde aquí de verdad no responde. Lo demás
+        # (sin fuente, sin veredicto, una compuerta que falló) es un intento
+        # fallido: el estado se reintenta hasta el tope.
+        if: always() && steps.elegir.outputs.hay == 'true' && steps.publicar.outcome != 'success'
+        env:
+          EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
+          EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
+          ESTADO: ${{ steps.elegir.outputs.estado }}
+          NOMBRE: ${{ steps.elegir.outputs.nombre }}
+          RESULTADO: ${{ steps.cerco.outputs.resultado }}
+          DOMINIO: ${{ steps.cerco.outputs.dominio }}
+          MOTIVO: ${{ steps.cerco.outputs.motivo }}
+          PERMITIDOS: ${{ steps.elegir.outputs.permitidos }}
+          CORRIDA: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PASOS: >-
+            cerco=${{ steps.cerco.outcome }}/${{ steps.cerco.outputs.ok }}
+            forma=${{ steps.forma.outcome }} construir=${{ steps.construir.outcome }}
+            impacto=${{ steps.impacto.outcome }} publicar=${{ steps.publicar.outcome }}
+        run: |
+          if [ "$RESULTADO" = egress ] && [ -n "$DOMINIO" ] && ! echo " $PERMITIDOS " | grep -qF " $DOMINIO "; then
+            code=$(curl -s -o /dev/null -m 30 -w '%{http_code}' "https://$DOMINIO/" || true)
+            if [ "${code:0:1}" != 2 ] && [ "${code:0:1}" != 3 ]; then
+              bash /tmp/extractor/scripts/agente/expandir.sh anotar --resultado egress --dominio "$DOMINIO" \
+                --motivo "$MOTIVO" --corrida "$CORRIDA"
+              exit 0
+            fi
+            MOTIVO="el agente dijo que $DOMINIO rechaza IP extranjeras, pero responde $code desde Actions"
+          fi
+          case "$RESULTADO" in
+            sin-fuente) motivo="sin fuente: $MOTIVO" ;;
+            modulo) motivo="no pasó las compuertas ($PASOS)" ;;
+            *) motivo="${MOTIVO:-el agente no entregó veredicto} ($PASOS)" ;;
+          esac
+          bash /tmp/extractor/scripts/agente/expandir.sh anotar --resultado fallido --motivo "$motivo" --corrida "$CORRIDA"
+
+      - name: Guardar el trabajo de la ronda
+        if: always() && steps.elegir.outputs.hay == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: expansion
+          path: |
+            /tmp/expansion/*.json
+            /tmp/expansion/*.md
+            /tmp/expansion/*.log
+            /tmp/expansion/*.err
+            /tmp/expansion/construccion/*.json
+            /tmp/expansion/impacto-*/resumen.json
+            /tmp/expansion/impacto-*/cambios.json
+            /tmp/extractor/extractor/estatales/*.py
+            /tmp/extractor/tests/test_estatal_*.py
+          retention-days: 30

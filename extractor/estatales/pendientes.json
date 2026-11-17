@@ -1,0 +1,180 @@
+{
+  "_nota": "Orden en que la ronda de expansión (expandir-estatales.yml) suma estados. Lo escribe scripts/expansion.py; ver «Ronda de expansión» en AGENTS.md.",
+  "tope_intentos": 3,
+  "estados": [
+    {
+      "estado": "guanajuato",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://congreso-gto.s3.amazonaws.com/uploads/reforma/pdf/3731/CPELYSG_REF_04Agosto2026.pdf."
+    },
+    {
+      "estado": "nuevo-leon",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://www.hcnl.gob.mx/trabajo_legislativo/leyes/pdf/CONSTITUCION%20POLITICA%20DEL%20ESTADO%20LIBRE%20Y%20SOBERANO%20DE%20NUEVO%20LEON.pdf."
+    },
+    {
+      "estado": "yucatan",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://www.congresoyucatan.gob.mx/storage/documentos/constitucion.pdf."
+    },
+    {
+      "estado": "edomex",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://legislacion.edomex.gob.mx/sites/legislacion.edomex.gob.mx/files/files/pdf/ley/vig/leyvig001.pdf (vía egress-mx: el sitio rechaza IP extranjeras)."
+    },
+    {
+      "estado": "veracruz",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://www.legisver.gob.mx/leyes/LeyesPDF/CONSTITUCION30102026AI.pdf (vía egress-mx: el sitio rechaza IP extranjeras)."
+    },
+    {
+      "estado": "puebla",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://ojp.puebla.gob.mx/media/k2/attachments/Constitucion_Politica_del_Estado_Libre_y_Soberano_de_Puebla_TEV_06032026.pdf."
+    },
+    {
+      "estado": "chiapas",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://www.congresochiapas.gob.mx/new/Info-Parlamentaria/LEY_0002.pdf."
+    },
+    {
+      "estado": "michoacan",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://congresomich.site/wp-content/uploads/2026/04/20251202_CONSTITUCION-POLITI_122754923.pdf."
+    },
+    {
+      "estado": "oaxaca",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://www.congresooaxaca.gob.mx/legislaciones/legislacion_estatal.html."
+    },
+    {
+      "estado": "chihuahua",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://www.congresochihuahua.gob.mx/biblioteca/constitucion/archivosConstitucion/actual.pdf."
+    },
+    {
+      "estado": "guerrero",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://congresogro.gob.mx/legislacion/CONSTITUCION-GUERRERO-15-06-2022.pdf."
+    },
+    {
+      "estado": "baja-california",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://www.congresobc.gob.mx/Documentos/ProcesoParlamentario/Leyes/TOMO_I/20260904_CONSTBC.PDF."
+    },
+    {
+      "estado": "sonora",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://gestion.api.congresoson.gob.mx/publico/descarga?uuid=30cd30a6-8667-4041-87ad-8ce1112c2be6."
+    },
+    {
+      "estado": "coahuila",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://www.congresocoahuila.gob.mx/transparencia/03/Leyes_Coahuila/coa01.pdf."
+    },
+    {
+      "estado": "tamaulipas",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://www.congresotamaulipas.gob.mx/Parlamentario/Archivos/Constituciones/Const%20Pol%20del%20Edo%20POE%2012-octubre%202026.pdf."
+    },
+    {
+      "estado": "sinaloa",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://gaceta.congresosinaloa.gob.mx:3001/pdfs/leyes/Ley_9.pdf."
+    },
+    {
+      "estado": "hidalgo",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://www.congreso-hidalgo.gob.mx/biblioteca_legislativa/leyes_cintillo/Constitucion%20Politica%20del%20Estado%20de%20Hidalgo.pdf."
+    },
+    {
+      "estado": "tabasco",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://congresotabasco.gob.mx/wp-content/uploads/2026/08/Constitucion-Politica-del-Estado-de-Tabasco1.pdf."
+    },
+    {
+      "estado": "san-luis-potosi",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de http://lx.congresosanluis.gob.mx/legislacion/constitucion."
+    },
+    {
+      "estado": "quintana-roo",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://www.congresoqroo.gob.mx/leyes/176/ (vía egress-mx: el sitio rechaza IP extranjeras)."
+    },
+    {
+      "estado": "morelos",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://marcojuridico.morelos.gob.mx/documentos/3/notas/download."
+    },
+    {
+      "estado": "aguascalientes",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://congresoags.gob.mx/agenda_legislativa/leyes/descargarPdf/2492."
+    },
+    {
+      "estado": "zacatecas",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://www.congresozac.gob.mx/65/ley&cual=333&tipo=pdf."
+    },
+    {
+      "estado": "durango",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://congresodurango.gob.mx/Archivos/legislacion/CONSTITUCION%20POLITICA%20DEL%20ESTADO%20(NUEVA).pdf."
+    },
+    {
+      "estado": "tlaxcala",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://congresodetlaxcala.gob.mx/archivo/leyes2020/pdf/5_constitucion_pol.pdf."
+    },
+    {
+      "estado": "nayarit",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://congresonayarit.gob.mx/wp-content/uploads/QUE_HACEMOS/LEGISLACION_ESTATAL/constitucion/Constitucion_Politica_del_Estado_Libre_y_Soberano_de_Nayarit.pdf."
+    },
+    {
+      "estado": "campeche",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://legislacion.congresocam.gob.mx/~documents/anticorrupcion/constitucion-politica-del-estado-de-camp/?layout=file."
+    },
+    {
+      "estado": "colima",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://ipecol.col.gob.mx/Documentacion/9824%7CConstituci%C3%B3n%20Pol%C3%ADtica%20del%20Estado%20Libre%20y%20Soberano%20de%20Colima."
+    },
+    {
+      "estado": "baja-california-sur",
+      "situacion": "pendiente",
+      "intentos": 0,
+      "pista": "La constitución del estado se descarga de https://www.cbcs.gob.mx/LEYES-BCS/CPoliticaBCS-.doc."
+    }
+  ]
+}

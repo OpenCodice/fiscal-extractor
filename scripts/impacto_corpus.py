@@ -409,6 +409,10 @@ def main(argv: list[str] | None = None) -> int:
                "regresiones": regresiones, "sin_pdf": sin_pdf, **resumen}
     (t / "resumen.json").write_text(json.dumps(informe, ensure_ascii=False, indent=1) + "\n",
                                     encoding="utf-8")
+    # Cada unidad que cambia y cómo (huella del texto antes y después): la ronda
+    # de expansión compara dos mediciones con esto (scripts/expansion.py).
+    (t / "cambios.json").write_text(json.dumps(sorted(list(c.llave) for c in cambios),
+                                               ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"{len(docs) - len(sin_pdf)} de {len(docs)} documentos reconstruidos "
           f"({len(sin_pdf)} sin su PDF publicado); cambian {len(cambios)} unidades en "
           f"{len(tocados)} ({', '.join(tocados[:8])}); {resumen['ya_mejora']} ya confirmadas, "

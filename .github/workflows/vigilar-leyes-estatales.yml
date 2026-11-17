@@ -275,6 +275,15 @@ jobs:
           cd /tmp/extractor
           python -m extractor estatal cerrar --plan "$PLAN" --out "$OUT" --trabajo "$AGENTE_DIR" --pdf-dir "$PDF_DIR"
 
+      - name: Tablas del README
+        # La de estados (con las leyes incluidas de cada uno) y la de
+        # automatización; las escribe scripts/readme_estatales.py de
+        # constitucion-extractor y van en el commit `Tipo: indice`.
+        run: |
+          git clone -q --depth 1 https://github.com/OpenCodice/constitucion-extractor.git /tmp/constitucion-extractor \
+            && python /tmp/constitucion-extractor/scripts/readme_estatales.py "$OUT" \
+            || echo "::warning::No se pudieron regenerar las tablas del README."
+
       - name: Validar invariantes (gate)
         run: |
           cd /tmp/extractor

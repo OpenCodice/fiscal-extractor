@@ -32,7 +32,10 @@ unidad está mal, se corrige aquí.
 - `extractor/estatal.py`, `extractor/estatales/` (un módulo por estado) y
   `extractor/disposicion.py` — el corpus de leyes estatales y dónde vive cada
   documento en su repo de datos. Ver «Leyes estatales».
-- `.github/workflows/vigilar-leyes-estatales.yml` — su vigilancia.
+- `.github/workflows/vigilar-leyes-estatales.yml` — su vigilancia, y
+  `expandir-estatales.yml` (con `scripts/expansion.py`,
+  `scripts/agente/expandir.sh` y `brief-expansion.md`), la ronda que suma
+  estados (ver «Ronda de expansión»).
 - `.github/workflows/vigilar-fiscal.yml` y `vigilar-federal.yml` — la vigilancia
   de `fiscal-mexicano` y `leyes-federales`. Viven aquí, no en los repos de
   datos, para que el historial de esos repos solo tenga cambios de texto legal.
@@ -394,3 +397,72 @@ nuevo, con su `MEDIO`), `build` + `auditar` en cero problemas sobre su PDF, y la
 vigilancia la da de alta tras su revisión completa. Si no puede quedar fiel
 (p. ej. el Código de Procedimientos Civiles de la CDMX, que reinicia su
 numeración en el Título Especial), va en `FUERA` con su motivo.
+
+## Ronda de expansión
+
+Suma un estado al corpus de leyes estatales por semana, sin que nadie trabaje
+en una computadora: `expandir-estatales.yml` (cada miércoles, lanzada por el
+Worker `scheduler`; a mano con `gh workflow run expandir-estatales.yml [-f
+estado=<slug>]`). La parte determinista vive en `scripts/expansion.py`.
+
+- **La lista:** `extractor/estatales/pendientes.json`, los estados sin módulo
+  en el orden en que se suman, cada uno con su `situacion` (`pendiente`,
+  `publicado`, `egress`, `agotado`), sus `intentos`, el `motivo` del último y
+  una `pista` (de dónde sale su constitución). Tope: 3 intentos por estado. La
+  escribe solo la ronda (no es un `*.py`: no entra en la huella del extractor,
+  y `impacto.yml` la ignora).
+- **Solo cuando la cadena anterior terminó:** ninguna `vigilar-leyes-estatales`
+  en curso o en cola, ningún PR suyo abierto y ninguna ley declarada sin alta
+  cuyo PDF responda (`expansion.py listo`). Si quedan altas (una tanda que no
+  continuó), la ronda relanza la vigilancia de esos estados y no empieza otro.
+  Un estado por ronda.
+- **Elegir y contar el intento** (`expansion.py elegir`): el primer `pendiente`
+  bajo el tope (o el del input `estado`). Un `egress` cuyo dominio ya aparece
+  en `PERMITIDOS` del Worker egress-mx (se lee de main de
+  constitucion-extractor) vuelve a `pendiente`. El intento se publica en main
+  antes del agente (`expandir.sh intento`): uno que se cae también cuenta.
+- **El agente** (`expandir.sh agente`, `brief-expansion.md`; solo
+  `CLAUDE_CODE_OAUTH_TOKEN`) encuentra el portal oficial de leyes vigentes
+  (WebSearch/WebFetch para buscar, `curl` desde el runner para descargar) y
+  escribe `extractor/estatales/<estado>.py` (`MEDIO`, 10 a 20 `LEYES` —códigos
+  y leyes orgánicas, sin leyes de ingresos ni presupuestos—, `FUERA` con su
+  motivo) y `tests/test_estatal_<estado>.py`, con build y auditar en cero
+  sobre cada PDF. Solo usa las opciones de `ley()`: el parser no lo toca (lo
+  que no quede fiel va a `FUERA`; lo arreglará `reparar` en otra ocasión). Si
+  el sitio rechaza IP extranjeras y su dominio está en egress-mx, descarga por
+  una puerta local (`scripts/agente/proxy_mx.py`, que tiene el token; el agente
+  no) y declara esas leyes con `via="mx"`; si no está, entrega `egress` y el
+  estado queda «necesita egress-mx: <dominio>» (se acepta solo si el dominio
+  de verdad no responde desde Actions). Agregar un dominio al Worker y
+  desplegarlo lo devuelve a la cola.
+- **Cerco** (un paso del workflow, sin secretos): solo cuentan dos archivos
+  nuevos, el módulo y sus pruebas. Si hizo commits o tocó cualquier otra cosa
+  (los demás módulos, `__init__.py`, el parser, `pendientes.json`), se deshace
+  todo y el intento falla.
+- **Compuertas:** `pytest` entero; `expansion.py registro` importa el módulo
+  sin secretos y comprueba su forma (claves del estado, `MEDIO`, `FUERA`, URL);
+  `expansion.py descargar` baja cada PDF desde un clon limpio del extractor de
+  partida con `python -I -S` (con `EGRESS_MX_TOKEN`, sin importar código del
+  agente: lee su registro como datos); `expansion.py construir` hace build y
+  auditar de cada ley y `fuera` agrega al final del módulo un bloque
+  `_FUERA_RONDA` que pasa a `FUERA` las que no quedaron en cero (con su motivo);
+  al menos una tiene que quedar limpia y las pruebas pasar otra vez. Por
+  último, `impacto_corpus.py` reconstruye todo lo publicado con el módulo: sin
+  ningún cambio, pasa; si hay alguno (una corrección de main aún sin
+  confirmar), tiene que ser idéntico al que da el extractor de partida
+  (`expansion.py impacto-igual`, sobre `cambios.json`). Una descarga que falla
+  es error de la ronda, no de la ley: no se publica nada.
+- **Publicar** (`expandir.sh publicar`, desde un clon limpio de main): copia
+  solo el módulo y sus pruebas, anota el estado `publicado` y sube un commit
+  «Leyes estatales: <Estado> (ronda de expansión)». Después lanza
+  `vigilar-leyes-estatales.yml -f estados=<estado>`: su cadena da de alta por
+  tandas tras la revisión completa, y `reparar` arregla lo que falle.
+- **Falla cerrada:** cualquier otro final (sin veredicto, una compuerta, un
+  error) anota el intento como fallido con su motivo, y el estado se reintenta
+  la ronda siguiente; al tope queda `agotado`. Nada se asigna a una persona.
+
+Un módulo nuevo cambia la huella del extractor de todas las leyes estatales
+(incluye `estatales/*.py`): la siguiente vigilancia completa las reconstruye
+(sin cambios de texto: lo garantiza la compuerta de impacto) y reintenta las
+excluidas, cuyos bloques sin cambios reusan sus veredictos.
+
