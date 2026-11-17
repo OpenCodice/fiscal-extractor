@@ -3,7 +3,8 @@
 
 Reconstruye cada documento publicado de fiscal-mexicano y de leyes-federales
 desde el PDF exacto de su versión publicada (el sha256 que guardan
-`metadata/documentos.json` y `fuentes.json`), compara unidad por unidad contra
+`metadata/documentos.json` y `fuentes.json` o, si no, el `Fuente-Sha256` del
+último commit del documento), compara unidad por unidad contra
 el texto publicado (HEAD del repo de datos, no su árbol de trabajo) y deja en
 `--trabajo` las correcciones que eso produciría y que el registro de
 `scripts/impacto.py` aún no confirma (`pendientes.json`, para
@@ -14,7 +15,9 @@ el cambio del extractor no puede entrar.
 Los PDF no se versionan: se buscan por sha256 en `--pdf-dir` (los que ya
 descargó la vigilancia) y en `--cache`, y si no, se descargan de su URL; si la
 fuente ya publica otro PDF (hubo una reforma), ese documento no se puede medir
-y queda anotado: su corrección la exige después la vigilancia.
+y queda anotado: su corrección la exige después la vigilancia. Si no se sabe el
+sha256 publicado (versiones anteriores a que se guardara), vale el PDF de hoy
+cuando su versión es la publicada.
 
 Sale 0 si no queda nada por verificar ni hay regresiones, 1 si hay correcciones
 por verificar, 2 si hay regresiones de cobertura, errores de extracción o
@@ -51,10 +54,24 @@ def _git(repo, *args, binario=False):
 
 
 def clonar(nombre: str, destino: Path) -> Path:
+    # Con historia: el sha256 del PDF publicado puede estar solo en los
+    # trailers del último commit del documento.
     if not (destino / ".git").exists():
-        subprocess.run(["git", "clone", "-q", "--depth", "1", f"{ORG}/{nombre}.git", str(destino)],
-                       check=True)
+        subprocess.run(["git", "clone", "-q", f"{ORG}/{nombre}.git", str(destino)], check=True)
     return destino
+
+
+def sha_publicado(repo: Path, clave: str) -> str | None:
+    """Fuente-Sha256 del último commit del documento: el PDF de su versión
+    publicada, cuando el índice no lo guarda."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import trailers as tr
+    for rev in _git(repo, "log", "--format=%H", "-n", "20", "HEAD", "--", clave,
+                    f"metadata/{clave}").split():
+        _, t = tr.parsear(_git(repo, "log", "-1", "--format=%B", rev))
+        if tr.valor(t, "Documento") == clave and tr.valor(t, "Fuente-Sha256"):
+            return tr.valor(t, "Fuente-Sha256")
+    return None
 
 
 def _sha256(ruta: Path) -> str:
@@ -74,7 +91,8 @@ def documentos(fiscal: Path | None, federal: Path | None, trabajo: Path) -> list
         for e in indice["documentos"]:
             idx = json.loads(_git(fiscal, "show", f"HEAD:metadata/{e['clave']}/articulos.json"))
             docs.append({"repo": fiscal, "nombre": "fiscal-mexicano", "clave": e["clave"],
-                         "url": idx.get("fuente"), "sha256": e.get("pdf_sha256"),
+                         "url": idx.get("fuente"),
+                         "sha256": e.get("pdf_sha256") or sha_publicado(fiscal, e["clave"]),
                          "registro": None})
     if federal:
         registro = trabajo / "fuentes.json"
@@ -82,7 +100,8 @@ def documentos(fiscal: Path | None, federal: Path | None, trabajo: Path) -> list
         for e in json.loads(registro.read_text(encoding="utf-8"))["documentos"]:
             if e.get("estado") == "incluida":
                 docs.append({"repo": federal, "nombre": "leyes-federales", "clave": e["clave"],
-                             "url": e.get("url"), "sha256": (e.get("pdf") or {}).get("sha256"),
+                             "url": e.get("url"),
+                             "sha256": (e.get("pdf") or {}).get("sha256") or sha_publicado(federal, e["clave"]),
                              "registro": str(registro)})
     return docs
 
@@ -94,28 +113,38 @@ class PDFs:
         self.cache = cache
         cache.mkdir(parents=True, exist_ok=True)
         self.por_sha = {p.stem: str(p) for p in cache.glob("*.pdf")}
+        self.por_clave: dict[str, str] = {}
         for d in dirs:
             for p in Path(d).glob("*.pdf"):
                 self.por_sha.setdefault(_sha256(p), str(p))
+                self.por_clave.setdefault(p.stem.lower(), str(p))
 
-    def obtener(self, sha: str | None, url: str | None) -> str | None:
+    def obtener(self, sha: str | None, url: str | None, clave: str) -> str | None:
+        """El PDF con ese sha256; sin sha (versiones publicadas antes de que se
+        guardara), el de hoy: el ya descargado o el que publica la URL."""
         if sha and sha in self.por_sha:
             return self.por_sha[sha]
-        if not (sha and url):
+        if not sha and clave in self.por_clave:
+            return self.por_clave[clave]
+        if not url:
             return None
-        destino = self.cache / f"{sha}.pdf"
-        tmp = self.cache / f"{sha}.descarga"
+        nombre = sha or "url-" + hashlib.sha256(url.encode()).hexdigest()[:16]
+        destino = self.cache / f"{nombre}.pdf"
+        if destino.exists():
+            return str(destino)
+        tmp = self.cache / f"{nombre}.descarga"
         try:
             sys.path.insert(0, str(EXTRACTOR))
             from extractor.fuentes import descargar
             descargar(url, str(tmp))
         except Exception:                            # noqa: BLE001 — sin PDF no se mide
             return None
-        if _sha256(tmp) != sha:
+        real = _sha256(tmp)
+        if sha and real != sha:
             tmp.unlink(missing_ok=True)
             return None
         tmp.rename(destino)
-        self.por_sha[sha] = str(destino)
+        self.por_sha[real] = str(destino)
         return str(destino)
 
 
@@ -146,7 +175,7 @@ def evaluar(d: dict, trabajo: Path, pdfs: PDFs) -> dict:
     nombre = f"{d['nombre']}__{d['clave']}"
     res = {"documento": d["clave"], "repo": d["nombre"], "pdf_sha256": d["sha256"], "pdf": None,
            "error": None, "sin_pdf": False, "cambios": [], "regresiones": []}
-    pdf = pdfs.obtener(d["sha256"], d["url"])
+    pdf = pdfs.obtener(d["sha256"], d["url"], d["clave"])
     if pdf is None:
         res["sin_pdf"] = True
         return res
@@ -163,6 +192,19 @@ def evaluar(d: dict, trabajo: Path, pdfs: PDFs) -> dict:
                                "--sin-pasajes"], d["registro"])
     if res["error"]:
         return res
+    if not d["sha256"]:
+        # Sin el sha256 publicado, el PDF de hoy solo vale si es la misma
+        # versión (la fecha de su portada) que la publicada.
+        leer = lambda raiz: json.loads((raiz / "metadata" / d["clave"] / "articulos.json")
+                                       .read_text(encoding="utf-8")).get("version")
+        try:
+            misma = leer(pub) == leer(nuevo)
+        except (OSError, ValueError):
+            misma = False
+        if not misma:
+            res["sin_pdf"] = True
+            return res
+        res["pdf_sha256"] = _sha256(Path(pdf))
     nuevos = {p.stem: p.read_bytes() for p in (nuevo / d["clave"]).glob("*.md")}
     for clave in sorted(set(publicado) | set(nuevos)):
         a, b = publicado.get(clave), nuevos.get(clave)
