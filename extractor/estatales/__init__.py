@@ -66,6 +66,7 @@ def ley(estado: str, nombre: str, sigla: str, *, medio: str, indice: str | None 
         patron: str | None = None, url: str | None = None, orden: str = "unico",
         clave: str | None = None, huecos: bool = True, notas: str | None = None,
         notas_previas: str | None = None, via: str | None = None,
+        notas_en_linea: str | None = None,
         titulos_encabezado: tuple[str, ...] = ()) -> Documento:
     """Una ley estatal del registro. `huecos`: los PDF estatales suelen omitir
     los artículos derogados (ver `articulado.parse_texto`)."""
@@ -75,6 +76,7 @@ def ley(estado: str, nombre: str, sigla: str, *, medio: str, indice: str | None 
         clave=f"{estado}/{clave or clave_de(nombre)}", etiqueta=nombre, sigla=sigla,
         tipo="ley", parser="articulado", url=url, indice=indice, patron=patron,
         medio=medio, orden=orden, huecos=huecos, notas=notas, notas_previas=notas_previas,
+        notas_en_linea=notas_en_linea,
         via=via, titulos_encabezado=titulos_encabezado)
 
 

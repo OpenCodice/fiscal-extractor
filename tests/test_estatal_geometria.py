@@ -153,3 +153,21 @@ def test_notas_del_editor_y_fe_de_erratas():
     for s in ("Fe de Erratas G.O. CDMX 13/11/2023", "Sic. G.O. CDMX 07/06/2017"):
         assert notas.match(s)
     assert not notas.match("Fe de lo anterior dará cuenta el Secretario.")
+
+
+def test_queretaro_notas_a_renglon_seguido_y_ficha():
+    from extractor.estatales import queretaro
+    from extractor.parsers.articulado import _notas_aparte, fechas_en_notas
+    nota = re.compile(queretaro.NOTAS_EN_LINEA)
+    pagina = ("I. Garantizar la vida; (Ref. P. O. No. 75, 31-X-22)\n"
+              "II. Definir la competencia (Adición P. O. No.\n102, 27-XII-23)\nIII. Sigue.")
+    assert _notas_aparte([pagina], nota)[0].split("\n") == [
+        "I. Garantizar la vida;", "(Ref. P. O. No. 75, 31-X-22)", "II. Definir la competencia",
+        "(Adición P. O. No. 102, 27-XII-23)", "III. Sigue."]
+    notas = re.compile(queretaro.NOTAS)
+    assert [d.isoformat() for d in fechas_en_notas(
+        "(Ref. P. O. No. 14, 2-IV-99)\n(Ref. P. O. N o. 12, 25-II-11)", notas)] == [
+        "1999-04-02", "2011-02-25"]
+    # La ficha genealógica cita 'Art. 1° Transitorio': no abre el artículo 1.
+    assert not ARTICULO_ESTATAL_RE.match("Entrada en vigor 04/12/2021 (Art. 1°")
+    assert not ARTICULO_ESTATAL_RE.match("Art. 1°")

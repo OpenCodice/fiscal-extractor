@@ -69,7 +69,7 @@ ARTICULO_RE = re.compile(
 ORDINALES_ESTATAL = (ORDINALES + "|Quitus|Quintos|Sextus|Sexties|S[ée]ptimus|Octavus|"
                      "Undecies|Duodecies|Cuarter")
 ARTICULO_ESTATAL_RE = re.compile(
-    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art(?=\.\s*\d)|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
+    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
     r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-])|(?<=\d)(?=[A-Z]\.))([A-Z])(?![A-Za-z]))?"  # letra "-A", " A." (118 A.) o "132G."
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
@@ -269,6 +269,10 @@ NUEVO_RE = re.compile(
 FECHA_LARGA_RE = re.compile(
     r"(\d{1,2})\s+DE\s+(" + "|".join(MESES) + r")\s+(?:DE|DEL)\s+(\d{4})", re.IGNORECASE)
 FECHA_NUMERICA_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})\b")
+# Con el mes en romano: '(Ref. P. O. No. 75, 31-X-22)' (Querétaro).
+FECHA_ROMANA_RE = re.compile(r"\b(\d{1,2})-\s?(XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)-(\d{4}|\d{2})\b")
+_MES_ROMANO = {r: n for n, r in enumerate(
+    "I II III IV V VI VII VIII IX X XI XII".split(), 1)}
 
 
 def fechas_en_notas(texto: str, notas: re.Pattern) -> list[date]:
@@ -286,6 +290,13 @@ def fechas_en_notas(texto: str, notas: re.Pattern) -> list[date]:
                 anio = int(a) if len(a) == 4 else 2000 + int(a)
                 try:
                     out.add(date(anio, int(m), int(d)))
+                except ValueError:
+                    continue
+            for d, m, a in FECHA_ROMANA_RE.findall(ln):
+                # '2-IV-99' es de 1999: las compilaciones empiezan en el siglo XX.
+                anio = int(a) if len(a) == 4 else (2000 if int(a) < 50 else 1900) + int(a)
+                try:
+                    out.add(date(anio, _MES_ROMANO[m], int(d)))
                 except ValueError:
                     continue
     return sorted(out)
@@ -433,6 +444,8 @@ def limpiar_paginas(paginas: list[str], doc: Documento, formulas: bool = False) 
     if doc.medio:
         paginas = [unicodedata.normalize("NFC", t) for t in paginas]
     limpias = (_quitar_encabezados(_quitar_marca_girada(t), fuera, prefijos) for t in paginas)
+    if doc.notas_en_linea:
+        limpias = _notas_aparte(list(limpias), re.compile(doc.notas_en_linea))
     if not formulas:
         return "\n".join(limpias)
     # Se detecta sobre el texto ya unido: una fórmula que cruza el salto de
@@ -443,6 +456,24 @@ def limpiar_paginas(paginas: list[str], doc: Documento, formulas: bool = False) 
         lineas += partes
         pagina_de += [n] * len(partes)
     return sustituir_formulas("\n".join(lineas), pagina_de)
+
+
+def _notas_aparte(paginas: list[str], nota: re.Pattern) -> list[str]:
+    """Cada nota a renglón seguido en su propio renglón, sin el salto que la
+    partía. Una nota partida por el salto de página se queda como está."""
+    salida = []
+    for texto in paginas:
+        partes, previo = [], 0
+        for m in nota.finditer(texto):
+            antes = texto[previo:m.start()].rstrip(" \t")
+            partes.append(antes + ("\n" if antes and not antes.endswith("\n") else ""))
+            partes.append(re.sub(r"\s*\n\s*", " ", m.group(0)))
+            previo = m.end()
+            if previo < len(texto) and texto[previo] != "\n":
+                partes.append("\n")
+                previo += len(texto[previo:]) - len(texto[previo:].lstrip(" \t"))
+        salida.append("".join(partes) + texto[previo:])
+    return salida
 
 
 def texto_limpio(pdf_path: str, doc: Documento) -> str:
@@ -695,6 +726,29 @@ FECHA_TABLA_RE = re.compile(
     r"\b(" + "|".join(sorted(_MES_CORTO, key=len, reverse=True)) +
     r")\.?\s*(\d{1,2})\s*(?:de|del)\s+(\d{4})", re.IGNORECASE)
 PAGINAS_TABLA = 60
+# Las de Querétaro abren con su 'Ficha Genealógica': la versión primigenia y el
+# historial de cambios, cada uno con su fecha de publicación (dd/mm/aaaa),
+# hasta 'Todas las fechas de la tabla son expresadas en el formato dd/mm/aaaa'.
+FICHA_RE = re.compile(r"Ficha\s+Geneal[óo]gica")
+FIN_FICHA_RE = re.compile(r"Todas\s+las\s+fechas\s+de\s+la\s+tabla")
+PAGINAS_FICHA = 15
+
+
+def _fecha_ficha(pdf) -> date | None:
+    """La fecha más reciente de la ficha genealógica de la portada."""
+    texto = ""
+    for page in pdf.pages[:PAGINAS_FICHA]:
+        texto += (page.extract_text() or "") + "\n"
+        fin = FIN_FICHA_RE.search(texto)
+        if fin:
+            fechas = []
+            for d, m, a in re.findall(r"\b(\d{2})/(\d{2})/(\d{4})\b", texto[:fin.start()]):
+                try:
+                    fechas.append(date(int(a), int(m), int(d)))
+                except ValueError:
+                    continue
+            return max(fechas) if fechas else None
+    return None
 
 
 def _fecha_tabla_reformas(pdf) -> date | None:
@@ -731,6 +785,8 @@ def fecha_version(pdf_path: str, doc: Documento | None = None) -> date | None:
         m = VERSION_ESTATAL_RE.search(head)
         if m:
             return date(int(m.group(3)), MESES[m.group(2).lower()], int(m.group(1)))
+        if FICHA_RE.search(head):
+            return _fecha_ficha(pdf)
         return _fecha_tabla_reformas(pdf)
 
 

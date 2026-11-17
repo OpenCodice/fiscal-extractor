@@ -62,6 +62,11 @@ class Documento:
     notas_previas: str | None = None
     # 'mx': el sitio rechaza IP extranjeras; se descarga por el Worker egress-mx.
     via: str | None = None
+    # Notas que el PDF escribe a renglón seguido, al final del párrafo que
+    # anotan y a veces partidas entre dos renglones ('…de la vida; (Ref. P. O.
+    # No. 75, 31-X-22)', Querétaro): cada una pasa a su propio renglón, donde
+    # `notas` la reconoce.
+    notas_en_linea: str | None = None
 
 
 def _ley(clave, etiqueta, sigla, archivo, encabezado="", *, parser="articulado",
@@ -221,7 +226,7 @@ def a_dict(doc: Documento) -> dict:
             d[campo] = getattr(doc, campo)
     if doc.titulos_encabezado:
         d["titulos_encabezado"] = list(doc.titulos_encabezado)
-    for campo in ("medio", "notas", "notas_previas", "via"):
+    for campo in ("medio", "notas", "notas_previas", "via", "notas_en_linea"):
         if getattr(doc, campo):
             d[campo] = getattr(doc, campo)
     if doc.orden != "ddmmaaaa":
@@ -241,7 +246,7 @@ def de_dict(d: dict) -> Documento:
         medio=d.get("medio"), orden=d.get("orden", "ddmmaaaa"),
         huecos=bool(d.get("huecos")), notas=d.get("notas"),
         notas_previas=d.get("notas_previas"),
-        via=d.get("via"),
+        via=d.get("via"), notas_en_linea=d.get("notas_en_linea"),
     )
 
 
