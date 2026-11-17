@@ -59,8 +59,15 @@ unidad está mal, se corrige aquí.
   auditoría determinista falla. `brief-revision.md` / `revision-federal.sh` +
   `brief-revision-federal.md`: la revisión completa de un alta.
   `impacto.sh` + `brief-impacto.md`: el agente que solo juzga si cada
-  corrección es mejora. `publicar_registro.sh` sube a main los registros de
-  `verificaciones/`.
+  corrección es mejora. `reparar.sh` + `brief-reparacion.md`: el agente que
+  repara el extractor a partir de los hallazgos de la revisión completa (ver
+  «Reparación autónoma»). `publicar_registro.sh` sube a main los registros de
+  `verificaciones/` (y falla si no puede: lo que dependa de ese registro se
+  aplaza).
+- `scripts/reparacion.py` y `extractor/reparaciones.py` — la parte
+  determinista de esa reparación: qué leyes y qué defecto, sus PDF, las
+  compuertas sobre las leyes elegidas y el registro de intentos
+  (`verificaciones/reparaciones/*.jsonl`).
 - `scripts/impacto.py` — registro de correcciones confirmadas
   (`verificaciones/impacto/*.jsonl`: documento, unidad, sha256 del PDF y del
   texto antes y después, veredicto), su exigencia sobre los commits de una
@@ -72,7 +79,8 @@ unidad está mal, se corrige aquí.
   (y regresiones de cobertura).
 - `scripts/revision.py` — revisión completa de un alta: bloques de unidades
   con el texto crudo de sus páginas, y el resultado en
-  `verificaciones/altas/*.jsonl`.
+  `verificaciones/altas/*.jsonl` (con cada hallazgo, del que parte la
+  reparación autónoma).
 - `.github/workflows/impacto.yml` — en cada push a main que toca `extractor/`
   (un commit a mano incluido) mide su impacto en todo lo publicado y confirma
   las correcciones con el agente.
@@ -217,8 +225,59 @@ no lo publica solo con eso: el agente lo revisa entero contra el PDF, por
 bloques (`scripts/revision.py`), y un alta con hallazgos (o que no se pudo
 revisar) se queda fuera de esa corrida. Las leyes federales nuevas pasan por lo
 mismo (`revision-federal.sh`, hasta 3 por corrida; las demás se aplazan): con
-hallazgos quedan `excluida` en `fuentes.json` con su motivo y se reintentan
-cuando cambia el PDF o el extractor.
+hallazgos quedan `excluida` en `fuentes.json` con su motivo, el job `reparar`
+intenta arreglar el extractor (ver «Reparación autónoma») y se reintentan
+cuando cambia el PDF o el extractor. `federal cerrar` solo publica un alta con
+la marca positiva de su revisión (`revisada`, la pone `revision-federal.sh
+cerrar`): sin ella, se aplaza.
+
+## Reparación autónoma
+
+Cuando la revisión completa de una ley (o, en las estatales, su auditoría)
+encuentra defectos, la ley queda fuera (o conserva su versión anterior con
+`revision_pendiente`) y el sistema intenta repararse solo, sin una persona. El
+job `reparar` de `vigilar-leyes-estatales.yml` y `vigilar-federal.yml`, después
+de `cerrar` y con su propio tiempo:
+
+1. `reparacion.py objetivo` junta los hallazgos de las leyes con defectos: las
+   de esta corrida y las que `fuentes.json` tiene `excluida` o con
+   `revision_pendiente` revisada (de los veredictos de la caché, del registro
+   `verificaciones/altas/` o, si no, del motivo). Los clasifica por tipo
+   (artículo absorbido, nota de reforma, corte de párrafo, pie de página,
+   estructura, auditoría) y elige el tipo que más leyes comparten, hasta 4
+   leyes: un solo arreglo para varias, y una sola sesión del agente por corrida.
+2. `preparar` descarga sus PDF (si ya no es el que se revisó, la ley sale: la
+   vigilancia la reprocesa) y anota el intento como `iniciado` en
+   `verificaciones/reparaciones/` antes de que trabaje el agente: un intento que
+   se cae también cuenta.
+3. `reparar.sh agente` (solo con `CLAUDE_CODE_OAUTH_TOKEN`) corrige `extractor/`
+   y `tests/` con `brief-reparacion.md`: lo estatal detrás del flag `estatal`
+   del articulado o en la definición de la ley, y siempre con una prueba nueva
+   `tests/test_reparacion_<tema>.py`.
+4. Un paso del workflow (fuera del alcance del agente) deshace todo si el agente
+   tocó algo fuera de `extractor/` y `tests/` o hizo commits, y comprueba que
+   el objetivo y los PDF no cambiaron. `reparar.sh compuertas` (sin secretos)
+   exige: ni `verificar.py` ni `validate.py` ni pruebas existentes tocadas, una
+   prueba nueva, `pytest` en verde, otra huella del extractor (si no, ninguna
+   ley se reintentaría), las leyes elegidas reconstruidas con el extractor de
+   partida (un `git worktree`) y con el arreglo sin unidades con problemas
+   nuevas y con algún texto distinto, y `impacto_corpus.py` sobre todo lo
+   publicado (fiscal, federal y estatal). Lo que cambie en lo publicado lo
+   juzga `impacto.sh`; `reparar.sh publicar` solo sube el arreglo a main si
+   todo quedó confirmado como mejora, y anota el intento como `publicado` o
+   `descartado` con su motivo.
+5. Con un arreglo publicado, el job lanza otra vigilancia: la huella del
+   extractor cambió, así que `planear` reintenta las leyes excluidas
+   (`reintento`) y manda a revisar otra vez lo publicado con
+   `revision_pendiente` (`plan["revisar"]`). Sus bloques sin cambios reusan sus
+   veredictos; solo se paga lo que cambió.
+
+Tope: 3 intentos por ley y PDF (`extractor/reparaciones.py`). Una ley que lo
+alcanza y vuelve a salir con defectos queda `excluida` con `reparacion:
+{agotada: true}` y la nota en su motivo (o `revision_pendiente.agotada`), y ya
+no se reintenta cuando cambia el extractor: solo con otro PDF, con el que los
+intentos empiezan de cero. En las leyes estatales la huella del extractor
+incluye además `estatales/*.py` y `disposicion.py`.
 
 ## Leyes estatales
 
@@ -264,9 +323,11 @@ fase (2026-11-17):
   revisión completa por bloques (`revision-federal.sh` con
   `brief-revision-estatal.md`), de la más corta a la más larga, hasta 2.5
   millones de caracteres por corrida y 4 a la vez; una revisión a medias se
-  aplaza y retoma sus veredictos de la caché de Actions. Aquí el agente no
-  repara el extractor: un arreglo entra por main y pasa por `impacto.yml`, que
-  mide ya también estas leyes (`impacto_corpus.py --estatal`). El PR va a la
+  aplaza y retoma sus veredictos de la caché de Actions. Los hallazgos de esa
+  revisión (y las fallas de la auditoría) los repara un agente en el job
+  `reparar` (ver «Reparación autónoma»); un arreglo a mano entra por main y
+  pasa por `impacto.yml`, que mide ya también estas leyes
+  (`impacto_corpus.py --estatal`). El PR va a la
   rama `reforma/leyes-estatales`, la que `revisar-pr` de leyes-estatales
   fusiona; ese `revisar-pr` valida los trailers con la copia de
   `scripts/validar_commits.py` de constitucion-extractor, que debe estar al día.
