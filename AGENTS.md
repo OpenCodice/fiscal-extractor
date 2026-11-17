@@ -92,9 +92,11 @@ unidad está mal, se corrige aquí.
   vigilancia (`pendientes-commits`, `cerrar`, `exigir`) y el agrupado de
   cambios iguales para que el agente revise pocos.
 - `scripts/impacto_corpus.py` — reconstruye cada documento publicado de
-  fiscal-mexicano y leyes-federales desde el PDF exacto de su versión
-  publicada (por sha256; caché en `--cache`) y lista cada unidad que cambiaría
-  (y regresiones de cobertura).
+  fiscal-mexicano, leyes-federales y las leyes de leyes-estatales desde el PDF
+  exacto de su versión publicada (por sha256; caché en `--cache`, que se
+  comprueba por sha256 al usarla) y lista cada unidad que cambiaría (y
+  regresiones de cobertura). `--solo-pdfs` solo llena la caché; `--medir` es la
+  medición de solo lectura del agente reparador (ver «Reparación autónoma»).
 - `scripts/revision.py` — revisión completa de un alta: bloques de unidades
   con el texto crudo de sus páginas, y el resultado en
   `verificaciones/altas/*.jsonl` (con cada hallazgo, del que parte la
@@ -268,13 +270,28 @@ de `cerrar` y con su propio tiempo:
    vigilancia la reprocesa) y anota el intento como `iniciado` en
    `verificaciones/reparaciones/` antes de que trabaje el agente: un intento que
    se cae también cuenta.
-3. `reparar.sh agente` (solo con `CLAUDE_CODE_OAUTH_TOKEN`) corrige `extractor/`
-   y `tests/` con `brief-reparacion.md`: lo estatal detrás del flag `estatal`
-   del articulado o en la definición de la ley, y siempre con una prueba nueva
-   `tests/test_reparacion_<tema>.py`.
+3. `reparar.sh medicion` deja al alcance del agente los PDF de todo lo
+   publicado (`impacto_corpus.py --solo-pdfs`, en la caché `pdfs-corpus` de
+   Actions, con `EGRESS_MX_TOKEN`, que el agente no tiene) y los clones de los
+   repos de datos. `reparar.sh agente` (solo con `CLAUDE_CODE_OAUTH_TOKEN`)
+   corrige `extractor/` y `tests/` con `brief-reparacion.md`: el arreglo más
+   local posible (la definición de la ley, o detrás del flag `estatal` del
+   articulado, con condiciones estrictas; reglas generales como `normalize.py`
+   o la geometría de cortes solo si la medición lo justifica), siempre con una
+   prueba nueva `tests/test_reparacion_<tema>.py`. Antes de entregar mide él
+   mismo el impacto en lo publicado con `impacto_corpus.py --medir` (solo
+   lectura: `medicion.md` con cada unidad que cambia, dentro o fuera de sus
+   leyes `--objetivo`, su veredicto previo en el registro y su diff): la
+   medición rápida (las leyes estatales publicadas o, en el corpus federal,
+   `--muestra 40`) tras cada cambio y la completa (~30 min) una vez al final.
+   Lo que cambie fuera del objetivo tiene que ser una mejora clara contra el
+   PDF; si no lo logra, entrega solo la parte segura o nada. Se estrenó porque
+   los primeros intentos (corrida 44093775468) arreglaban sus 4 leyes tocando
+   reglas generales y el juez rechazó 70 de 74 unidades cambiadas en otras
+   leyes. Esa medición es solo una ayuda: las compuertas la repiten y deciden.
 4. Un paso del workflow (fuera del alcance del agente) deshace todo si el agente
    tocó algo fuera de `extractor/` y `tests/` o hizo commits, y comprueba que
-   el objetivo y los PDF no cambiaron. `reparar.sh compuertas` (sin secretos)
+   el objetivo, los PDF y el repo de datos no cambiaron. `reparar.sh compuertas` (sin secretos)
    exige: ni `verificar.py` ni `validate.py` ni pruebas existentes tocadas, una
    prueba nueva, `pytest` en verde, otra huella del extractor (si no, ninguna
    ley se reintentaría), las leyes elegidas reconstruidas con el extractor de

@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # Reparación autónoma del extractor a partir de los hallazgos de la revisión
 # completa (scripts/reparacion.py elige las leyes y el tipo de defecto). Tres
-# fases, en tres pasos del workflow:
+# fases, en tres pasos del workflow, más la preparación de su medición:
 #
+#   reparar.sh medicion — antes del agente, con la red que él no tiene
+#     (EGRESS_MX_TOKEN): clona los repos de datos y deja en PDF_CACHE el PDF de
+#     cada documento publicado, para que el agente mida él mismo el impacto de
+#     su arreglo (scripts/impacto_corpus.py --medir). Si falla, el agente
+#     trabaja igual, sin esa ayuda.
 #   reparar.sh agente — con CLAUDE_CODE_OAUTH_TOKEN y nada más. El agente
-#     cambia extractor/ y tests/ para que desaparezcan los hallazgos.
+#     cambia extractor/ y tests/ para que desaparezcan los hallazgos, y mide lo
+#     que su arreglo cambia en lo publicado. Esa medición solo le ayuda: deciden
+#     las compuertas.
 #   reparar.sh compuertas — sin secretos ni agente. Alcance (solo extractor/ y
 #     tests/, ni verificar.py ni validate.py ni pruebas existentes, y una prueba
 #     nueva), pruebas, huella del extractor, las leyes elegidas reconstruidas
@@ -27,7 +34,7 @@
 # EXTRACTOR_SLUG o EXTRACTOR_PUSH_URL (pruebas).
 set -uo pipefail
 
-FASE="${1:?uso: reparar.sh agente|compuertas|publicar}"
+FASE="${1:?uso: reparar.sh medicion|agente|compuertas|publicar}"
 EXTRACTOR="$(cd "$(dirname "$0")/../.." && pwd)"
 TRABAJO="${AGENTE_DIR:-/tmp/agente}"
 REP="$TRABAJO/reparacion"
@@ -42,14 +49,38 @@ esac
 
 hay_objetivo() { [ -s "$REP/objetivo.json" ]; }
 
+MEDICION="$REP/medicion"
+CACHE="${PDF_CACHE:-/tmp/pdfs-corpus}"
+
+medicion() {
+  hay_objetivo || return 0
+  mkdir -p "$MEDICION/clones"
+  # El repo de datos de esta corrida, con historia (sha_publicado la lee); los
+  # demás los clona impacto_corpus.py de GitHub.
+  case "$CORPUS" in estatal) propio=estatal ;; *) propio=federal ;; esac
+  [ -d "$MEDICION/clones/$propio/.git" ] || git clone -q "$OUT" "$MEDICION/clones/$propio"
+  python scripts/impacto_corpus.py --solo-pdfs --trabajo "$MEDICION" \
+    --pdf-dir "$REP/pdfs" --cache "$CACHE" \
+    || echo "::warning::No se pudo preparar la medición del agente reparador."
+}
+
 agente() {
   hay_objetivo || { echo "Sin leyes que reparar."; return 0; }
   rm -f "$REP/veredicto.json"
   mkdir -p "$REP/datos"
-  python3 - "$REP" "$EXTRACTOR" <<'PY'
-import json, pathlib, sys
-rep, extractor = pathlib.Path(sys.argv[1]), sys.argv[2]
+  python3 - "$REP" "$EXTRACTOR" "$CORPUS" "$CACHE" "${AGENTE_MINUTOS:-150}" <<'PY'
+import datetime, json, pathlib, shlex, sys
+rep, extractor, corpus, cache, minutos = pathlib.Path(sys.argv[1]), *sys.argv[2:4], sys.argv[4], int(sys.argv[5])
 o = json.loads((rep / "objetivo.json").read_text(encoding="utf-8"))
+medir = (f"python scripts/impacto_corpus.py --medir --trabajo {shlex.quote(str(rep / 'medicion'))} "
+         f"--cache {shlex.quote(cache)} --pdf-dir {shlex.quote(str(rep / 'pdfs'))} "
+         + " ".join(f"--objetivo {shlex.quote(e['clave'])}" for e in o["leyes"]))
+# Paso rápido: las leyes estatales publicadas (lo que toca el flag `estatal`)
+# o, en el corpus federal, una muestra de las federales.
+rapido = medir + (" --sin-fiscal --sin-federal" if corpus == "estatal"
+                  else " --sin-fiscal --sin-estatal --muestra 40")
+ahora = datetime.datetime.now(datetime.timezone.utc)
+hora = lambda m: (ahora + datetime.timedelta(minutes=m)).strftime("%H:%M UTC")
 lineas = []
 for e in o["leyes"]:
     propios = [h for h in e["hallazgos"] if h.get("categoria") == o["grupo"]]
@@ -63,11 +94,15 @@ brief = pathlib.Path(extractor, "scripts/agente/brief-reparacion.md").read_text(
 for k, v in {"__EXTRACTOR__": extractor, "__PDFS__": str(rep / "pdfs"),
              "__REGISTRO__": str(rep / "registro.json"), "__TRABAJO__": str(rep),
              "__VEREDICTO__": str(rep / "veredicto.json"), "__DESCRIPCION__": o["descripcion"],
-             "__HALLAZGOS__": "\n".join(lineas)}.items():
+             "__HALLAZGOS__": "\n".join(lineas), "__MEDIR_RAPIDO__": rapido,
+             "__MEDIR_COMPLETO__": medir, "__MEDICION__": str(rep / "medicion"),
+             "__LIMITE__": hora(minutos - 5), "__ULTIMA_COMPLETA__": hora(minutos - 50)}.items():
     brief = brief.replace(k, v)
 (rep / "brief.md").write_text(brief, encoding="utf-8")
 PY
   command -v claude > /dev/null || npm install -g @anthropic-ai/claude-code > /dev/null
+  # La medición completa tarda ~30 min: más que el tope de Bash por omisión.
+  BASH_DEFAULT_TIMEOUT_MS=1200000 BASH_MAX_TIMEOUT_MS=3000000 \
   claude -p "$(cat "$REP/brief.md")" \
     --max-turns "${AGENTE_MAX_TURNOS:-200}" \
     --permission-mode acceptEdits \
@@ -268,6 +303,7 @@ PY
 }
 
 case "$FASE" in
+  medicion) medicion ;;
   agente) agente ;;
   compuertas) compuertas ;;
   publicar) publicar ;;

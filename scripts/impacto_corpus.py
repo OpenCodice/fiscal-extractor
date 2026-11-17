@@ -24,9 +24,22 @@ Sale 0 si no queda nada por verificar ni hay regresiones, 1 si hay correcciones
 por verificar, 2 si hay regresiones de cobertura, errores de extracción o
 correcciones ya rechazadas.
 
+Dos modos más, para el job `reparar` (scripts/agente/reparar.sh):
+
+- `--solo-pdfs` deja en `--cache` (y los clones en `--trabajo`) todo lo que la
+  medición necesita, sin construir nada: lo corre el workflow antes del agente,
+  que no tiene red hacia las fuentes que piden `EGRESS_MX_TOKEN`.
+- `--medir` es la misma medición, de solo lectura, para el agente reparador:
+  no exporta pendientes; deja en `--trabajo` `medicion.md` (cada unidad que
+  cambia, si es de las leyes `--objetivo` o no, su veredicto previo en el
+  registro y su diff) y `medicion.json`. Sale 0 si fuera del objetivo no cambia
+  nada sin confirmar, 1 si sí, 2 con regresiones o errores. `--muestra N` mide
+  solo N documentos de cada repo, espaciados por clave (más los del objetivo):
+  un paso rápido, no la medición que decide.
+
 Uso:
   impacto_corpus.py --trabajo T [--fiscal REPO] [--federal REPO] [--estatal REPO] [--pdf-dir D]...
-      [--cache C] [--solo DOC]...
+      [--cache C] [--solo DOC]... [--solo-pdfs | --medir [--objetivo DOC]... [--muestra N]]
 """
 from __future__ import annotations
 
@@ -125,6 +138,7 @@ class PDFs:
         self.cache = cache
         cache.mkdir(parents=True, exist_ok=True)
         self.por_sha = {p.stem: str(p) for p in cache.glob("*.pdf")}
+        self.verificados: set[str] = set()
         self.por_clave: dict[str, str] = {}
         for d in dirs:
             # Las leyes estatales ('jalisco/codigo-civil.pdf') van en subcarpetas.
@@ -132,10 +146,27 @@ class PDFs:
                 self.por_sha.setdefault(_sha256(p), str(p))
                 self.por_clave.setdefault(p.relative_to(d).with_suffix("").as_posix().lower(), str(p))
 
+    def _integro(self, sha: str) -> bool:
+        """La caché la comparten el agente reparador y las compuertas: un PDF
+        de la caché vale solo si su contenido sigue siendo el de su nombre."""
+        ruta = Path(self.por_sha[sha])
+        if sha in self.verificados or ruta.parent != self.cache:
+            return True
+        try:
+            ok = _sha256(ruta) == sha
+        except OSError:
+            ok = False
+        if ok:
+            self.verificados.add(sha)
+            return True
+        ruta.unlink(missing_ok=True)
+        del self.por_sha[sha]
+        return False
+
     def obtener(self, sha: str | None, url: str | None, clave: str) -> str | None:
         """El PDF con ese sha256; sin sha (versiones publicadas antes de que se
         guardara), el de hoy: el ya descargado o el que publica la URL."""
-        if sha and sha in self.por_sha:
+        if sha and sha in self.por_sha and self._integro(sha):
             return self.por_sha[sha]
         if not sha and clave in self.por_clave:
             return self.por_clave[clave]
@@ -158,6 +189,7 @@ class PDFs:
             return None
         tmp.rename(destino)
         self.por_sha[real] = str(destino)
+        self.verificados.add(real)
         return str(destino)
 
 
@@ -234,6 +266,70 @@ def evaluar(d: dict, trabajo: Path, pdfs: PDFs) -> dict:
     return res
 
 
+def muestrear(docs: list[dict], n: int, fijos: set[str] = frozenset()) -> list[dict]:
+    """N documentos de cada repo, espaciados en orden de clave, más los `fijos`."""
+    if n <= 0:
+        return docs
+    llave = lambda d: (d["nombre"], d["clave"])
+    por_repo: dict[str, list[dict]] = {}
+    for d in docs:
+        por_repo.setdefault(d["nombre"], []).append(d)
+    elegidos = {llave(d) for d in docs if d["clave"] in fijos}
+    for lista in por_repo.values():
+        lista = sorted(lista, key=lambda d: d["clave"])
+        paso = max(1.0, len(lista) / n)
+        elegidos |= {llave(lista[int(i * paso)]) for i in range(min(n, len(lista)))}
+    return [d for d in docs if llave(d) in elegidos]
+
+
+def informe_medicion(resultados: list[dict], objetivo: set[str], registro: dict) -> tuple[dict, str]:
+    """Para el agente reparador: qué cambia, dentro y fuera de sus leyes, con
+    el veredicto que el registro ya tenga de ese mismo cambio."""
+    filas = []
+    for r in resultados:
+        for clave, antes, despues in r["cambios"]:
+            c = impacto.Cambio(r["documento"], clave, r["pdf_sha256"], antes, despues)
+            filas.append({"documento": r["documento"], "repo": r["repo"], "clave": clave,
+                          "objetivo": r["documento"] in objetivo,
+                          "veredicto_previo": impacto.veredicto(registro, c),
+                          "diff": impacto.diff_parrafos(antes, despues)})
+    fuera = [f for f in filas if not f["objetivo"]]
+    fuera_sin_confirmar = [f for f in fuera if f["veredicto_previo"] != "mejora"]
+    datos = {
+        "documentos": len(resultados),
+        "sin_pdf": [f"{r['repo']}/{r['documento']}" for r in resultados if r["sin_pdf"]],
+        "errores": [f"{r['repo']}/{r['documento']}: {r['error']}" for r in resultados if r["error"]],
+        "regresiones": [f"{r['repo']}/{r['documento']}: {', '.join(r['regresiones'][:10])}"
+                        for r in resultados if r["regresiones"]],
+        "cambian": len(filas), "en_objetivo": len(filas) - len(fuera), "fuera": len(fuera),
+        "fuera_sin_confirmar": len(fuera_sin_confirmar),
+        "por_documento": {},
+        "unidades": [{k: v for k, v in f.items() if k != "diff"} for f in filas],
+    }
+    for f in filas:
+        datos["por_documento"][f["documento"]] = datos["por_documento"].get(f["documento"], 0) + 1
+    etiqueta = {None: "sin juzgar", "mejora": "ya confirmada como mejora",
+                "empeora": "ya rechazada: empeora", "incierto": "ya rechazada: incierto"}
+    md = [f"# Medición del extractor en disco contra lo publicado",
+          "",
+          f"{len(resultados) - len(datos['sin_pdf'])} de {len(resultados)} documentos medidos; cambian {len(filas)} unidades: "
+          f"{len(filas) - len(fuera)} en las leyes objetivo y {len(fuera)} fuera "
+          f"({len(fuera_sin_confirmar)} sin confirmar como mejora).", ""]
+    for titulo, lista in (("Errores", datos["errores"]), ("Regresiones de cobertura", datos["regresiones"]),
+                          ("Sin su PDF publicado (no medidos)", datos["sin_pdf"])):
+        if lista:
+            md += [f"## {titulo}", ""] + [f"- {x}" for x in lista] + [""]
+    if datos["por_documento"]:
+        md += ["## Unidades que cambian por documento", ""]
+        md += [f"- {doc}: {n}{'' if doc in objetivo else ' (fuera del objetivo)'}"
+               for doc, n in sorted(datos["por_documento"].items())] + [""]
+    for f in sorted(filas, key=lambda f: (f["objetivo"], f["documento"], f["clave"])):
+        lugar = "objetivo" if f["objetivo"] else "FUERA DEL OBJETIVO"
+        md += [f"## {f['documento']}:{f['clave']} — {lugar}, {etiqueta.get(f['veredicto_previo'], f['veredicto_previo'])}",
+               "", "```diff", f["diff"], "```", ""]
+    return datos, "\n".join(md)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--trabajo", required=True)
@@ -248,6 +344,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--solo", action="append", help="limitar a estas claves")
     ap.add_argument("--registro", default=str(impacto.REGISTRO))
     ap.add_argument("--procesos", type=int, default=os.cpu_count() or 2)
+    modo = ap.add_mutually_exclusive_group()
+    modo.add_argument("--solo-pdfs", action="store_true",
+                      help="solo clonar y dejar en la caché los PDF publicados")
+    modo.add_argument("--medir", action="store_true",
+                      help="solo lectura: informe para el agente reparador, sin pendientes")
+    ap.add_argument("--objetivo", action="append", default=[],
+                    help="con --medir: claves de las leyes que se están reparando")
+    ap.add_argument("--muestra", type=int, default=0,
+                    help="con --medir: solo N documentos por repo (más los del objetivo)")
     a = ap.parse_args(argv)
 
     t = Path(a.trabajo)
@@ -260,8 +365,34 @@ def main(argv: list[str] | None = None) -> int:
         Path(a.estatal) if a.estatal else clonar("leyes-estatales", t / "clones" / "estatal"))
     docs = [d for d in documentos(fiscal, federal, t, estatal) if not a.solo or d["clave"] in a.solo]
     pdfs = PDFs(a.pdf_dir, Path(a.cache) if a.cache else t / "cache")
+    if a.solo_pdfs:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            faltan = [d["clave"] for d, p in zip(docs, pool.map(
+                lambda d: pdfs.obtener(d["sha256"], d["url"], d["clave"]), docs)) if p is None]
+        print(f"{len(docs) - len(faltan)} de {len(docs)} PDF publicados en la caché"
+              + (f"; faltan: {', '.join(faltan[:20])}" if faltan else "."))
+        return 0
+    if a.medir:
+        docs = muestrear(docs, a.muestra, set(a.objetivo))
     with ThreadPoolExecutor(max_workers=max(1, a.procesos)) as pool:
         resultados = list(pool.map(lambda d: evaluar(d, t, pdfs), docs))
+
+    if a.medir:
+        datos, md = informe_medicion(resultados, set(a.objetivo), impacto.cargar(a.registro))
+        (t / "medicion.json").write_text(json.dumps(datos, ensure_ascii=False, indent=1) + "\n",
+                                         encoding="utf-8")
+        (t / "medicion.md").write_text(md + "\n", encoding="utf-8")
+        print(md.split("\n")[2])
+        for doc, n in sorted(datos["por_documento"].items()):
+            print(f"  {doc}: {n}{'' if doc in a.objetivo else ' (fuera del objetivo)'}")
+        for x in datos["errores"]:
+            print(f"✗ {x}")
+        for x in datos["regresiones"]:
+            print(f"✗ regresión de cobertura en {x}")
+        print(f"Detalle y diffs: {t / 'medicion.md'}")
+        if datos["errores"] or datos["regresiones"]:
+            return 2
+        return 1 if datos["fuera_sin_confirmar"] else 0
 
     cambios = [impacto.Cambio(r["documento"], c, r["pdf_sha256"], x, y)
                for r in resultados for c, x, y in r["cambios"]]
