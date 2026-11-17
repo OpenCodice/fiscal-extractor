@@ -14,6 +14,7 @@ CPEUM son:
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 from datetime import date
 
@@ -322,12 +323,13 @@ def _quitar_marca_girada(page_text: str) -> str:
     return "\n".join(salida)
 
 
-def _quitar_encabezados(page_text: str, titulos: tuple[str, ...]) -> str:
+def _quitar_encabezados(page_text: str, titulos: tuple[str, ...],
+                        prefijos: tuple[str, ...] = HEADER_PREFIXES) -> str:
     fuera = tuple(t.strip() for t in titulos)
     lineas = []
     for line in page_text.splitlines():
         s = line.strip()
-        if s.startswith(HEADER_PREFIXES) or PAGE_FOOTER_RE.match(s) or s in fuera:
+        if (prefijos and s.startswith(prefijos)) or PAGE_FOOTER_RE.match(s) or s in fuera:
             continue
         lineas.append(line)
     return "\n".join(lineas)
@@ -399,7 +401,14 @@ def limpiar_paginas(paginas: list[str], doc: Documento, formulas: bool = False) 
     Con `formulas`, cada fórmula ilegible se sustituye por su marca."""
     fuera = doc.titulos_encabezado + _titulo_corrido(paginas)
     paginas = _sin_numero_de_pagina(paginas)
-    limpias = (_quitar_encabezados(_quitar_marca_girada(t), fuera) for t in paginas)
+    # Las leyes estatales no traen el encabezado de la Cámara, y en ellas un
+    # renglón que empieza con 'Secretaría General' es texto ('…el apoyo de la /
+    # Secretaría General y sus Coordinaciones'). Algunos de sus PDF escriben
+    # acentos descompuestos ('i' + acento: 'Artículo'), que el rótulo no reconoce.
+    prefijos = () if doc.medio else HEADER_PREFIXES
+    if doc.medio:
+        paginas = [unicodedata.normalize("NFC", t) for t in paginas]
+    limpias = (_quitar_encabezados(_quitar_marca_girada(t), fuera, prefijos) for t in paginas)
     if not formulas:
         return "\n".join(limpias)
     # Se detecta sobre el texto ya unido: una fórmula que cruza el salto de
@@ -1009,6 +1018,14 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             ordinal = (am.group(4) or "").title()
             ord_num = am.group(5) or ""           # numeral tras el ordinal: "Bis 1"
             sub_letra = am.group(6) or ""         # letra tras el numeral: "Bis 35 A"
+            # 'Artículo 176-Bis. 3.' es el 176 Bis 3 si el 176 Bis ya se abrió
+            # (Código Penal de Jalisco); si no, 'Artículo 459 Ter. 1.' es el 459
+            # Ter y '1.' su primer párrafo numerado (Código Electoral de Jalisco).
+            if (ord_num and "." in stripped[am.end(4):am.start(5)]
+                    and (numero, letra, guion_num, ordinal, "", "") not in abiertos):
+                ord_num = sub_letra = ""
+                line = stripped[:am.end(4)] + "\n" + stripped[am.end(4):].lstrip(" .")
+                am = ARTICULO_RE.match(line)
             tiene_sufijo = bool(letra or guion_num or ordinal)
             # Aceptar solo el siguiente esperado (bare) o una variante del actual.
             # Así se descartan las citas "Artículo 89 de la Constitución".

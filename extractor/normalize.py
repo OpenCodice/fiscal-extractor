@@ -34,6 +34,9 @@ NOTA_NORMATECA_RE = re.compile(
 # Marcadores de fracción / inciso / apartado: "I.", "a)", "1.", "A. ".
 STRUCT_MARKER_RE = re.compile(r"^(?:[IVXLCDM]+\.|[a-z]\)|\d+\.|[A-Z]\.\s)")
 SENTENCE_END_RE = re.compile(r"[.:;]$")
+# Inciso con punto ('a. Un programa de gobierno…'): empieza en minúscula pero
+# abre su propio renglón.
+INCISO_PUNTO_RE = re.compile(r"^[a-zñ]{1,2}\.\s")
 
 
 def _is_reform_note(line: str) -> bool:
@@ -126,7 +129,7 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             i += 1
             continue
         if buf and SENTENCE_END_RE.search(buf[-1]) and not (
-                continuacion_minuscula and s[:1].islower()):
+                continuacion_minuscula and s[:1].islower() and not INCISO_PUNTO_RE.match(s)):
             flush_buf()
         buf.append(s)
         i += 1

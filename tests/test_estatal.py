@@ -120,10 +120,17 @@ def test_huecos_de_numeracion_sin_aceptar_citas():
 
 def test_separadores_estatales():
     texto = ("Artículo 126. Se deroga.\nArtículo 127.Se deroga.\n"
-             "Artículo 128. Uno.\nArtículo 128 Bis. 3. Comete el delito.\n"
+             "Artículo 128. Uno.\nArtículo 128 Bis. 1. Comete el delito.\n"
              "Artículo 129: Comete otro.\n")
-    assert [u.clave for u in parse_texto(texto, start=126, huecos=True)] == [
-        "126", "127", "128", "128-bis-3", "129"]
+    us = parse_texto(texto, start=126, huecos=True)
+    assert [u.clave for u in us] == ["126", "127", "128", "128-bis", "129"]
+    # 'Bis. 1.' es el párrafo 1 del 128 Bis (Código Electoral de Jalisco)…
+    assert normalize_body(us[3].cuerpo, us[3].etiqueta) == "1. Comete el delito."
+    # …pero tras un 'Bis' ya abierto, 'Bis. 3.' es el Bis 3 (Código Penal de Jalisco).
+    texto = ("Artículo 176. Uno.\nArtículo 176-Bis. Dos.\nArtículo 176-Bis.1. Tres.\n"
+             "Artículo 176-Bis. 3. Cuatro.\nArtículo 177. Cinco.\n")
+    assert [u.clave for u in parse_texto(texto, start=176)] == [
+        "176", "176-bis", "176-bis-1", "176-bis-3", "177"]
 
 
 def test_cita_a_un_transitorio_no_corta_el_articulado():
@@ -261,3 +268,18 @@ def test_renglon_en_minuscula_continua_el_parrafo():
     assert normalize_body(cuerpo, "", continuacion_minuscula=True).split("\n\n") == [
         "I. Por el Consejero que designe; y", "II. Otra."]
     assert normalize_body(cuerpo, "").split("\n\n")[1] == "y"
+
+
+def test_inciso_con_punto_no_es_continuacion():
+    cuerpo = "Artículo 8.- VI. Requisitos:\na. Un programa;\nb. Una agenda.\n"
+    assert normalize_body(cuerpo, "", continuacion_minuscula=True).split("\n\n") == [
+        "VI. Requisitos:", "a. Un programa;", "b. Una agenda."]
+
+
+def test_leyes_estatales_sin_prefijos_de_la_camara_y_acentos_compuestos():
+    from extractor.parsers.articulado import limpiar_paginas
+    doc = documentos(["jalisco"])[0]
+    pagina = ("Solo pueden recibir el apoyo de la\nSecretaría General y sus Coordinaciones.\n"
+              "Arti\u0301culo 5. Los tribunales.\n")
+    texto = limpiar_paginas([pagina], doc)
+    assert "Secretaría General y sus" in texto and "Artículo 5." in texto
