@@ -267,7 +267,8 @@ def main(argv: list[str] | None = None) -> int:
                for r in resultados for c, x, y in r["cambios"]]
     resumen = impacto.exportar(cambios, t, {r["pdf_sha256"]: r["pdf"] for r in resultados if r["pdf"]},
                                registro=impacto.cargar(a.registro),
-                               origen="el extractor de este repo con cambios sin publicar")
+                               origen="el extractor de este repo con cambios sin publicar",
+                               rejuzgar=True)
     errores = [f"{r['repo']}/{r['documento']}: {r['error']}" for r in resultados if r["error"]]
     regresiones = [f"{r['repo']}/{r['documento']}: {', '.join(r['regresiones'][:10])}"
                    for r in resultados if r["regresiones"]]

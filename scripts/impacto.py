@@ -189,17 +189,23 @@ def diff_parrafos(antes: str | None, despues: str | None) -> str:
 # ------------------------------------------------------------------ exportar
 
 def exportar(cambios: list[Cambio], trabajo: str | Path, pdfs: dict[str, str], *,
-             registro: dict[Clave, dict] | None = None, origen: str = "") -> dict:
+             registro: dict[Clave, dict] | None = None, origen: str = "",
+             rejuzgar: bool = False) -> dict:
     """Deja en `trabajo` lo que falta verificar: `pendientes.json` (grupos con
     sus miembros) y, por miembro, el texto antes/después y su diff. Lo ya
-    juzgado en el registro no se exporta. Devuelve el resumen."""
+    juzgado en el registro no se exporta. Devuelve el resumen.
+
+    Con `rejuzgar`, un cambio rechazado junto con su grupo se vuelve a juzgar:
+    el veredicto de un grupo vale para el arreglo que lo produjo, y un arreglo
+    distinto que llega al mismo texto en ese artículo, sin lo que hizo
+    rechazar al grupo, merece su propio veredicto (el último registrado vale)."""
     registro = registro if registro is not None else cargar()
     t = Path(trabajo)
     t.mkdir(parents=True, exist_ok=True)
     nuevos, juzgados = [], {"mejora": 0, "empeora": [], "incierto": []}
     for c in cambios:
         v = veredicto(registro, c)
-        if v is None:
+        if v is None or (rejuzgar and v != "mejora" and registro[c.llave].get("grupo")):
             nuevos.append(c)
         elif v == "mejora":
             juzgados["mejora"] += 1
@@ -286,7 +292,11 @@ def cerrar(trabajo: str | Path, extractor: str, registro_dir: str | Path = REGIS
                 rechazados.append(f"{m['documento']}:{m['clave']} ({ver})")
     if not nombre:
         import uuid
-        nombre = f"{hoy}-{extractor.rsplit('@', 1)[-1][:7]}-{uuid.uuid4().hex[:6]}"
+        # Con la hora: `cargar` lee los archivos en orden y el último veredicto
+        # vale, así que el nombre tiene que ordenar como el tiempo.
+        from datetime import datetime, timezone
+        hora = datetime.now(timezone.utc).strftime("%H%M%S")
+        nombre = f"{hoy}T{hora}-{extractor.rsplit('@', 1)[-1][:7]}-{uuid.uuid4().hex[:6]}"
     escribir(entradas, registro_dir, nombre)
     r = pend["resumen"]
     rechazados += [f"{x} (empeora)" for x in r.get("ya_empeora", [])]

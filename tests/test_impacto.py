@@ -43,13 +43,23 @@ def test_exportar_cerrar_y_no_verificar_dos_veces(tmp_path):
     (t / "veredicto-01.json").write_text(json.dumps({"grupos": [
         {"id": ids[0], "veredicto": "mejora", "nota": "pie de página"},
         {"id": ids[1], "veredicto": "incierto", "nota": "no se ve"}]}))
-    ok, res = im.cerrar(t, EXT, reg, "lote")
+    ok, res = im.cerrar(t, EXT, reg, "2026-01-01-lote")
     assert not ok and res["mejora"] == 2 and len(res["rechazados"]) == 1
     registro = im.cargar(reg)
     assert im.faltantes(registro, "lgs", PDF, {c.clave: (c.antes, c.despues) for c in cambios}) == ["030"]
     # Lo ya juzgado no se vuelve a exportar.
     r2 = im.exportar(cambios, tmp_path / "t2", {}, registro=registro)
     assert (r2["pendientes"], r2["ya_mejora"], r2["ya_incierto"]) == (0, 2, ["lgs:030"])
+    # Otro arreglo que llega al mismo texto se juzga de nuevo; el último vale.
+    t3 = tmp_path / "t3"
+    r3 = im.exportar(cambios, t3, {}, registro=registro, rejuzgar=True)
+    assert (r3["pendientes"], r3["ya_incierto"]) == (1, [])
+    g = json.loads((t3 / "pendientes.json").read_text())["grupos"][0]["id"]
+    (t3 / "veredicto-01.json").write_text(json.dumps({"grupos": [
+        {"id": g, "veredicto": "mejora", "nota": "se ve"}]}))
+    assert im.cerrar(t3, EXT, reg)[0]
+    assert im.faltantes(im.cargar(reg), "lgs", PDF,
+                        {c.clave: (c.antes, c.despues) for c in cambios}) == []
 
 
 def test_cerrar_sin_veredicto_no_aprueba(tmp_path):
