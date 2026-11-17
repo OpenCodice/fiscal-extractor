@@ -69,8 +69,12 @@ def _cmd_planear(a) -> int:
 def _cmd_planear_estatal(a) -> int:
     from . import estatal
     docs = estatal.documentos(a.estado)
-    plan = federal.planear(a.out, docs, solo=a.doc, lote=a.lote, shards=a.shards,
+    solo = (a.doc or []) + (a.revisar or []) or None
+    plan = federal.planear(a.out, docs, solo=solo, lote=a.lote, shards=a.shards,
                            corpus=estatal.ESTATAL)
+    # Ya publicadas que deben pasar (otra vez) la revisión completa contra su
+    # PDF, como un alta: si tiene hallazgos, se conservan con revision_pendiente.
+    plan["revisar"] = sorted(a.revisar or [])
     _escribir_json(a.plan, plan)
     motivos: dict[str, int] = {}
     for d in plan["documentos"]:
@@ -111,14 +115,17 @@ def _cmd_extraer(a) -> int:
         if r.get("error_fuente") or r.get("sin_cambio"):
             continue
         _copiar_doc(Path(a.out), staging / "datos", clave)
-        if not federal.es_fiel(r) or r.get("motivo") in ("nuevo", "reintento"):
+        if (not federal.es_fiel(r) or r.get("motivo") in ("nuevo", "reintento")
+                or clave in plan.get("revisar", [])):
             # El agente necesitará el PDF (y su texto por página, que es lo
-            # caro): para repararlo o, en un alta, para su revisión completa.
-            (staging / "pdfs").mkdir(parents=True, exist_ok=True)
+            # caro): para repararlo o para la revisión completa de un alta.
+            # Con su ruta: la clave de una ley estatal lleva carpeta.
             for ext in (".pdf", ".paginas.json"):
                 f = Path(a.pdf_dir) / f"{clave}{ext}"
                 if f.exists():
-                    shutil.copy2(f, staging / "pdfs" / f.name)
+                    destino = staging / "pdfs" / f"{clave}{ext}"
+                    destino.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(f, destino)
     _escribir_json(staging / "resultados" / f"{a.shard}.json", res)
     return 0
 
@@ -132,8 +139,11 @@ def _cmd_integrar(a) -> int:
         if not (r.get("error_fuente") or r.get("sin_cambio")):
             _copiar_doc(staging / "datos", out, clave)
     Path(a.pdf_dir).mkdir(parents=True, exist_ok=True)
-    for f in (staging / "pdfs").glob("*") if (staging / "pdfs").exists() else []:
-        shutil.copy2(f, Path(a.pdf_dir) / f.name)
+    origen = staging / "pdfs"
+    for f in (p for p in origen.rglob("*") if p.is_file()) if origen.exists() else []:
+        destino = Path(a.pdf_dir) / f.relative_to(origen)
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(f, destino)
     _escribir_json(trabajo / "resultados.json", resultados)
     fallas = {c: r for c, r in resultados.items()
               if not r.get("error_fuente") and not r.get("sin_cambio") and not federal.es_fiel(r)}
@@ -215,6 +225,8 @@ def _registrar(sub, corpus: str) -> None:
         sp.set_defaults(fn=_cmd_planear)
     else:
         sp.add_argument("--estado", action="append", help="solo las leyes de estos estados")
+        sp.add_argument("--revisar", action="append",
+                        help="ley ya publicada que pasa la revisión completa como un alta")
         sp.set_defaults(fn=_cmd_planear_estatal)
 
     sp = fsub.add_parser("extraer", help="descarga, construye y audita un grupo del plan")

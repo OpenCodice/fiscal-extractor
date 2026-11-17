@@ -28,13 +28,16 @@ export PYTHONPATH="$EXTRACTOR"
 
 # Altas fieles de esta corrida, en orden; se revisan ahora las primeras
 # REVISION_MAX_ALTAS mientras su texto no pase de REVISION_MAX_CARACTERES.
-python3 - "$TRABAJO" "${REVISION_MAX_ALTAS:-3}" "${REVISION_MAX_CARACTERES:-0}" "$OUT" <<'PY'
+python3 - "$TRABAJO" "${REVISION_MAX_ALTAS:-3}" "${REVISION_MAX_CARACTERES:-0}" "$OUT" "$PLAN" <<'PY'
 import json, pathlib, sys
 from extractor import federal
 from extractor.disposicion import dir_unidades
 t, maximo, tope, out = pathlib.Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+plan = json.loads(pathlib.Path(sys.argv[5]).read_text(encoding="utf-8"))
 res = json.loads((t / "resultados.json").read_text(encoding="utf-8")) if (t / "resultados.json").exists() else {}
-altas = [c for c, r in sorted(res.items()) if r.get("motivo") in ("nuevo", "reintento")
+# Las altas y lo publicado que el plan manda revisar (`revisar`).
+altas = [c for c, r in sorted(res.items())
+         if (r.get("motivo") in ("nuevo", "reintento") or c in plan.get("revisar", []))
          and not r.get("error_fuente") and not r.get("sin_cambio") and federal.es_fiel(r)]
 # De la más corta a la más larga: en una corrida caben más altas, y una ley
 # larga no detiene a las cortas que vienen detrás.
@@ -101,11 +104,18 @@ cerrar() {
       motivo="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["motivo"])' "$REV/previa.json")"
     else
       motivo="$(python scripts/revision.py cerrar --repo "$RAIZ" --documento "$doc" \
-        --pdf "$PDF_DIR/$doc.pdf" --trabajo "$REV")" && motivo=""
+        --pdf "$PDF_DIR/$doc.pdf" --trabajo "$REV")"
+      rc=$?
       motivo="${motivo#✗ }"
-      # A medias (se acabó el tiempo, falló el agente): no es un hallazgo.
-      if [ -n "$motivo" ] && grep -q '"resultado": "incompleta"' "$REV/resultado.json" 2>/dev/null; then
+      if [ "$rc" = 0 ]; then
+        motivo=""
+      elif [ "$rc" != 2 ] || [ -z "$motivo" ]; then
+        # El cierre falló (sin PDF, un error): no hay revisión, no un "sin
+        # hallazgos". Se aplaza.
+        echo "::warning::No se pudo cerrar la revisión de $doc (código $rc)." >&2
         motivo="APLAZADA"
+      elif grep -q '"resultado": "incompleta"' "$REV/resultado.json" 2>/dev/null; then
+        motivo="APLAZADA"      # a medias (se acabó el tiempo, falló el agente)
       fi
     fi
     printf '%s\t%s\n' "$doc" "$motivo"

@@ -36,6 +36,10 @@ on:
         description: 'Máximo de leyes nuevas en esta corrida (vacío = sin límite)'
         required: false
         default: '8'
+      revisar:
+        description: 'Leyes ya publicadas (estado/ley) que pasan otra vez la revisión completa contra su PDF'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -94,12 +98,14 @@ jobs:
         env:
           DOCS: ${{ inputs.docs }}
           ESTADOS: ${{ inputs.estados }}
+          REVISAR: ${{ inputs.revisar }}
           LOTE: ${{ inputs.lote || '8' }}
           EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
         run: |
           args=()
           for d in $DOCS; do args+=(--doc "$d"); done
           for e in $ESTADOS; do args+=(--estado "$e"); done
+          for d in $REVISAR; do args+=(--revisar "$d"); done
           [ -n "$LOTE" ] && args+=(--lote "$LOTE")
           cd /tmp/extractor
           python -m extractor estatal planear --out "$GITHUB_WORKSPACE" \
