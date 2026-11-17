@@ -4,7 +4,8 @@ name: Vigilar leyes federales
 # de cada PDF contra fuentes.json, y reprocesa solo lo que cambió: leyes nuevas,
 # PDF distintos y, si cambió el parser del extractor, todo el corpus. La
 # extracción se reparte entre varios jobs; el agente (Claude Code) interviene
-# solo si la auditoría determinista encuentra fallas. Lo que no queda fiel al
+# si la auditoría determinista encuentra fallas y, en el job `reparar`, a partir
+# de los hallazgos de la revisión completa de las altas. Lo que no queda fiel al
 # PDF se deja fuera (si es nuevo) o conserva su versión publicada (si ya
 # estaba), y queda anotado en fuentes.json.
 #
@@ -398,6 +399,171 @@ jobs:
             sleep 30
           done
           echo "::warning::El PR #$PR no se fusionó en 45 minutos; la siguiente vigilancia semanal lo retoma."
+
+  reparar:
+    # Repara el extractor a partir de los hallazgos de la revisión completa de
+    # las altas (scripts/agente/reparar.sh); las fallas de la auditoría las
+    # repara ya el agente de `cerrar`. Va aparte de `cerrar`, con
+    # su propio tiempo, y no toca el repo de datos: si su arreglo entra en el
+    # extractor, la corrida siguiente reintenta las leyes. Cualquier falla aquí
+    # deja el extractor como estaba.
+    needs: [planear, cerrar]
+    if: ${{ !cancelled() && needs.planear.result == 'success' && needs.cerrar.result != 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    permissions:
+      contents: read
+      actions: write
+    env:
+      TIENE_CLAUDE: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+      OUT: ${{ github.workspace }}
+      AGENTE_DIR: /tmp/agente
+      REPARACION_CORPUS: federal
+      REPARACION_GATE: /tmp/reparacion-gate
+      PDF_CACHE: /tmp/pdfs-corpus
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: OpenCodice/leyes-federales
+          token: ${{ secrets.PR_TOKEN }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Clonar extractor (main, para publicar encima)
+        id: extractor
+        run: |
+          git clone -q "$EXTRACTOR_REPO" /tmp/extractor
+          pip install -q -r /tmp/extractor/requirements.txt
+          echo "sha=$(git -C /tmp/extractor rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Trabajo de esta corrida
+        if: needs.cerrar.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: trabajo
+          path: /tmp/agente
+      - name: Plan de esta corrida
+        if: needs.planear.outputs.hay == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: plan
+          path: /tmp/plan
+      - name: Elegir las leyes y el defecto a reparar
+        id: objetivo
+        if: env.TIENE_CLAUDE == 'true'
+        run: |
+          cd /tmp/extractor
+          plan=(); [ -f /tmp/plan/plan.json ] && plan=(--plan /tmp/plan/plan.json)
+          python scripts/reparacion.py objetivo --corpus federal --out "$OUT" \
+            --trabajo "$AGENTE_DIR" --max-leyes 4 "${plan[@]}"
+      - name: Descargar sus PDF y anotar el intento
+        # El intento cuenta desde ahora: si algo se cae a medias, también.
+        id: preparar
+        if: steps.objetivo.outputs.hay == 'true'
+        env:
+          EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
+          EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
+        run: |
+          cd /tmp/extractor
+          python scripts/reparacion.py preparar --trabajo "$AGENTE_DIR" \
+            --pdfs "$REPARACION_GATE/pdfs" --pdfs "$AGENTE_DIR/reparacion/pdfs"
+          if [ -s "$AGENTE_DIR/reparacion/objetivo.json" ] && grep -q '"clave"' "$AGENTE_DIR/reparacion/objetivo.json"; then
+            python scripts/reparacion.py registrar --trabajo "$AGENTE_DIR" --resultado iniciado \
+              --extractor "$(git rev-parse HEAD)"
+            bash scripts/agente/publicar_registro.sh "Reparación automática de leyes federales: intento"
+          fi
+          echo "partida=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "objetivo=$(sha256sum "$AGENTE_DIR/reparacion/objetivo.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Agente — reparar el extractor
+        if: steps.preparar.outputs.hay == 'true'
+        timeout-minutes: 150
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: bash /tmp/extractor/scripts/agente/reparar.sh agente
+      - name: Lo que el agente no puede tocar
+        # Este paso vive en el workflow, fuera de su alcance: si tocó algo fuera
+        # de extractor/ y tests/ (las compuertas incluidas), se deshace todo y
+        # el arreglo se descarta. Lo que eligió el pipeline tampoco puede cambiar.
+        if: steps.preparar.outputs.hay == 'true'
+        env:
+          OBJETIVO: ${{ steps.preparar.outputs.objetivo }}
+          PARTIDA: ${{ steps.preparar.outputs.partida }}
+        run: |
+          cd /tmp/extractor
+          mkdir -p "$REPARACION_GATE"
+          : > "$REPARACION_GATE/fuera.txt"
+          if [ "$(git rev-parse HEAD)" != "$PARTIDA" ]; then
+            echo "commits propios en el extractor" >> "$REPARACION_GATE/fuera.txt"
+            git reset -q --hard "$PARTIDA"
+          fi
+          git status --porcelain=v1 -uall --no-renames | cut -c4- | tr -d '"' \
+            | grep -vE '^(extractor|tests)/' >> "$REPARACION_GATE/fuera.txt" || true
+          if [ -s "$REPARACION_GATE/fuera.txt" ]; then
+            git diff > "$AGENTE_DIR/reparacion/fuera.patch" || true
+            git checkout -q -- . && git clean -fdq
+          fi
+          echo "$OBJETIVO  $AGENTE_DIR/reparacion/objetivo.json" | sha256sum -c --quiet \
+            || { echo "::error::El objetivo de la reparación cambió durante el agente."; exit 1; }
+          python3 - "$AGENTE_DIR/reparacion/objetivo.json" "$REPARACION_GATE/pdfs" <<'PY'
+          import hashlib, json, pathlib, sys
+          o = json.load(open(sys.argv[1], encoding="utf-8"))
+          for e in o["leyes"]:
+              p = pathlib.Path(sys.argv[2]) / f"{e['clave']}.pdf"
+              if hashlib.sha256(p.read_bytes()).hexdigest() != e["pdf_sha256"]:
+                  sys.exit(f"::error::El PDF de {e['clave']} cambió durante el agente.")
+          PY
+      - name: Caché de los PDF publicados
+        if: steps.preparar.outputs.hay == 'true'
+        uses: actions/cache@v4
+        with:
+          path: /tmp/pdfs-corpus
+          key: pdfs-corpus-${{ github.run_id }}
+          restore-keys: pdfs-corpus-
+      - name: Compuertas del arreglo
+        id: compuertas
+        if: steps.preparar.outputs.hay == 'true'
+        env:
+          REPARACION_PARTIDA: ${{ steps.preparar.outputs.partida }}
+        run: |
+          bash /tmp/extractor/scripts/agente/reparar.sh compuertas
+          echo "estado=$(cat "$AGENTE_DIR/reparacion/estado.txt" 2>/dev/null || echo descartado)" >> "$GITHUB_OUTPUT"
+      - name: Agente — confirmar el impacto del arreglo en lo publicado
+        if: steps.compuertas.outputs.estado == 'impacto'
+        timeout-minutes: 120
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          IMPACTO: /tmp/agente/reparacion/impacto
+        run: bash /tmp/extractor/scripts/agente/impacto.sh
+      - name: Publicar el arreglo o anotar el descarte
+        id: publicar
+        if: steps.preparar.outputs.hay == 'true' && !cancelled()
+        env:
+          EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
+          EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
+        run: bash /tmp/extractor/scripts/agente/reparar.sh publicar
+      - name: Reintentar las leyes con el extractor reparado
+        # La corrida nueva espera a que termine esta (concurrency).
+        if: steps.publicar.outputs.reparado == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run vigilar-federal.yml -R "$GITHUB_REPOSITORY" --ref main
+      - name: Guardar el trabajo de la reparación
+        if: always() && steps.objetivo.outputs.hay == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: reparacion
+          path: |
+            /tmp/agente/reparacion/*.json
+            /tmp/agente/reparacion/*.md
+            /tmp/agente/reparacion/*.txt
+            /tmp/agente/reparacion/*.log
+            /tmp/agente/reparacion/*.patch
+            /tmp/agente/reparacion/impacto/resumen.json
+            /tmp/agente/reparacion/impacto/pendientes.json
+            /tmp/agente/reparacion/impacto/veredicto*.json
+          retention-days: 30
 
   salud:
     needs: [planear, extraer, cerrar]

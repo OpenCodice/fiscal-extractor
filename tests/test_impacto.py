@@ -149,6 +149,9 @@ def test_bloques_ubicar_y_cerrar(tmp_path, monkeypatch):
     assert not ok and "006: pie colado" in motivo
     sha = tr.sha256_bytes(b"%PDF")
     assert rv.previa("lgs", sha, rv.huella_extractor(), reg)["resultado"] == "hallazgos"
+    # El registro guarda cada hallazgo, para el agente que repara el extractor.
+    assert rv.previa("lgs", sha, rv.huella_extractor(), reg)["hallazgos"] == [
+        {"clave": "006", "nota": "pie colado"}]
     # Un arreglo que cambia el texto invalida la revisión de ese bloque.
     (repo / "lgs" / "006.md").write_text("# Artículo 6\n\nEl artículo número 6 dispone lo siguiente.\n")
     ok, motivo = rv.cerrar(repo, "lgs", str(pdf), t, registro=reg)

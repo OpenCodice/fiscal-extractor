@@ -216,7 +216,7 @@ def cerrar(repo, documento, pdf, trabajo, extractor_dir=EXTRACTOR,
     t = Path(trabajo)
     bls = bloques(repo, documento, pdf, t)
     hechos = veredictos(t)
-    hallazgos, faltan = [], []
+    hallazgos, faltan, detalle = [], [], []
     for b in bls:
         v = hechos.get(b["huella"])
         if v is None:
@@ -225,6 +225,10 @@ def cerrar(repo, documento, pdf, trabajo, extractor_dir=EXTRACTOR,
         for h in v.get("hallazgos") or []:
             hallazgos.append(f"{h.get('clave', b['id'])}: {str(h.get('nota', ''))[:200]}"
                              if isinstance(h, dict) else str(h)[:200])
+            # Completos, no solo los cinco del motivo: de aquí parte el agente
+            # que repara el extractor (scripts/agente/reparar.sh).
+            detalle.append({"clave": str(h.get("clave", b["id"])) if isinstance(h, dict) else b["id"],
+                            "nota": str(h.get("nota", "") if isinstance(h, dict) else h)[:600]})
     if len(bls) > MAX_BLOQUES:
         motivo = (f"Demasiado extenso para la revisión completa automática "
                   f"({len(bls)} bloques; el tope es {MAX_BLOQUES}).")
@@ -239,7 +243,8 @@ def cerrar(repo, documento, pdf, trabajo, extractor_dir=EXTRACTOR,
     sha = tr.sha256_bytes(Path(pdf).read_bytes())
     resultado = {"documento": documento, "pdf": sha, "extractor": huella_extractor(extractor_dir),
                  "resultado": "fiel" if ok else ("incompleta" if faltan and not hallazgos else "hallazgos"),
-                 "motivo": motivo, "bloques": len(bls), "fecha": date.today().isoformat()}
+                 "motivo": motivo, "bloques": len(bls), "fecha": date.today().isoformat(),
+                 **({"hallazgos": detalle[:300]} if detalle else {})}
     (t / "resultado.json").write_text(json.dumps(resultado, ensure_ascii=False, indent=1) + "\n",
                                       encoding="utf-8")
     # Una revisión incompleta (se acabó el tiempo, el agente falló) no se

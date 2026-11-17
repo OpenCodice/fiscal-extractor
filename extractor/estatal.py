@@ -25,6 +25,7 @@ ESTATAL = Corpus(
     singular="ley estatal", plural="leyes estatales",
     definiciones_fuera={c: a_dict(d) for c, (d, _) in fuera().items()},
     campos_registro=("clave", "etiqueta", "sigla", "tipo", "parser", "medio", "indice"),
+    fuentes_extractor=("estatales/*.py", "disposicion.py"),
 )
 
 __all__ = ["ESTATAL", "documentos"]

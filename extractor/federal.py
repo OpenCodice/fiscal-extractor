@@ -82,6 +82,10 @@ class Corpus:
     # leyes estatales se definen en código (cómo leer su PDF); su fuentes.json
     # solo las identifica, con la URL del PDF de la versión publicada.
     campos_registro: tuple | None = None
+    # Archivos del extractor, además de _FUENTES_EXTRACTOR, cuyo cambio obliga a
+    # reconstruir este corpus: las definiciones de las leyes estatales (sus
+    # notas, sus huecos) cambian su texto tanto como el parser.
+    fuentes_extractor: tuple = ()
 
     def registro(self, definicion: dict, url: str | None = None) -> dict:
         if self.campos_registro is None:
@@ -195,10 +199,10 @@ def leer_url(url: str) -> str:
 
 # ------------------------------------------------------------------ huellas
 
-def huella_extractor() -> str:
+def huella_extractor(extra: tuple = ()) -> str:
     raiz = Path(__file__).parent
     h = hashlib.sha256()
-    for patron in _FUENTES_EXTRACTOR:
+    for patron in _FUENTES_EXTRACTOR + tuple(extra):
         for p in sorted(raiz.glob(patron)):
             h.update(p.relative_to(raiz).as_posix().encode())
             h.update(p.read_bytes())
@@ -265,7 +269,7 @@ def planear(out: str | Path, docs: list[Documento], *, solo: list[str] | None = 
     corpus entra en tandas—; los cambios a documentos ya publicados no se
     limitan."""
     previos = {d["clave"]: d for d in leer_fuentes(out)["documentos"]}
-    huella = huella_extractor()
+    huella = huella_extractor(corpus.fuentes_extractor)
     candidatos = [d for d in docs if not solo or d.clave in solo]
 
     def revisar(doc: Documento) -> tuple[Documento, str | None, dict | None]:
@@ -281,7 +285,11 @@ def planear(out: str | Path, docs: list[Documento], *, solo: list[str] | None = 
         if solo:
             motivo = "pdf" if cambio_pdf else "extractor"
         elif prev.get("estado") == "excluida":
-            motivo = "reintento" if (cambio_pdf or prev.get("extractor") != huella) else None
+            # Agotados los intentos de reparación con este PDF, otro extractor
+            # no basta para reintentarla: solo un PDF nuevo.
+            agotada = (prev.get("reparacion") or {}).get("agotada")
+            motivo = "reintento" if (cambio_pdf or (prev.get("extractor") != huella
+                                                     and not agotada)) else None
         elif prev.get("extractor") != huella:
             motivo = "extractor"
         else:
@@ -309,11 +317,20 @@ def planear(out: str | Path, docs: list[Documento], *, solo: list[str] | None = 
             nuevos += 1
         elegidos.append({**a_dict(doc), "motivo": motivo, "cabeceras": cab})
 
+    # Lo publicado con hallazgos de una revisión completa que se reconstruye
+    # (otro extractor, quizá reparado, u otro PDF) pasa otra vez esa revisión:
+    # solo así se le quitan los hallazgos.
+    revisar = sorted(e["clave"] for e in elegidos
+                     if e["motivo"] in ("extractor", "pdf")
+                     and (previos.get(e["clave"]) or {}).get("estado") == "incluida"
+                     and ((previos[e["clave"]].get("revision_pendiente") or {}).get("revisada"))
+                     and not (previos[e["clave"]]["revision_pendiente"].get("agotada")
+                              and e["motivo"] == "extractor"))
     n = max(1, min(shards, len(elegidos)))
     grupos = [[e["clave"] for e in elegidos[i::n]] for i in range(n)] if elegidos else []
     pendientes = sum(1 for _, m, _ in revisados if m in ("nuevo", "reintento")) - nuevos
     return {"corpus": corpus.nombre, "huella": huella, "extractor_sha": sha_extractor(),
-            "documentos": elegidos, "shards": grupos,
+            "documentos": elegidos, "shards": grupos, "revisar": revisar,
             "nuevos_pendientes": max(0, pendientes)}
 
 
@@ -483,7 +500,14 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
     titulo_rep = (reparacion or {}).get("titulo")
     sha_plan = plan.get("extractor_sha")
     sha_rep = (reparacion or {}).get("sha") or sha_plan
-    huella_rep = huella_extractor() if reparados else plan["huella"]
+    huella_rep = huella_extractor(corpus.fuentes_extractor) if reparados else plan["huella"]
+    from . import reparaciones
+    intentos_rep = reparaciones.cargar()
+
+    def agotada(clave: str, sha: str | None) -> int:
+        """Intentos de reparación con este PDF, si ya llegaron al tope; si no, 0."""
+        n = reparaciones.intentos(clave, sha, intentos_rep)
+        return n if n >= reparaciones.TOPE else 0
     # Causa de cada cambio, para los trailers de su commit
     # (scripts/commits_por_documento.py): con qué PDF y qué extractor se produjo.
     contexto: dict[str, dict] = {}
@@ -584,13 +608,20 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
         elif publicada:
             # Lo publicado se conserva: mejor la versión anterior fiel que una
             # nueva que no lo es. Queda anotado para revisión.
-            prev["revision_pendiente"] = {"fecha": hoy, "motivo": motivo,
+            n = agotada(clave, r["sha256"])
+            prev["revision_pendiente"] = {"fecha": hoy, "motivo": motivo + (
+                                              reparaciones.nota_agotada(n) if n else ""),
                                           "pdf": huella_pdf,
-                                          **({"revisada": True} if r.get("revision") else {})}
+                                          **({"revisada": True} if r.get("revision") else {}),
+                                          **({"agotada": True} if n else {})}
             retenidas.append((clave, motivo))
         else:
+            n = agotada(clave, r["sha256"])
+            if n:
+                motivo += reparaciones.nota_agotada(n)
             entradas[clave] = {**definicion, "estado": "excluida", "motivo": motivo,
-                               "fecha": hoy, "pdf": huella_pdf, "extractor": plan["huella"]}
+                               "fecha": hoy, "pdf": huella_pdf, "extractor": plan["huella"],
+                               **({"reparacion": {"intentos": n, "agotada": True}} if n else {})}
             excluidas.append((clave, motivo))
 
     revisadas = set(plan.get("revisar", []))

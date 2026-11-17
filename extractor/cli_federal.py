@@ -74,7 +74,7 @@ def _cmd_planear_estatal(a) -> int:
                            corpus=estatal.ESTATAL)
     # Ya publicadas que deben pasar (otra vez) la revisión completa contra su
     # PDF, como un alta: si tiene hallazgos, se conservan con revision_pendiente.
-    plan["revisar"] = sorted(a.revisar or [])
+    plan["revisar"] = sorted(set(plan["revisar"]) | set(a.revisar or []))
     _escribir_json(a.plan, plan)
     motivos: dict[str, int] = {}
     for d in plan["documentos"]:
