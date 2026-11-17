@@ -12,8 +12,8 @@ name: Vigilar leyes federales
 # Vive en el extractor, no en el repo de datos, para que el historial de
 # leyes-federales solo tenga cambios de texto legal. Lo lanza cada lunes el Worker
 # `scheduler` (constitucion-extractor/scheduler/); el PR se abre en leyes-federales con
-# PR_TOKEN, un commit por documento, y `revisar-pr` de allá lo fusiona con
-# rebase para conservarlos.
+# PR_TOKEN, un commit por documento, y el job `revisar` (revisar-pr.yml) lo
+# valida y lo fusiona con rebase para conservarlos.
 
 on:
   workflow_dispatch:
@@ -418,9 +418,23 @@ jobs:
           echo "::error::Alguna fuente no se pudo descargar. Revisa el paso de extracción."
           exit 1
 
+  revisar:
+    # Valida el PR en un job sin secretos y, si pasó y quedó verificado, lo
+    # fusiona (revisar-pr.yml). Corre aunque la vigilancia haya fallado
+    # después de abrirlo.
+    needs: cerrar
+    if: ${{ !cancelled() && needs.cerrar.outputs.pr != '' }}
+    uses: ./.github/workflows/revisar-pr.yml
+    with:
+      repo: OpenCodice/leyes-federales
+      pr: ${{ needs.cerrar.outputs.pr }}
+      prefijo: actualizacion/
+    secrets:
+      PR_TOKEN: ${{ secrets.PR_TOKEN }}
+
   continuar:
     # Quedan leyes por dar de alta, o el agente reparó el extractor y hay que
-    # reconstruir con él: en cuanto `revisar-pr` fusione este PR, otra corrida.
+    # reconstruir con él: en cuanto `revisar` fusione este PR, otra corrida.
     needs: cerrar
     if: needs.cerrar.outputs.continuar == 'true' && needs.cerrar.outputs.pr != ''
     runs-on: ubuntu-latest
@@ -609,7 +623,7 @@ jobs:
           retention-days: 30
 
   salud:
-    needs: [planear, extraer, cerrar]
+    needs: [planear, extraer, cerrar, revisar]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -622,11 +636,11 @@ jobs:
         # Casi todas las fallas son de red o de la fuente oficial: se reintenta
         # solo, una vez. Si el reintento también falla, la siguiente vigilancia
         # semanal lo vuelve a intentar.
-        if: (needs.planear.result == 'failure' || needs.cerrar.result == 'failure') && inputs.reintento != true
+        if: (needs.planear.result == 'failure' || needs.cerrar.result == 'failure' || needs.revisar.result == 'failure') && inputs.reintento != true
         run: gh workflow run vigilar-federal.yml -R "$GITHUB_REPOSITORY" --ref main -f reintento=true
 
       - name: Dejar constancia si también falló el reintento
-        if: (needs.planear.result == 'failure' || needs.cerrar.result == 'failure') && inputs.reintento == true
+        if: (needs.planear.result == 'failure' || needs.cerrar.result == 'failure' || needs.revisar.result == 'failure') && inputs.reintento == true
         run: |
           titulo="🚨 Falló: ${{ github.workflow }}"
           url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -642,8 +656,8 @@ jobs:
       - name: Avisar a la web
         # constitucion.app genera /estado, /leyes y la bitácora de los repos de datos
         # y de estas corridas, así que se redespliega en cuanto termina una
-        # vigilancia, haya fallado o no. Antes se espera a que `revisar-pr` fusione
-        # los PR que abrió (unos minutos), para que la web ya los incluya.
+        # vigilancia, haya fallado o no. Después de `revisar` (y, por si acaso,
+        # de que no quede un PR abierto), para que la web ya incluya lo fusionado.
         if: always()
         env:
           GH_TOKEN: ${{ secrets.PR_TOKEN }}

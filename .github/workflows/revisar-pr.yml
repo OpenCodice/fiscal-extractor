@@ -1,0 +1,148 @@
+name: Revisar PR de un repo de datos
+
+# Valida y fusiona un PR de vigilancia en un repo de datos. Vive aquí, no en
+# los repos de datos, para que estos no tengan ningún workflow: lo llama cada
+# vigilancia después de abrir su PR (y se puede lanzar a mano para un PR
+# que haya quedado abierto).
+#
+#   validar   — scripts/validar_pr.sh sobre el sha de la cabeza del PR, en un
+#               job sin secretos (solo el GITHUB_TOKEN de lectura).
+#   fusionar  — con PR_TOKEN: publica el resultado como commit status y, solo
+#               si `validar` pasó, el PR es de la vigilancia y trae `verificado`,
+#               lo fusiona con rebase, atado a ese mismo sha
+#               (`--match-head-commit`): si la cabeza cambió, no se fusiona.
+#
+# Este archivo existe idéntico en constitucion-extractor y en fiscal-extractor:
+# cualquier cambio se hace en los dos.
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        description: 'Repo de datos (OpenCodice/…)'
+        type: string
+        required: true
+      pr:
+        description: 'Número del PR'
+        type: string
+        required: true
+      prefijo:
+        description: 'Prefijo de la rama de la vigilancia (solo esas se fusionan)'
+        type: string
+        required: true
+    secrets:
+      PR_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'Repo de datos (OpenCodice/…)'
+        type: string
+        required: true
+      pr:
+        description: 'Número del PR'
+        type: string
+        required: true
+      prefijo:
+        description: 'Prefijo de la rama de la vigilancia (solo esas se fusionan)'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  # Nombre del commit status. Mientras los repos de datos conserven su propio
+  # revisar-pr.yml (cuyo job `validar` es hoy el check obligatorio de main),
+  # este va con otro nombre para no confundirse con aquel.
+  CONTEXTO: validar-externo
+
+jobs:
+  validar:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.validar.outputs.sha }}
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Clonar los extractores e instalar dependencias
+        run: |
+          for e in constitucion-extractor fiscal-extractor; do
+            git clone -q --depth 1 "https://github.com/OpenCodice/$e.git" "/tmp/$e"
+            pip install -q -r "/tmp/$e/requirements.txt"
+          done
+      - name: Validar invariantes y trailers en la cabeza del PR (GATE)
+        id: validar
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONSTITUCION_EXTRACTOR: /tmp/constitucion-extractor
+          FISCAL_EXTRACTOR: /tmp/fiscal-extractor
+          TRABAJO: /tmp/validar-pr
+          REPO: ${{ inputs.repo }}
+          PR: ${{ inputs.pr }}
+        run: bash "/tmp/${GITHUB_REPOSITORY#*/}/scripts/validar_pr.sh" "$REPO" "$PR"
+
+  fusionar:
+    needs: validar
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publicar el check y fusionar si quedó verificado
+        env:
+          GH_TOKEN: ${{ secrets.PR_TOKEN }}
+          REPO: ${{ inputs.repo }}
+          PR: ${{ inputs.pr }}
+          PREFIJO: ${{ inputs.prefijo }}
+          RESULTADO: ${{ needs.validar.result }}
+          SHA: ${{ needs.validar.outputs.sha }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::Sin PR_TOKEN: no se publica el check ni se fusiona."; exit 1; }
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          estado_commit() {  # sha, state, descripción
+            # Si no se puede publicar, la protección de main decide: si exige
+            # este check, la fusión se rechaza más abajo.
+            gh api -X POST "repos/$REPO/statuses/$1" -f state="$2" -f context="$CONTEXTO" \
+              -f description="$3" -f target_url="$url" > /dev/null \
+              || echo "::warning::No se pudo publicar el commit status $CONTEXTO en $1."
+          }
+          if [ "$RESULTADO" != success ] || [ -z "$SHA" ]; then
+            cabeza=$(gh pr view "$PR" -R "$REPO" --json headRefOid -q .headRefOid || true)
+            [ -n "$cabeza" ] && estado_commit "$cabeza" failure "Invariantes o trailers rotos"
+            echo "::error::El PR #$PR de $REPO no pasó la validación: no se fusiona."
+            exit 1
+          fi
+          estado_commit "$SHA" success "Invariantes y trailers en orden"
+
+          read -r estado borrador ajeno rama etiquetas <<< "$(gh pr view "$PR" -R "$REPO" \
+            --json state,isDraft,isCrossRepository,headRefName,labels \
+            -q '"\(.state) \(.isDraft) \(.isCrossRepository) \(.headRefName) ,\([.labels[].name] | join(",")),"')"
+          case "$rama" in "$PREFIJO"*) ;; *) echo "La rama $rama no es de la vigilancia: no se fusiona."; exit 0 ;; esac
+          [ "$ajeno" = false ] || { echo "PR desde otro repo: no se fusiona."; exit 0; }
+          [ "$borrador" = false ] || { echo "PR en borrador: no se fusiona."; exit 0; }
+          case "$etiquetas" in
+            *,extraccion-sospechosa,*) echo "Extracción sospechosa: no se fusiona."; exit 0 ;;
+            *,verificado,*) ;;
+            *) echo "Sin etiqueta 'verificado': no se fusiona."; exit 0 ;;
+          esac
+
+          # Cada commit trae su título y sus trailers (uno por documento): se
+          # fusiona con rebase para conservarlos. Si main cambió entre la
+          # validación y la fusión (otro PR de la misma vigilancia), GitHub la
+          # rechaza aunque no haya conflicto: se reintenta con una espera al azar.
+          for intento in 1 2 3 4 5 6; do
+            read -r estado cabeza <<< "$(gh pr view "$PR" -R "$REPO" --json state,headRefOid -q '"\(.state) \(.headRefOid)"')"
+            case "$estado" in
+              MERGED) echo "El PR #$PR ya está fusionado."; exit 0 ;;
+              OPEN) ;;
+              *) echo "::error::El PR #$PR se cerró sin fusionar."; exit 1 ;;
+            esac
+            [ "$cabeza" = "$SHA" ] || { echo "::error::La cabeza del PR cambió ($cabeza) después de validar $SHA: no se fusiona."; exit 1; }
+            if gh pr merge "$PR" -R "$REPO" --rebase --delete-branch --match-head-commit "$SHA"; then
+              echo "PR #$PR fusionado ($SHA)."; exit 0
+            fi
+            sleep $(( (RANDOM % 30) + 15 * intento ))
+          done
+          echo "::error::No se pudo fusionar el PR #$PR tras 6 intentos."; exit 1

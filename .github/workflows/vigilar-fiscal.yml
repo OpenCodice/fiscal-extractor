@@ -11,8 +11,8 @@ name: Vigilar corpus fiscal
 # Vive en el extractor, no en el repo de datos, para que el historial de
 # fiscal-mexicano solo tenga cambios de texto legal. Lo lanza cada lunes el Worker
 # `scheduler` (constitucion-extractor/scheduler/); el PR se abre en fiscal-mexicano con
-# PR_TOKEN, un commit por documento, y `revisar-pr` de allá lo fusiona con
-# rebase para conservarlos.
+# PR_TOKEN, un commit por documento, y el job `revisar` (revisar-pr.yml) lo
+# valida y lo fusiona con rebase para conservarlos.
 
 on:
   workflow_dispatch:
@@ -40,6 +40,8 @@ concurrency:
 jobs:
   vigilar:
     runs-on: ubuntu-latest
+    outputs:
+      pr: ${{ steps.pr.outputs.pull-request-number }}
     steps:
       - name: Checkout del repo de datos
         uses: actions/checkout@v5
@@ -290,9 +292,8 @@ jobs:
         if: steps.publicable.outputs.si == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
-          # Con un PAT (secret PR_TOKEN) el PR nace atribuido a un usuario real,
-          # así dispara `revisar-pr` (gate) como un PR humano. Si el secret no
-          # existe, cae al GITHUB_TOKEN (el PR se abre pero sin checks).
+          # Con un PAT (secret PR_TOKEN) el PR nace atribuido a un usuario real.
+          # Si el secret no existe, cae al GITHUB_TOKEN y el PR no se fusiona.
           token: ${{ secrets.PR_TOKEN || github.token }}
           branch: actualizacion/corpus-fiscal-automatica
           base: main
@@ -320,8 +321,22 @@ jobs:
           echo "::error::Alguna fuente no se pudo resolver o descargar (URL muerta o cambió la página del SAT). Revisa el log del paso de descarga."
           exit 1
 
-  salud:
+  revisar:
+    # Valida el PR en un job sin secretos y, si pasó y quedó verificado, lo
+    # fusiona (revisar-pr.yml). Corre aunque la vigilancia haya fallado
+    # después de abrirlo.
     needs: vigilar
+    if: ${{ !cancelled() && needs.vigilar.outputs.pr != '' }}
+    uses: ./.github/workflows/revisar-pr.yml
+    with:
+      repo: OpenCodice/fiscal-mexicano
+      pr: ${{ needs.vigilar.outputs.pr }}
+      prefijo: actualizacion/
+    secrets:
+      PR_TOKEN: ${{ secrets.PR_TOKEN }}
+
+  salud:
+    needs: [vigilar, revisar]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -334,11 +349,11 @@ jobs:
         # Casi todas las fallas son de red o de la fuente oficial: se reintenta
         # solo, una vez. Si el reintento también falla, la siguiente vigilancia
         # semanal lo vuelve a intentar.
-        if: (needs.vigilar.result == 'failure') && inputs.reintento != true
+        if: (needs.vigilar.result == 'failure' || needs.revisar.result == 'failure') && inputs.reintento != true
         run: gh workflow run vigilar-fiscal.yml -R "$GITHUB_REPOSITORY" --ref main -f reintento=true
 
       - name: Dejar constancia si también falló el reintento
-        if: (needs.vigilar.result == 'failure') && inputs.reintento == true
+        if: (needs.vigilar.result == 'failure' || needs.revisar.result == 'failure') && inputs.reintento == true
         run: |
           titulo="🚨 Falló: ${{ github.workflow }}"
           url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -354,8 +369,8 @@ jobs:
       - name: Avisar a la web
         # constitucion.app genera /estado, /leyes y la bitácora de los repos de datos
         # y de estas corridas, así que se redespliega en cuanto termina una
-        # vigilancia, haya fallado o no. Antes se espera a que `revisar-pr` fusione
-        # los PR que abrió (unos minutos), para que la web ya los incluya.
+        # vigilancia, haya fallado o no. Después de `revisar` (y, por si acaso,
+        # de que no quede un PR abierto), para que la web ya incluya lo fusionado.
         if: always()
         env:
           GH_TOKEN: ${{ secrets.PR_TOKEN }}
