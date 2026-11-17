@@ -344,5 +344,10 @@ jobs:
             [ "$abiertos" = 0 ] && break
             sleep 30
           done
-          gh api repos/OpenCodice/constitucion-web/dispatches -f event_type=datos-actualizados \
-            || echo "::warning::No se pudo avisar a constitucion-web; el despliegue diario lo pondrá al día."
+          for intento in 1 2 3; do
+            gh api repos/OpenCodice/constitucion-web/dispatches -f event_type=datos-actualizados && exit 0
+            sleep $((intento * 30))
+          done
+          # No falla la vigilancia: sus datos ya están publicados; solo la web se
+          # queda atrás hasta el siguiente aviso o push.
+          echo "::warning::No se pudo avisar a constitucion-web tras tres intentos."
