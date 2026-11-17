@@ -429,3 +429,21 @@ jobs:
             gh issue create -R "$GITHUB_REPOSITORY" --title "$titulo" \
               --body "Falló dos veces seguidas; la vigilancia de la próxima semana lo reintenta: $url"
           fi
+
+      - name: Avisar a la web
+        # constitucion.app genera /estado, /leyes y la bitácora de los repos de datos
+        # y de estas corridas, así que se redespliega en cuanto termina una
+        # vigilancia, haya fallado o no. Antes se espera a que `revisar-pr` fusione
+        # los PR que abrió (unos minutos), para que la web ya los incluya.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.PR_TOKEN }}
+          DATOS: OpenCodice/leyes-federales
+        run: |
+          for _ in $(seq 1 30); do
+            abiertos=$(gh pr list -R "$DATOS" --state open --label automatico --json number -q 'length')
+            [ "$abiertos" = 0 ] && break
+            sleep 30
+          done
+          gh api repos/OpenCodice/constitucion-web/dispatches -f event_type=datos-actualizados \
+            || echo "::warning::No se pudo avisar a constitucion-web; el despliegue diario lo pondrá al día."
