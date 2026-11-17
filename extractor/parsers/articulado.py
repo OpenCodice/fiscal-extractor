@@ -922,10 +922,22 @@ def _ultima_aparicion(lineas: list[str], art: re.Pattern = ARTICULO_RE) -> dict[
 
 
 MAX_RENGLONES_NOTA = 4
+MAX_RENGLONES_NOTA_EDITOR = 8     # la nota del editor ('N. DE E. …') es más larga
 
 
 def _parentesis_cerrados(texto: str) -> bool:
     return texto.count("(") <= texto.count(")")
+
+
+_NOTA_EDITOR_RE = re.compile(r"N\.\s?DE\s?E\.")
+
+
+def _nota_abierta(nota: str) -> bool:
+    """¿La nota sigue en el renglón siguiente? Si no cerró su paréntesis o, la
+    nota del editor ('N. DE E. EN RELACIÓN CON …', sin paréntesis), si no cerró
+    la oración."""
+    return (not _parentesis_cerrados(nota)
+            or (bool(_NOTA_EDITOR_RE.match(nota)) and not nota.rstrip().endswith(".")))
 
 
 def _notas_al_final(u: Unidad | None, notas_previas: re.Pattern | None) -> list[str]:
@@ -935,21 +947,30 @@ def _notas_al_final(u: Unidad | None, notas_previas: re.Pattern | None) -> list[
     if u is None or notas_previas is None:
         return []
     lineas = u.cuerpo.rstrip("\n").split("\n")
-    j, grupos = len(lineas), []
+    j, grupos, inicios = len(lineas), [], []
     while j > 1:
         if not lineas[j - 1].strip():
             j -= 1
             continue
         # La nota puede ocupar varios renglones: abre en uno que casa con la
         # regex y cierra su paréntesis justo en el último (no antes).
-        k = next((k for k in range(j - 1, max(0, j - 1 - MAX_RENGLONES_NOTA), -1)
+        # La nota del editor ('N. DE E. …') no lleva paréntesis: ocupa desde su
+        # renglón inicial hasta uno que cierra la oración.
+        def cierra(k: int) -> bool:
+            if _NOTA_EDITOR_RE.match(lineas[k].strip()):
+                return (lineas[j - 1].rstrip().endswith(".")
+                        and not any(lineas[m].rstrip().endswith(".") for m in range(k, j - 1)))
+            return (_parentesis_cerrados("\n".join(lineas[k:j]))
+                    and (k == j - 1 or not _parentesis_cerrados("\n".join(lineas[k:j - 1]))))
+        k = next((k for k in range(j - 1, max(0, j - 1 - MAX_RENGLONES_NOTA_EDITOR), -1)
                   if notas_previas.match(lineas[k].strip())
-                  and _parentesis_cerrados("\n".join(lineas[k:j]))
-                  and (k == j - 1 or not _parentesis_cerrados("\n".join(lineas[k:j - 1])))),
-                 None)
+                  and (j - k <= MAX_RENGLONES_NOTA
+                       or _NOTA_EDITOR_RE.match(lineas[k].strip()))
+                  and cierra(k)), None)
         if k is None or k == 0:
             break
         grupos.insert(0, "\n".join(ln.strip() for ln in lineas[k:j]))
+        inicios.insert(0, k)
         j = k
     notas = grupos
     if not notas:
@@ -958,7 +979,14 @@ def _notas_al_final(u: Unidad | None, notas_previas: re.Pattern | None) -> list[
     queda = "\n".join(lineas[:j])
     primera = lineas[0].strip()[m.end():] if m else lineas[0]
     if not (primera.strip() or any(ln.strip() for ln in lineas[1:j])):
-        return []
+        # El artículo solo es sus notas: las suyas son las previas que ya se le
+        # pusieron y la que seguía a su rótulo; las demás anotan al siguiente
+        # ('ARTICULO 2448 G.- (DEROGADO …)' / '(ADICIONADO …)' del 2448 H).
+        propias = getattr(u, "n_previas", 0) + 1
+        if len(grupos) <= propias:
+            return []
+        j = inicios[propias]
+        queda, notas = "\n".join(lineas[:j]), grupos[propias:]
     u.cuerpo = queda + "\n"
     return notas
 
@@ -1008,6 +1036,10 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
     ultima = _ultima_aparicion(lineas, ART) if huecos else {}
 
     def nombre_suelto(s: str, continuacion: bool = False) -> bool:
+        # Una nota de reforma de la ley estatal ('FRACCIÓN ADICIONADA G.O. CDMX
+        # 27/08/25') no es el rótulo de un encabezado aunque vaya en mayúsculas.
+        if estatal and notas is not None and notas.match(s):
+            return False
         return _es_nombre_suelto(s, continuacion, estatal)
 
     def salto_valido(numero: int, i: int, resto: str) -> bool:
@@ -1234,10 +1266,14 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 and not abre_articulo(stripped, i)):
             nota_previa = stripped      # la nota sigue: 'ARTÍCULO 14 DE LAS DISPOSICIONES …'
             continue
+        if (estatal and en_bloque and previas_bloque and stripped
+                and _nota_abierta(previas_bloque[-1]) and not abre_articulo(stripped, i)):
+            previas_bloque[-1] += "\n" + stripped     # la nota del editor sigue
+            continue
         if en_bloque and not ART.match(stripped):
             if not stripped:
                 continue
-            if previas_bloque and not _parentesis_cerrados(previas_bloque[-1]):
+            if previas_bloque and _nota_abierta(previas_bloque[-1]):
                 previas_bloque[-1] += "\n" + stripped     # la nota previa sigue
                 continue
             if notas_previas is not None and notas_previas.match(stripped):
@@ -1280,6 +1316,15 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 numero == esperado or salto_valido(numero, i, stripped[am.end():]))
             es_variante = (actual is not None and numero == actual.numero
                            and tiene_sufijo)
+            # Un 'Bis' que el PDF pone ANTES de su artículo base ('ARTÍCULO 855
+            # BIS.-' y luego el 855, CDMX): es otro artículo, no una cita.
+            if (estatal and not es_variante and ordinal and not letra and not guion_num
+                    and numero == esperado and "BIS" in stripped[:am.end()].upper()
+                    and any((m2 := ART.match(ln.strip())) and not m2.group(2)
+                            and not m2.group(3) and not m2.group(4)
+                            and int(m2.group(1).replace(",", "")) == numero
+                            for ln in lineas[i + 1:i + 120])):
+                es_variante = True
             # Una cita al inicio de renglón ("Artículo 46 Bis 3 de la presente
             # Ley") repite una clave ya abierta: no es un artículo nuevo.
             clave = (numero, letra, guion_num, ordinal, ord_num, sub_letra)
@@ -1304,6 +1349,7 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     # seguía al encabezado en su renglón: el orden del PDF.
                     actual.cuerpo = (line[:am.end()].rstrip() + "\n\n" + "\n\n".join(previas)
                                      + "\n\n" + line[am.end():] + "\n")
+                    actual.n_previas = len(previas)
                 if es_siguiente:
                     esperado = numero + 1
                 continue

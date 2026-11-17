@@ -22,14 +22,15 @@ _MEDIO = r"(?:G\.\s?O\.|D\.\s?O\.\s?F\.|GODF)"
 _VERBO = r"(?:REFORMAD|ADICIONAD|DEROGAD|REUBICAD|RECORRID|ACLARAD)"
 # Las previas, en mayúsculas, a veces envuelven y el medio queda en el renglón
 # siguiente: '(DEROGADO POR ARTICULO SEGUNDO TRANSITORIO DE LA LEY FEDERAL'.
-NOTAS_PREVIAS = rf"^\((?:[A-ZÁÉÍÓÚÑ ]+\s)?(?:{_VERBO}[OA]S?\b|F\.\s?DE\s?E\.|FE DE ERRATAS)"
+NOTAS_PREVIAS = rf"^\((?:[A-ZÁÉÍÓÚÑ ]+\s)?(?:{_VERBO}[OA]S?\b|F\.\s?DE\s?E\.|FE DE ERRATAS)|^N\.\s?DE\s?E\."
 NOTAS = (NOTAS_PREVIAS + rf"|^\((?=[^)]*{_MEDIO})[^)]*?(?i:{_VERBO}|F\.\s?DE\s?E\.|FE DE ERRATAS)"
          r"|^(?i:P[áa]rrafos?|Fracci[óo]n(?:es)?|Art[íi]culos?|Incisos?|"
          r"Cap[íi]tulos?|Denominaci[óo]n|Transitorios?|T[íi]tulos?|Secci[óo]n(?:es)?|"
-         rf"Numerales?|Apartados?)\s+(?i:{_VERBO}[oa]s?)\b[^\n]*?{_MEDIO}"
+         rf"Numeral(?:es)?|Apartados?)\s+(?i:{_VERBO}[oa]s?)\b[^\n]*?{_MEDIO}"
          # Fe de erratas y erratas señaladas, sin verbo: 'Fe de Erratas G.O. CDMX
          # 13/11/2023', 'Sic. G.O. CDMX 07/06/2017'.
-         rf"|^(?i:Fe\s+de\s+erratas)\b[^\n]*?{_MEDIO}|^Sic\.\s*{_MEDIO}"
+         rf"|^(?i:Fe\s+de\s+erratas)\b(?:[^\n]*?{_MEDIO}|\s+\d{{1,2}}/\d{{1,2}}/\d{{4}}$)"
+         rf"|^Sic\.\s*{_MEDIO}"
          # Notas del editor: 'N. DE E. EN RELACIÓN CON LA ENTRADA EN VIGOR …'.
          r"|^N\.\s?DE\s?E\.")
 
