@@ -67,7 +67,7 @@ ARTICULO_RE = re.compile(
 # Es otra regex para no cambiar la lectura de las leyes federales. El paréntesis
 # que sigue al rótulo ('Artículo 58 (Derogado)') es del texto.
 ORDINALES_ESTATAL = (ORDINALES + "|Quitus|Quintos|Sextus|Sexties|S[ée]ptimus|Octavus|"
-                     "Undecies|Duodecies|Cuarter")
+                     "Undecies|Duodecies|Terdecies|Quaterdecies|Cuarter")
 ARTICULO_ESTATAL_RE = re.compile(
     r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
