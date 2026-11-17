@@ -71,11 +71,12 @@ ORDINALES_ESTATAL = (ORDINALES + "|Quitus|Quintos|Sextus|Sexties|S[ée]ptimus|Oc
 ARTICULO_ESTATAL_RE = re.compile(
     r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
-    r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-])|(?<=\d)(?=[A-Z]\.))([A-Z])(?![A-Za-z]))?"  # letra "-A", " A." (118 A.) o "132G."
+    r"(?:(?:-(?=[A-ZÑ])|\s(?=[A-Z][.\-])|(?<=\d)(?=[A-Z]\.))([A-ZÑ])(?![A-Za-zñ]))?"  # letra "-A", " A." (118 A.) o "132G."; "142-Ñ"
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
     rf"(?:[\s.\-]+(?i:({ORDINALES_ESTATAL}))"         # ordinal
-    r"(?:(?:[\s\-]+|\.\s?|(?=\d))(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1", "Bis. 3", "Ter2") y letra ("Bis 35 A.-")
-    r"(?:\s*\.?\s?-?\.?(?:\s|$|(?=\())|\.-(?=\S)"   # separador final ("29 BIS. - ", "137-.", o ".-" pegado)
+    r"(?:(?:[\s\-]+|\.\s?|(?=\d))(\d+|(?i:uno|dos|tres))(?:\s+([A-Z])(?=[.\-]|\s*$))?"  # numeral ("Bis 1", "Bis. 3", "Ter2", "Bis Uno") y letra ("Bis 35 A.-")
+    r"|-([A-Z])(?=[.\-]|\s))?)?"                    # letra pegada al ordinal: "221 BIS-A.-"
+    r"(?:\s*\.?\s?[-–]?\.?(?:\s|$|(?=\())|\.-(?=\S)"   # separador final ("29 BIS. - ", "137-.", "209 TER. – " o ".-" pegado)
     r"|\.(?=[A-ZÁÉÍÓÚÑ](?:[a-záéíóúñ]|\s))"            # o el punto pegado: "127.Se deroga.", "36.A través"
     r"|:(?=\s))"                                     # o dos puntos: "Artículo 276 Quater: Comete"
 )
@@ -470,7 +471,8 @@ def _notas_aparte(paginas: list[str], nota: re.Pattern) -> list[str]:
             # fracción viene en el renglón de la nota; es del texto anterior.
             antes = re.sub(r"(?<=\S)\n(y|o|e|u|y/o)$", r" \1", antes)
             partes.append(antes + ("\n" if antes and not antes.endswith("\n") else ""))
-            partes.append(re.sub(r"\s*\n\s*", " ", m.group(0)))
+            # Una fecha partida en su guion ('1-' / 'IX-17') se une sin espacio.
+            partes.append(re.sub(r"\s*\n\s*", " ", re.sub(r"(?<=\d-)\s*\n\s*|\s*\n\s*(?=-)", "", m.group(0))))
             previo = m.end()
             if previo < len(texto) and texto[previo] != "\n":
                 partes.append("\n")
@@ -932,6 +934,11 @@ def _parentesis_cerrados(texto: str) -> bool:
 _NOTA_EDITOR_RE = re.compile(r"N\.\s?DE\s?E\.")
 
 
+_NOTA_ENCABEZADO_RE = re.compile(
+    r"(?:Cap[íi]tulos?|T[íi]tulos?|Secci[óo]n(?:es)?|Libros?)\s+"
+    r"(?:adicionad|reformad|derogad|reubicad|recorrid|aclarad)[oa]s?\b", re.IGNORECASE)
+
+
 def _nota_abierta(nota: str) -> bool:
     """¿La nota sigue en el renglón siguiente? Si no cerró su paréntesis o, la
     nota del editor ('N. DE E. EN RELACIÓN CON …', sin paréntesis), si no cerró
@@ -1032,6 +1039,10 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
     """
     ART = ARTICULO_ESTATAL_RE if estatal else ARTICULO_RE
     texto = _solo_articulado(_articulos_ordinales(clean_text), estatal)
+    if estatal:
+        # El PDF escribe a veces la 'I' por el 1 en el número ('ARTÍCULO 22I BIS').
+        texto = re.sub(r"(?m)^((?:ART[ÍI]CULO|Art[íi]culo)\s+\d+)I(?=\s+(?i:bis|ter|qu[aá]ter)\b)",
+                       r"\g<1>1", texto)
     lineas = texto.splitlines()
     ultima = _ultima_aparicion(lineas, ART) if huecos else {}
 
@@ -1082,6 +1093,16 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
         DOF …' de la Cámara, se quedan en la estructura."""
         _notas_al_final(actual, notas_previas)
         previas_bloque.clear()
+        if estatal and notas is not None and actual is not None:
+            # 'Capitulo Adicionado G.O. CDMX 23/08/24' justo antes del siguiente
+            # encabezado anota un encabezado, no es parte del artículo.
+            lineas_a = actual.cuerpo.rstrip("\n").split("\n")
+            while (len(lineas_a) > 1 and _NOTA_ENCABEZADO_RE.match(lineas_a[-1].strip())
+                   and notas.match(lineas_a[-1].strip())):
+                lineas_a.pop()
+                while len(lineas_a) > 1 and not lineas_a[-1].strip():
+                    lineas_a.pop()
+            actual.cuerpo = "\n".join(lineas_a) + "\n"
 
     def es_nota_bloque(s: str) -> bool:
         return _es_nota_de_bloque(s) or (notas is not None and bool(notas.match(s)))
@@ -1287,7 +1308,15 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 nota_previa = stripped                      # la nota sigue en otra línea
                 continue
             nota_previa = False
+            # Estatal: el nombre en MAYÚSCULAS que envuelve en varios renglones y
+            # cierra con punto ('…O VALES DE CANJE.') sigue siendo el nombre.
+            nombre_mayusculas = (
+                estatal and ultimo_nivel and stripped.isupper()
+                and not anterior.endswith((".", ";", ":")) and anterior.isupper()
+                and _es_nombre_encabezado(stripped, True, True)
+                and desemboca_en_articulo(i))
             if (nombre_suelto(stripped) or nombre_suelto(stripped, continuacion=True)
+                    or nombre_mayusculas
                     or re.fullmatch(r"[IVXLCDM]+", stripped)):
                 ampliar_nombre(stripped)
                 previas_bloque.clear()
@@ -1299,8 +1328,8 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             letra = (am.group(2) or "").upper()
             guion_num = am.group(3) or ""         # numeral con guion: "58-1", "195-L-4"
             ordinal = (am.group(4) or "").title()
-            ord_num = am.group(5) or ""           # numeral tras el ordinal: "Bis 1"
-            sub_letra = am.group(6) or ""         # letra tras el numeral: "Bis 35 A"
+            ord_num = (am.group(5) or "").title()   # numeral tras el ordinal: "Bis 1", "Bis Uno"
+            sub_letra = am.group(6) or (am.group(7) if ART.groups >= 7 else "") or ""  # letra tras el numeral: "Bis 35 A", "Bis-A"
             # 'Artículo 176-Bis. 3.' es el 176 Bis 3 si el 176 Bis ya se abrió
             # (Código Penal de Jalisco); si no, 'Artículo 459 Ter. 1.' es el 459
             # Ter y '1.' su primer párrafo numerado (Código Electoral de Jalisco).

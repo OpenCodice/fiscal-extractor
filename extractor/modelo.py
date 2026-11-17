@@ -19,6 +19,7 @@ from datetime import date
 
 def _ascii(s: str) -> str:
     """'Quáter' → 'quater' (para claves de archivo sin acentos)."""
+    s = s.replace("Ñ", "NN").replace("ñ", "nn")      # 142-Ñ no es 142-N
     nfkd = unicodedata.normalize("NFKD", s)
     return "".join(c for c in nfkd if not unicodedata.combining(c)).lower()
 
