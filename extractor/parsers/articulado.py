@@ -466,6 +466,9 @@ def _notas_aparte(paginas: list[str], nota: re.Pattern) -> list[str]:
         partes, previo = [], 0
         for m in nota.finditer(texto):
             antes = texto[previo:m.start()].rstrip(" \t")
+            # '…o de particulares;' / 'y (Ref. …)': la conjunción que cierra la
+            # fracción viene en el renglón de la nota; es del texto anterior.
+            antes = re.sub(r"(?<=\S)\n(y|o|e|u|y/o)$", r" \1", antes)
             partes.append(antes + ("\n" if antes and not antes.endswith("\n") else ""))
             partes.append(re.sub(r"\s*\n\s*", " ", m.group(0)))
             previo = m.end()

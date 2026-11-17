@@ -15,10 +15,15 @@ from . import ley
 
 MEDIO = "Periódico Oficial del Gobierno del Estado de Querétaro «La Sombra de Arteaga»"
 _BASE = "https://site.legislaturaqueretaro.gob.mx/CloudPLQ/InvEst/"
-_NOTA = (r"\((?:Ref\.|Reforma|Adici[óo]n|Derogad[oa]|Derogaci[óo]n|Fe\s+de\s+erratas)?\s*"
-         r"P\.\s*O\.\s*N\s?o\.\s*\d+\s*,\s*\d{1,2}\s*-\s*[IVX]+\s*-\s*\d{2,4}\)")
+_FECHA_PO = (r"P\.\s*O\.\s*[NM]\s?o\.\s*\d+\s*[,.]\s*\d{1,2}\s*-\s*[IVX]+\s*-\s*\d{2,4}")
+# El PDF escribe a veces 'p.o.' en minúsculas, 'Mo.' por 'No.' o un punto por la
+# coma; la nota puede seguir con '(esta reforma entra en vigor …)', que es suya.
+_NOTA = (r"\((?i:(?:Ref\.|Reforma|Adici[óo]n|Derogad[oa]|Derogaci[óo]n|Fe\s+de\s+erratas)?\s*"
+         + _FECHA_PO + r")\)(?:\s*\((?i:esta\s+(?:adici[óo]n|reforma))\s+entra[^()]*\))?"
+         r"|\(Modificaci[óo]n\s+seg[úu]n\s+oficio\s+[\w/.-]+\s+publicado\s+en\s+el\s+"
+         + _FECHA_PO + r"\)")
 NOTAS_EN_LINEA = _NOTA
-NOTAS = r"^" + _NOTA + r"$"
+NOTAS = r"^(?:" + _NOTA + r")$"
 
 
 def _qro(nombre: str, sigla: str, ruta: str, **kw) -> object:
