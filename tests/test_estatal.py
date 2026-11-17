@@ -292,3 +292,33 @@ def test_rotulo_estatal_no_es_epigrafe():
     texto = "Artículo 233.\n1. Uno.\nArtículo 234.Derogado\nArtículo 235.\n1. Tres.\n"
     assert [u.clave for u in parse_texto(texto, start=233, epigrafe_max=80)] == [
         "233", "234", "235"]
+
+
+def test_hallazgos_de_revision_persisten_hasta_otra_revision(tmp_path):
+    repo = tmp_path / "datos"
+    ley = documentos(["cdmx"])[0]
+    unidades = repo / disposicion.rel_unidades(ley.clave)
+    unidades.mkdir(parents=True)
+    (unidades / "001.md").write_text("# Artículo 1o.\n\nUno.\n")
+    (repo / "fuentes.json").write_text(json.dumps({"documentos": [
+        {"clave": ley.clave, "etiqueta": ley.etiqueta, "sigla": ley.sigla, "tipo": "ley",
+         "estado": "incluida", "pdf": {"sha256": "s"}, "extractor": "h",
+         "revision_pendiente": {"motivo": "La revisión completa…", "revisada": True}}]}))
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "inicio")
+    r = {"sha256": "s", "bytes": 1, "problemas": {}, "invariantes": [], "unidades": 1}
+
+    def cerrar(revisar):
+        plan = tmp_path / "plan.json"
+        plan.write_text(json.dumps({"corpus": "estatal", "huella": "h2", "revisar": revisar,
+                                    "documentos": [{**a_dict(ley), "motivo": "extractor"}]}))
+        federal.cerrar(str(plan), str(repo), {ley.clave: r})
+        return json.loads((repo / "fuentes.json").read_text())["documentos"]
+
+    e = next(d for d in cerrar([]) if d["clave"] == ley.clave)
+    assert e["revision_pendiente"]["revisada"]          # las compuertas no la quitan
+    e = next(d for d in cerrar([ley.clave]) if d["clave"] == ley.clave)
+    assert "revision_pendiente" not in e                 # una revisión sin hallazgos sí

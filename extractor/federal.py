@@ -550,6 +550,8 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
                        "unidades": r.get("unidades"), "pdf": huella_pdf,
                        "extractor": plan["huella"],
                        **({"extractor_sha": sha_doc} if sha_doc else {})}
+            if publicada and (prev.get("revision_pendiente") or {}).get("revisada"):
+                entrada["revision_pendiente"] = prev["revision_pendiente"]
             entrada["alta"] = prev.get("alta") if publicada else {
                 "fecha": hoy, "via": "reparada" if clave in reparados else "limpia",
                 **({"reparacion": titulo_rep} if clave in reparados and titulo_rep else {})}
@@ -583,16 +585,22 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
             # Lo publicado se conserva: mejor la versión anterior fiel que una
             # nueva que no lo es. Queda anotado para revisión.
             prev["revision_pendiente"] = {"fecha": hoy, "motivo": motivo,
-                                          "pdf": huella_pdf}
+                                          "pdf": huella_pdf,
+                                          **({"revisada": True} if r.get("revision") else {})}
             retenidas.append((clave, motivo))
         else:
             entradas[clave] = {**definicion, "estado": "excluida", "motivo": motivo,
                                "fecha": hoy, "pdf": huella_pdf, "extractor": plan["huella"]}
             excluidas.append((clave, motivo))
 
+    revisadas = set(plan.get("revisar", []))
     for e in entradas.values():
         if e.get("estado") == "incluida" and e["clave"] not in {c for c, _ in retenidas} \
                 and e["clave"] in resultados and es_fiel(resultados[e["clave"]]):
+            # Los hallazgos de una revisión completa solo los quita otra revisión
+            # completa sin hallazgos; pasar las compuertas deterministas no basta.
+            if (e.get("revision_pendiente") or {}).get("revisada") and e["clave"] not in revisadas:
+                continue
             e.pop("revision_pendiente", None)
     fuentes["documentos"] = list(entradas.values())
     escribir_fuentes(out, fuentes)
