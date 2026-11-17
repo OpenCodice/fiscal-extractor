@@ -56,6 +56,14 @@ def _cmd_stats(a) -> int:
     return 0
 
 
+def _pdfs_en(pdf_dir: str) -> dict[str, str]:
+    """clave → PDF de la carpeta; las claves estatales ('jalisco/codigo-civil')
+    quedan en subcarpetas."""
+    base = Path(pdf_dir)
+    return {p.relative_to(base).with_suffix("").as_posix(): str(p)
+            for p in sorted(base.rglob("*.pdf"))}
+
+
 def _pdf_en(pdf_dir: str, clave: str) -> str:
     """`<clave>.pdf` (como lo deja `actualizar --pdf-dir`) o `CLAVE.pdf`."""
     base = Path(pdf_dir)
@@ -154,7 +162,7 @@ def _cmd_verificar(a) -> int:
     """
     from .verificar import (modelo_configurado, modelo_fuerte_configurado,
                             openai_call, reporte_md, verificar)
-    pdfs = {p.stem: str(p) for p in Path(a.pdf_dir).glob("*.pdf")}
+    pdfs = _pdfs_en(a.pdf_dir)
     call = fuerte = None
     if not a.sin_llm:
         call = openai_call(a.modelo or modelo_configurado())
@@ -171,7 +179,7 @@ def _cmd_auditar(a) -> int:
     """Cobertura determinista de todas las unidades contra los PDF de --pdf-dir."""
     import json
     from .verificar import auditar
-    pdfs = {p.stem: str(p) for p in Path(a.pdf_dir).glob("*.pdf")}
+    pdfs = _pdfs_en(a.pdf_dir)
     res = auditar(a.out, pdfs)
     if a.json:
         Path(a.json).write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")

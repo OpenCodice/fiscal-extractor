@@ -29,11 +29,12 @@ import subprocess
 import sys
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from urllib.parse import urljoin
 
+from .disposicion import dir_metadata, dir_unidades, rel_unidades, rutas
 from .fuentes import UA, _SSL_GOB, descargar, url_vigente
 from .registro import BASE_DIPUTADOS, FISCALES as _FISCALES, Documento, a_dict, de_dict
 
@@ -62,6 +63,41 @@ _FUENTES_EXTRACTOR = ("parsers/*.py", "build.py", "modelo.py", "normalize.py",
                       "verificar.py", "validate.py")
 
 TIEMPO_MAX_DOC = 20 * 60          # segundos para construir un documento
+
+
+@dataclass(frozen=True)
+class Corpus:
+    """Lo que distingue a un corpus vigilado por este flujo (planear → extraer
+    → cerrar): el federal, generado del índice de LeyesBiblio, o el de las leyes
+    estatales, declarado en `extractor/estatales/` (ver estatal.py)."""
+    nombre: str                      # 'federal' | 'estatal': va en el plan
+    indice: str | None               # página índice, para fuentes.json
+    fuera: dict                      # clave → motivo: se retira si estaba publicada
+    singular: str                    # 'ley federal'
+    plural: str                      # 'leyes federales'
+    # Definición (a_dict) de las leyes declaradas fuera que nunca se publicaron:
+    # quedan en fuentes.json como excluidas, con su motivo, para que se sepa.
+    definiciones_fuera: dict = field(default_factory=dict)
+    # Campos de la definición que se guardan en fuentes.json (None: todos). Las
+    # leyes estatales se definen en código (cómo leer su PDF); su fuentes.json
+    # solo las identifica, con la URL del PDF de la versión publicada.
+    campos_registro: tuple | None = None
+
+    def registro(self, definicion: dict, url: str | None = None) -> dict:
+        if self.campos_registro is None:
+            return definicion
+        d = {k: definicion[k] for k in self.campos_registro if definicion.get(k) is not None}
+        return {**d, **({"url": url} if url else {})}
+
+
+FEDERAL = Corpus("federal", INDICE, FUERA_DEL_CORPUS, "ley federal", "leyes federales")
+
+
+def corpus_del_plan(plan: dict) -> Corpus:
+    if plan.get("corpus") == "estatal":
+        from .estatal import ESTATAL
+        return ESTATAL
+    return FEDERAL
 
 
 # ------------------------------------------------------------------ índice
@@ -185,8 +221,10 @@ def sha256(ruta: str | Path) -> str:
     return h.hexdigest()
 
 
-def cabeceras(url: str) -> dict:
+def cabeceras(url: str, via: str | None = None) -> dict:
     """ETag, Last-Modified y tamaño del PDF sin descargarlo."""
+    if via:
+        return {}               # el Worker no reenvía HEAD: se descarga y se compara el sha256
     req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=60, context=_SSL_GOB) as r:
         return {"etag": r.headers.get("ETag"),
@@ -203,11 +241,11 @@ def _mismas_cabeceras(antes: dict | None, ahora: dict) -> bool:
 
 # ------------------------------------------------------------------ fuentes.json
 
-def leer_fuentes(out: str | Path) -> dict:
+def leer_fuentes(out: str | Path, corpus: Corpus = FEDERAL) -> dict:
     ruta = Path(out) / "fuentes.json"
     if ruta.exists():
         return json.loads(ruta.read_text(encoding="utf-8"))
-    return {"indice": INDICE, "documentos": []}
+    return {**({"indice": corpus.indice} if corpus.indice else {}), "documentos": []}
 
 
 def escribir_fuentes(out: str | Path, fuentes: dict) -> None:
@@ -219,7 +257,8 @@ def escribir_fuentes(out: str | Path, fuentes: dict) -> None:
 # ------------------------------------------------------------------ planear
 
 def planear(out: str | Path, docs: list[Documento], *, solo: list[str] | None = None,
-            lote: int | None = None, shards: int = 12, consultar=cabeceras) -> dict:
+            lote: int | None = None, shards: int = 12, consultar=cabeceras,
+            corpus: Corpus = FEDERAL) -> dict:
     """Qué documentos reprocesar y por qué, repartidos en `shards` grupos.
 
     `lote` limita los documentos nuevos (o reintentos) por corrida —el alta del
@@ -233,7 +272,7 @@ def planear(out: str | Path, docs: list[Documento], *, solo: list[str] | None = 
         prev = previos.get(doc.clave)
         try:
             url = url_vigente(doc)
-            cab = consultar(url)
+            cab = consultar(url, doc.via) if doc.via else consultar(url)
         except Exception as e:                      # noqa: BLE001 — se reporta
             return doc, "pdf", {"error": f"{type(e).__name__}: {e}"}
         if prev is None:
@@ -255,7 +294,7 @@ def planear(out: str | Path, docs: list[Documento], *, solo: list[str] | None = 
     elegidos, nuevos = [], 0
     # Lo declarado fuera del corpus que sigue publicado se retira en `cerrar`;
     # entra al plan para que haya corrida aunque nada más cambie.
-    for clave in FUERA_DEL_CORPUS:
+    for clave in corpus.fuera:
         prev = previos.get(clave)
         if prev and prev.get("estado") == "incluida" and (not solo or clave in solo):
             elegidos.append({**{k: prev[k] for k in ("clave", "etiqueta", "sigla", "tipo",
@@ -273,7 +312,7 @@ def planear(out: str | Path, docs: list[Documento], *, solo: list[str] | None = 
     n = max(1, min(shards, len(elegidos)))
     grupos = [[e["clave"] for e in elegidos[i::n]] for i in range(n)] if elegidos else []
     pendientes = sum(1 for _, m, _ in revisados if m in ("nuevo", "reintento")) - nuevos
-    return {"huella": huella, "extractor_sha": sha_extractor(),
+    return {"corpus": corpus.nombre, "huella": huella, "extractor_sha": sha_extractor(),
             "documentos": elegidos, "shards": grupos,
             "nuevos_pendientes": max(0, pendientes)}
 
@@ -302,7 +341,7 @@ def evaluar(out: str | Path, clave: str, pdf: str) -> dict:
     from .verificar import auditar
     a = auditar(out, {clave: pdf})
     _, checks = validar(str(out), [clave])
-    idx_path = Path(out) / "metadata" / clave / "articulos.json"
+    idx_path = dir_metadata(out, clave) / "articulos.json"
     idx = json.loads(idx_path.read_text(encoding="utf-8")) if idx_path.exists() else {}
     return {
         "unidades": idx.get("num_articulos", 0),
@@ -336,7 +375,7 @@ def extraer(plan_path: str, out: str, pdf_dir: str, *, claves: list[str],
         try:
             url = url_vigente(de_dict(d))
             if descargar_pdf or not Path(pdf).exists():
-                descargar(url, pdf)
+                descargar(url, pdf, via=d.get("via"))
             r.update(url=url, sha256=sha256(pdf), bytes=Path(pdf).stat().st_size,
                      etag=(d.get("cabeceras") or {}).get("etag"),
                      last_modified=(d.get("cabeceras") or {}).get("last_modified"))
@@ -376,23 +415,23 @@ def _git(out, *args) -> str:
 def unidades_cambiadas(out: str | Path, clave: str) -> list[str]:
     """Unidades de `clave` cuyo texto difiere de HEAD (añadidas, cambiadas o
     suprimidas)."""
-    salida = _git(out, "status", "--porcelain", "--no-renames", "-uall", "--", clave)
+    salida = _git(out, "status", "--porcelain", "--no-renames", "-uall", "--", rel_unidades(clave))
     return sorted(Path(l[3:].strip().strip('"')).stem for l in salida.splitlines()
                   if l.strip().endswith(".md"))
 
 
 def _articulo(out: Path, clave: str, unidad: str) -> str:
     """'Artículo 4o.' del encabezado del .md → '4o'; si se suprimió, de HEAD."""
-    ruta = out / clave / f"{unidad}.md"
+    ruta = dir_unidades(out, clave) / f"{unidad}.md"
     texto = ruta.read_text(encoding="utf-8") if ruta.exists() else _git(
-        out, "show", f"HEAD:{clave}/{unidad}.md")
+        out, "show", f"HEAD:{rel_unidades(clave)}/{unidad}.md")
     primera = texto.split("\n", 1)[0]
     return re.sub(r"^#\s*Art[íi]culo\s+", "", primera).rstrip(".").strip() or unidad
 
 
 def _restaurar(out: Path, clave: str) -> None:
     """Devuelve el documento a su versión publicada (o lo quita si es nuevo)."""
-    for ruta in (clave, f"metadata/{clave}"):
+    for ruta in rutas(clave):
         if (out / ruta).exists():
             shutil.rmtree(out / ruta)
         if _git(out, "ls-tree", "-d", "HEAD", ruta).strip():
@@ -421,9 +460,9 @@ def _publicada_es_fiel(out: Path, clave: str, pdf: str | None) -> bool:
     import tempfile
     from .verificar import auditar
     with tempfile.TemporaryDirectory() as tmp:
-        destino = Path(tmp) / clave
-        destino.mkdir()
-        for ruta in _git(out, "ls-tree", "--name-only", "HEAD", f"{clave}/").split():
+        destino = dir_unidades(tmp, clave)
+        destino.mkdir(parents=True)
+        for ruta in _git(out, "ls-tree", "--name-only", "HEAD", f"{rel_unidades(clave)}/").split():
             (Path(tmp) / ruta).write_text(_git(out, "show", f"HEAD:{ruta}"), encoding="utf-8")
         return not auditar(tmp, {clave: pdf})["con_problemas"]
 
@@ -433,9 +472,11 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
     """Aplica las decisiones a `fuentes.json` y al árbol de datos; devuelve el
     resumen para el commit y el PR."""
     plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
+    corpus = corpus_del_plan(plan)
     out_p = Path(out)
-    fuentes = leer_fuentes(out)
-    fuentes["indice"] = INDICE
+    fuentes = leer_fuentes(out, corpus)
+    if corpus.indice:
+        fuentes["indice"] = corpus.indice
     entradas = {d["clave"]: d for d in fuentes["documentos"]}
     hoy = (hoy or date.today()).isoformat()
     reparados = set((reparacion or {}).get("reparados", []))
@@ -450,10 +491,10 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
     altas, reformas, correcciones, excluidas, retenidas, fallidas = [], [], [], [], [], []
     retiradas: list[str] = []            # publicadas que salen del corpus
     aplazadas: list[str] = []            # altas cuya revisión completa queda para otra corrida
-    for clave, motivo in FUERA_DEL_CORPUS.items():
+    for clave, motivo in corpus.fuera.items():
         e = entradas.get(clave)
         if e and e.get("estado") == "incluida":
-            for ruta in (clave, f"metadata/{clave}"):
+            for ruta in rutas(clave):
                 if (out_p / ruta).exists():
                     shutil.rmtree(out_p / ruta)
             entradas[clave] = {**{k: v for k, v in e.items() if k not in ("alta", "unidades",
@@ -462,18 +503,24 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
             excluidas.append((clave, motivo))
             retiradas.append(clave)
             contexto[clave] = {"motivo_retiro": "fuera del corpus", "extractor_sha": sha_plan}
+        elif e is None and clave in corpus.definiciones_fuera:
+            entradas[clave] = {**corpus.registro(corpus.definiciones_fuera[clave]), "estado": "excluida",
+                               "motivo": motivo, "fecha": hoy}
+        elif e is not None and e.get("estado") == "excluida" and e.get("motivo") != motivo:
+            e["motivo"] = motivo
     for d in plan["documentos"]:
         clave = d["clave"]
         r = resultados.get(clave)
         prev = entradas.get(clave)
-        if r is None or clave in FUERA_DEL_CORPUS:
+        if r is None or clave in corpus.fuera:
             continue
         if r.get("error_fuente"):
             fallidas.append((clave, r["error_fuente"]))
             if prev is None:
                 _restaurar(out_p, clave)
             continue
-        definicion = {k: v for k, v in d.items() if k not in ("motivo", "cabeceras")}
+        definicion = corpus.registro({k: v for k, v in d.items() if k not in ("motivo", "cabeceras")},
+                                     r.get("url"))
         huella_pdf = {"sha256": r["sha256"], "bytes": r["bytes"], "etag": r.get("etag"),
                       "last_modified": r.get("last_modified")}
         if r.get("sin_cambio"):
@@ -522,7 +569,7 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
         if publicada and d["motivo"] != "pdf" and not _publicada_es_fiel(out_p, clave, pdf):
             # Mismo PDF y la versión publicada tampoco pasa la auditoría actual
             # (se publicó con compuertas más laxas): no puede seguir publicada.
-            for ruta in (clave, f"metadata/{clave}"):
+            for ruta in rutas(clave):
                 if (out_p / ruta).exists():
                     shutil.rmtree(out_p / ruta)
             motivo += ". La versión publicada tampoco pasa la auditoría actual"
@@ -549,11 +596,12 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
             e.pop("revision_pendiente", None)
     fuentes["documentos"] = list(entradas.values())
     escribir_fuentes(out, fuentes)
-    from .build import escribir_indice_maestro
-    escribir_indice_maestro(out)
+    if corpus.nombre == "federal":
+        from .build import escribir_indice_maestro
+        escribir_indice_maestro(out)
 
     siglas = {c: e["sigla"] for c, e in entradas.items()}
-    asunto = _asunto(altas, reformas, correcciones, siglas, retiradas)
+    asunto = _asunto(altas, reformas, correcciones, siglas, retiradas, corpus)
     return {"asunto": asunto, "contexto": contexto,
             "altas": altas, "reformas": reformas, "retiradas": retiradas,
             "correcciones": correcciones, "excluidas": excluidas,
@@ -566,16 +614,17 @@ def _lista_corta(elems: list[str], n: int = 6) -> str:
     return ", ".join(elems[:n]) + (f" y {len(elems) - n} más" if len(elems) > n else "")
 
 
-def _asunto(altas, reformas, correcciones, siglas, retiradas=()) -> str:
+def _asunto(altas, reformas, correcciones, siglas, retiradas=(), corpus: Corpus = FEDERAL) -> str:
     partes = []
     for clave, version, arts in reformas[:3]:
-        partes.append(f"Reforma {siglas.get(clave, clave)} (DOF {version or 's/f'}): "
+        medio = "P.O." if corpus.nombre == "estatal" else "DOF"
+        partes.append(f"Reforma {siglas.get(clave, clave)} ({medio} {version or 's/f'}): "
                       f"{'art.' if len(arts) == 1 else 'arts.'} {_lista_corta(arts)}")
     if len(reformas) > 3:
         partes.append(f"reformas en {len(reformas) - 3} leyes más")
     if altas:
         partes.append(f"Alta de {len(altas)} "
-                      f"{'ley federal' if len(altas) == 1 else 'leyes federales'}: "
+                      f"{corpus.singular if len(altas) == 1 else corpus.plural}: "
                       f"{_lista_corta([siglas.get(c, c) for c in altas], 5)}")
     if correcciones:
         n = sum(k for _, k in correcciones)
@@ -587,12 +636,13 @@ def _asunto(altas, reformas, correcciones, siglas, retiradas=()) -> str:
                       f"{'ley' if len(retiradas) == 1 else 'leyes'} que no "
                       f"{'reproduce' if len(retiradas) == 1 else 'reproducen'} el PDF: "
                       f"{_lista_corta([siglas.get(c, c) for c in retiradas], 5)}")
-    return " · ".join(partes) or "Actualización de fuentes de las leyes federales"
+    return " · ".join(partes) or f"Actualización de fuentes de las {corpus.plural}"
 
 
 def cuerpo_pr(res: dict, plan: dict, resultados: dict, notas_agente: str = "") -> str:
     """Descripción del PR: qué entra, qué se queda fuera y por qué."""
-    l = ["### Leyes federales: resultado de la vigilancia", ""]
+    corpus = corpus_del_plan(plan)
+    l = [f"### {corpus.plural.capitalize()}: resultado de la vigilancia", ""]
     rep = set(res.get("reparados", []))
     if res["altas"]:
         l.append(f"**Altas ({len(res['altas'])})**, fieles al PDF según la auditoría determinista:")
@@ -604,7 +654,8 @@ def cuerpo_pr(res: dict, plan: dict, resultados: dict, notas_agente: str = "") -
     if res["reformas"]:
         l.append("**Reformas**:")
         for c, v, arts in res["reformas"]:
-            l.append(f"- `{c}` (DOF {v or 's/f'}): {_lista_corta(arts, 30)}")
+            medio = "P.O." if corpus.nombre == "estatal" else "DOF"
+            l.append(f"- `{c}` ({medio} {v or 's/f'}): {_lista_corta(arts, 30)}")
         l.append("")
     if res["correcciones"]:
         l.append("**Correcciones de extracción** (mismo PDF, mejor lectura):")

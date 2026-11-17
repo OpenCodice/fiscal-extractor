@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Callable
 
 from .parsers import articulado, criterios, reglas
+from .disposicion import dir_metadata, dir_unidades, unidad_de_ruta
 from .registro import POR_CLAVE, Documento
 
 MODELO_DEFAULT = "gpt-5.4-mini"
@@ -118,16 +119,16 @@ def _git(out: Path, *args: str) -> str:
 def cambios(out: str | Path) -> list[Cambio]:
     """Unidades de texto (`<clave>/NNN.md`) que difieren de HEAD."""
     out = Path(out)
-    rutas = set()
+    rutas = {}
     for line in _git(out, "status", "--porcelain", "--no-renames", "-uall").splitlines():
         ruta = Path(line[3:].strip().strip('"'))
-        if ruta.suffix == ".md" and len(ruta.parts) == 2 and ruta.parts[0] in POR_CLAVE:
-            rutas.add(ruta)
+        if (du := unidad_de_ruta(ruta)) is not None:
+            rutas[ruta] = du
     res = []
-    for ruta in sorted(rutas):
+    for ruta, (doc, unidad) in sorted(rutas.items()):
         actual = out / ruta
         res.append(Cambio(
-            doc=ruta.parts[0], clave=ruta.stem,
+            doc=doc, clave=unidad,
             antes=_git(out, "show", f"HEAD:{ruta.as_posix()}"),
             despues=actual.read_text(encoding="utf-8") if actual.exists() else "",
         ))
@@ -182,9 +183,28 @@ def _bloques(md: str) -> tuple[list[str], list[bool], list[dict]]:
     return bloques, formula, problemas
 
 
-def cobertura(md: str, flujo: Flujo) -> list[dict]:
-    """Comprobación determinista de una unidad extraída contra el PDF."""
+_ROTULO_FINAL_RE = re.compile(r"(?:ART[ÍI]CULO|Art[íi]culo)\s+\d[^\n]{0,25}$")
+
+
+def _rotulo_propio(md: str) -> str | None:
+    """'articulo22bis' de '# Artículo 22 Bis.': el rótulo de la unidad, normalizado
+    y sin el ordinal ('1o.' → '1'), como aparece en el PDF ('ARTICULO 22 BIS')."""
+    primera = md.split("\n", 1)[0]
+    if not primera.startswith("# "):
+        return None
+    return re.sub(r"(\d)o$", r"\1", _norm(primera[2:])) or None
+
+
+def cobertura(md: str, flujo: Flujo, notas_previas: bool = False) -> list[dict]:
+    """Comprobación determinista de una unidad extraída contra el PDF.
+
+    Entre dos párrafos no puede quedar texto del PDF sin extraer. En una fuente
+    con `notas_previas` (las que ponen la nota de reforma antes del artículo:
+    '(REFORMADO, …)' / 'ARTICULO 12.- Las leyes…') la nota queda como primer
+    párrafo y el rótulo de la propia unidad queda entre ella y el texto: ese
+    rótulo, y nada más, no cuenta como texto omitido."""
     bloques, formula, problemas = _bloques(md)
+    rotulo = _rotulo_propio(md) if notas_previas else None
     unicos = [(len(b), i) for i, b in enumerate(bloques) if flujo.norma.count(b) == 1]
     if not unicos:
         # Unidad sin ningún párrafo único (p. ej. "(Se deroga)."): solo literalidad.
@@ -206,7 +226,16 @@ def cobertura(md: str, flujo: Flujo) -> list[dict]:
             return
         if b - a <= MAX_HUECO:
             return
+        if rotulo and re.sub(r"(\d)o$", r"\1", flujo.norma[a:b]) == rotulo:
+            return
         texto = flujo.original(a, b)
+        if rotulo:
+            # Un encabezado de capítulo seguido del rótulo de la unidad.
+            m = _ROTULO_FINAL_RE.search(texto)
+            if m and re.sub(r"(\d)o$", r"\1", _norm(m.group(0))) == rotulo:
+                texto = texto[:m.start()].strip()
+                if not texto:
+                    return
         if not _es_encabezado(texto):
             problemas.append({"tipo": "texto_omitido", "fragmento": texto[:300]})
 
@@ -232,11 +261,16 @@ def cobertura(md: str, flujo: Flujo) -> list[dict]:
 _MARCA_SIN_PAGINA = articulado.MARCA_FORMULA.replace(", página {pagina}", "")
 
 
-def encabezado_pegado(md: str) -> list[dict]:
+def encabezado_pegado(md: str, estatal: bool = False) -> list[dict]:
     """Último párrafo de un artículo que tiene forma de encabezado: corto, sin
     puntuación final, sin nota de reforma y sin ser fracción. Es texto literal
     del PDF, así que `cobertura` no lo ve, pero es estructura (el nombre de un
-    capítulo, un epígrafe) pegada al artículo anterior."""
+    capítulo, un epígrafe) pegada al artículo anterior.
+
+    En las leyes estatales (`estatal`) dos formas del propio texto del artículo
+    no son encabezado: su cuerpo derogado en mayúsculas ('ARTICULO 451.- SE
+    DEROGA') y una enumeración que el PDF deja abierta ('…de concejales; y',
+    seguida del título siguiente)."""
     bloques = [b.strip() for b in md.split("\n\n") if b.strip() and not b.startswith("# ")]
     while bloques and bloques[-1].startswith("_"):
         bloques.pop()                       # notas de reforma en cursiva
@@ -244,6 +278,8 @@ def encabezado_pegado(md: str) -> list[dict]:
         return []
     b = bloques[-1]
     if (len(b) > 150 or "DOF" in b or re.search(r"[.;:)…”\"»]$", b)
+            or (estatal and (re.search(r";\s*[yoeu]$", b) or re.fullmatch(
+                r"\(?\s*(?:SE\s+DEROGA|DEROGADO)\b.*", b, re.IGNORECASE)))
             or re.match(r"^(?:[IVXLCDM]+|[a-zñ]{1,2}|[A-Z]|\d+)\s*[.)\-]", b)
             or not b[:1].isupper()
             # Una tabla que cierra el artículo ('Años de servicios … 10 80% 11
@@ -456,10 +492,11 @@ def verificar(out: str | Path, pdf_por_clave: dict[str, str],
             continue
         pdf = pdf_por_clave[clave]
         flujo = Flujo.de(texto_limpio(POR_CLAVE[clave], pdf))
-        articulado_doc = POR_CLAVE[clave].parser == "articulado"
+        doc = POR_CLAVE[clave]
+        articulado_doc = doc.parser == "articulado"
         for c in cs:
-            if c.despues and (pr := cobertura(c.despues, flujo) + (
-                    encabezado_pegado(c.despues) + fuera_del_articulado(c.despues)
+            if c.despues and (pr := cobertura(c.despues, flujo, bool(doc.notas_previas)) + (
+                    encabezado_pegado(c.despues, bool(doc.medio)) + fuera_del_articulado(c.despues)
                     + marca_de_agua(c.despues)
                     if articulado_doc else [])):
                 duros.append(Veredicto(c.ref, "artefacto",
@@ -491,13 +528,14 @@ def auditar(out: str | Path, pdf_por_clave: dict[str, str]) -> dict:
     for clave, pdf in sorted(pdf_por_clave.items()):
         if clave not in POR_CLAVE:
             continue
-        flujo = Flujo.de(texto_limpio(POR_CLAVE[clave], pdf))
-        articulado_doc = POR_CLAVE[clave].parser == "articulado"
-        for md in sorted((Path(out) / clave).glob("*.md")):
+        doc = POR_CLAVE[clave]
+        flujo = Flujo.de(texto_limpio(doc, pdf))
+        articulado_doc = doc.parser == "articulado"
+        for md in sorted(dir_unidades(out, clave).glob("*.md")):
             total += 1
             texto = md.read_text(encoding="utf-8")
-            if pr := cobertura(texto, flujo) + (
-                    encabezado_pegado(texto) + fuera_del_articulado(texto)
+            if pr := cobertura(texto, flujo, bool(doc.notas_previas)) + (
+                    encabezado_pegado(texto, bool(doc.medio)) + fuera_del_articulado(texto)
                     + marca_de_agua(texto)
                     if articulado_doc else []):
                 malos[f"{clave}/{md.stem}"] = pr
@@ -517,14 +555,14 @@ _TEXTO_DE_ARTICULO = re.compile(
 
 def texto_entre_unidades(out: Path, clave: str, flujo: Flujo) -> dict[str, list[dict]]:
     """Texto de artículo entre una unidad y la siguiente, en orden del documento."""
-    idx = out / "metadata" / clave / "articulos.json"
+    idx = dir_metadata(out, clave) / "articulos.json"
     if not idx.exists():
         return {}
     orden = [a["clave"] for a in json.loads(idx.read_text(encoding="utf-8")).get("articulos", [])]
     problemas: dict[str, list[dict]] = {}
     fin_prev, prev = 0, None
     for unidad in orden:
-        ruta = out / clave / f"{unidad}.md"
+        ruta = dir_unidades(out, clave) / f"{unidad}.md"
         if not ruta.exists():
             continue
         bloques = _bloques(ruta.read_text(encoding="utf-8"))[0]

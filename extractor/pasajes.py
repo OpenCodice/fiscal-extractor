@@ -11,6 +11,7 @@ Funciona para los tres tipos de unidad (artículo, regla, criterio): solo necesi
 from __future__ import annotations
 
 from .normalize import normalize_body
+from .disposicion import rel_unidades
 from .registro import Documento
 
 
@@ -51,7 +52,7 @@ def pasajes_de(unidad, doc: Documento) -> list[dict]:
             "contexto": getattr(unidad, "contexto", ""),    # jerarquía (recall), no es cita
             "fuente": doc.etiqueta,
             "url_fuente": doc.url,
-            "archivo_texto": f"{doc.clave}/{unidad.clave}.md",
+            "archivo_texto": f"{rel_unidades(doc.clave)}/{unidad.clave}.md",
             # `coordenadas` (pagina + rects) lo agrega locate.annotate().
         })
     return out

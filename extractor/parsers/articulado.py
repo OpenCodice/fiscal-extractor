@@ -51,8 +51,10 @@ ARTICULO_RE = re.compile(
     r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-]))([A-Z])(?![A-Za-z]))?"  # letra "-A" PEGADA o " A." (118 A.)
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
     rf"(?:[\s.\-]+(?i:({ORDINALES}))"               # ordinal
-    r"(?:[\s\-]+(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1") y letra ("Bis 35 A.-")
-    r"(?:\s*\.?-?(?:\s|$|\()|\.-(?=\S))"             # separador final (o ".-" pegado al texto)
+    r"(?:(?:[\s\-]+|\.\s?)(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1", "Bis. 3") y letra ("Bis 35 A.-")
+    r"(?:\s*\.?-?(?:\s|$|\()|\.-(?=\S)"            # separador final (o ".-" pegado al texto)
+    r"|\.(?=[A-ZÁÉÍÓÚÑ][a-záéíóúñ])"                   # o el punto pegado: "Artículo 127.Se deroga."
+    r"|:(?=\s))"                                     # o dos puntos: "Artículo 276 Quater: Comete"
 )
 
 # Encabezados de Título / Capítulo / Sección. En los PDF de la Cámara van en
@@ -76,7 +78,7 @@ TITULO_RE = re.compile(r"^T[IÍ]TULO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]
                        rf"|^T[íi]tulo\s+{_NUMERAL_TC}{_BIS_TC}\s*$")
 _ORDINAL_MAY = (r"PRIMER[OA]|SEGUND[OA]|TERCER[OA]|CUART[OA]|QUINT[OA]|SEXT[OA]|"
                  r"S[EÉ]PTIM[OA]|OCTAV[OA]|NOVEN[OA]|D[EÉ]CIM[OA]")
-CAPITULO_RE = re.compile(rf"^CAP[IÍ]TULO\s+([IVXLCDM]+|[ÚU]NICO|{_ORDINAL_MAY})\b.*$"
+CAPITULO_RE = re.compile(rf"^C[AÁ]P[IÍ]TULO\s+([IVXLCDM]+|[ÚU]NICO|{_ORDINAL_MAY})\b.*$"
                          rf"|^Cap[íi]tulo\s+(?:{_NUMERAL_TC}|[ÚU]nico){_BIS_TC}\s*$")
 # Libro: nivel sobre el Título en los códigos (Código Penal, Código Civil).
 LIBRO_RE = re.compile(r"^LIBRO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]+)?\s*$"
@@ -152,8 +154,12 @@ def _es_nombre_suelto(s: str, continuacion: bool = False) -> bool:
         return False                      # '[Artículo 28 Bis. Suprimido]': texto, no nombre
     if re.fullmatch(r"[IVXLCDM]+", s) or re.match(r"^(?:[IVXLCDM]+|[a-zñ])\s*[.)\-–]", s):
         return False                      # numeral solo, fracción 'II.-' o inciso 'a)'
+    if re.match(rf"^[IVXLCDM]+\s+(?:{ORDINALES})\b", s, re.IGNORECASE):
+        return False                      # fracción intercalada 'XIII Bis.', 'VI Quater'
     if "$" in s or "...." in s or "…" in s:
         return False                      # importes y puntos guía: renglón de tarifa
+    if re.search(r";\s*[yoeu]?$", s):
+        return False                      # fin de una fracción enumerada ('…las mujeres; y')
     # La coma final es de un nombre que sigue en la línea siguiente. Una comilla
     # de cierre no oculta el fin de oración: 'moneda nacional.”' es el final de
     # un párrafo citado, no un rótulo.
@@ -233,6 +239,33 @@ VERSION_LARGA_RE = re.compile(
 NUEVO_RE = re.compile(
     r"Nuev[oa]\s+(?:Código|Reglamento|Ley|Decreto|Disposición)\s+DOF\s+(\d{2})-(\d{2})-(\d{4})"
 )
+
+# Fecha de una nota de reforma estatal, en letras ('(REFORMADO, G.O. 25 DE MAYO
+# DE 2000)') o numérica ('Párrafo reformado G.O. CDMX 08/12/23').
+FECHA_LARGA_RE = re.compile(
+    r"(\d{1,2})\s+DE\s+(" + "|".join(MESES) + r")\s+(?:DE|DEL)\s+(\d{4})", re.IGNORECASE)
+FECHA_NUMERICA_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})\b")
+
+
+def fechas_en_notas(texto: str, notas: re.Pattern) -> list[date]:
+    """Fechas de las notas de reforma de una fuente estatal (renglones que casan
+    con `notas`), únicas y ordenadas."""
+    out: set[date] = set()
+    for ln in texto.splitlines():
+        if notas.match(ln.strip()):
+            for d, mes, a in FECHA_LARGA_RE.findall(ln):
+                try:
+                    out.add(date(int(a), MESES[mes.lower()], int(d)))
+                except ValueError:
+                    continue
+            for d, m, a in FECHA_NUMERICA_RE.findall(ln):
+                anio = int(a) if len(a) == 4 else 2000 + int(a)
+                try:
+                    out.add(date(anio, int(m), int(d)))
+                except ValueError:
+                    continue
+    return sorted(out)
+
 
 # Marca de artículo derogado que se conserva en el texto.
 DEROGADO_RE = re.compile(r"\(?\s*Se\s+deroga", re.IGNORECASE)
@@ -334,10 +367,38 @@ def _titulo_corrido(paginas: list[str]) -> tuple[str, ...]:
     return (comun,)
 
 
+def _sin_numero_de_pagina(paginas: list[str]) -> list[str]:
+    """Quita el número de página suelto ('92') al pie o al encabezado de cada
+    página, si el PDF lo pone en la mayoría de ellas (varios estatales; la
+    Cámara usa 'N de M'). Solo se quita el renglón que coincide con el número
+    de esa página, con el mismo desfase que en las demás: un '10' en una tabla
+    no lo es."""
+    def extremos(t: str) -> list[tuple[int, int]]:
+        lineas = t.split("\n")
+        llenas = [k for k, ln in enumerate(lineas) if ln.strip()]
+        return [(k, int(lineas[k].strip())) for k in {llenas[0], llenas[-1]}
+                if re.fullmatch(r"\d{1,4}", lineas[k].strip())] if llenas else []
+    desfases = Counter(n - i for i, t in enumerate(paginas) for _, n in extremos(t))
+    if not desfases:
+        return paginas
+    desfase, veces = desfases.most_common(1)[0]
+    if veces < max(3, len(paginas) // 2):
+        return paginas
+    salida = []
+    for i, t in enumerate(paginas):
+        lineas = t.split("\n")
+        for k, n in extremos(t):
+            if n - i == desfase:
+                lineas[k] = ""
+        salida.append("\n".join(lineas))
+    return salida
+
+
 def limpiar_paginas(paginas: list[str], doc: Documento, formulas: bool = False) -> str:
     """Texto completo sin encabezados/pies, a partir del texto crudo por página.
     Con `formulas`, cada fórmula ilegible se sustituye por su marca."""
     fuera = doc.titulos_encabezado + _titulo_corrido(paginas)
+    paginas = _sin_numero_de_pagina(paginas)
     limpias = (_quitar_encabezados(_quitar_marca_girada(t), fuera) for t in paginas)
     if not formulas:
         return "\n".join(limpias)
@@ -450,17 +511,58 @@ def es_ruido_factory(pdf_path: str, doc: Documento):
     return es_ruido
 
 
-def fecha_version(pdf_path: str) -> date | None:
+# Portada de las compilaciones estatales: 'Última reforma publicada en la G.O.
+# CDMX / el 20 de agosto de 2026' (en uno o dos renglones).
+VERSION_ESTATAL_RE = re.compile(
+    r"[ÚU]ltima\s+reforma\s+publicada\b.{0,120}?(\d{1,2})\s+de\s+(" + "|".join(MESES)
+    + r")\s+(?:de|del)\s+(\d{4})", re.IGNORECASE | re.DOTALL)
+# Las que no la traen en la portada cierran con una tabla de los decretos que las
+# reformaron ('TABLA DE REFORMAS Y ADICIONES', Jalisco), cada uno con su fecha de
+# publicación abreviada: '…del Código Civil del Estado de Jalisco.- Jun. 18 de 2026'.
+TABLA_REFORMAS_RE = re.compile(r"^TABLA DE REFORMAS(?: Y ADICIONES)?\s*$", re.MULTILINE)
+_MES_CORTO = {"ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6, "jul": 7,
+              "ago": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dic": 12}
+FECHA_TABLA_RE = re.compile(
+    r"\b(" + "|".join(sorted(_MES_CORTO, key=len, reverse=True)) +
+    r")\.?\s*(\d{1,2})\s*(?:de|del)\s+(\d{4})", re.IGNORECASE)
+PAGINAS_TABLA = 60
+
+
+def _fecha_tabla_reformas(pdf) -> date | None:
+    """La publicación más reciente de la tabla de reformas al final del PDF."""
+    finales = []
+    for page in reversed(pdf.pages[-PAGINAS_TABLA:]):
+        finales.insert(0, page.extract_text() or "")
+        texto = "\n".join(finales)
+        m = TABLA_REFORMAS_RE.search(texto)
+        if m:
+            fechas = []
+            for mes, dia, anio in FECHA_TABLA_RE.findall(texto[m.end():]):
+                try:
+                    fechas.append(date(int(anio), _MES_CORTO[mes.lower()], int(dia)))
+                except ValueError:
+                    continue
+            return max(fechas) if fechas else None
+    return None
+
+
+def fecha_version(pdf_path: str, doc: Documento | None = None) -> date | None:
     """Fecha de la última reforma incorporada al PDF = versión del snapshot."""
     with pdfplumber.open(pdf_path) as pdf:
         head = pdf.pages[0].extract_text() or ""
-    m = VERSION_RE.search(head) or NUEVO_RE.search(head)
-    if m:
-        return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
-    m = VERSION_LARGA_RE.search(head)
-    if m:
-        return date(int(m.group(3)), MESES[m.group(2).lower()], int(m.group(1)))
-    return None
+        m = VERSION_RE.search(head) or NUEVO_RE.search(head)
+        if m:
+            return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        m = VERSION_LARGA_RE.search(head)
+        if m:
+            return date(int(m.group(3)), MESES[m.group(2).lower()], int(m.group(1)))
+        if doc is None or not doc.medio:
+            return None
+        # Ley estatal: su portada o su tabla de reformas.
+        m = VERSION_ESTATAL_RE.search(head)
+        if m:
+            return date(int(m.group(3)), MESES[m.group(2).lower()], int(m.group(1)))
+        return _fecha_tabla_reformas(pdf)
 
 
 # Otro artículo del decreto que expidió la ley ('ARTÍCULO SEGUNDO.- ……….',
@@ -468,7 +570,10 @@ def fecha_version(pdf_path: str) -> date | None:
 # decreto ordinal en palabra. Tras el último artículo de la ley ya no es articulado.
 ARTICULO_DECRETO_RE = re.compile(
     r"^[ \t]*ART[ÍI]CULOS?\s+(?:PRIMERO|SEGUNDO|TERCERO|CUARTO|QUINTO|SEXTO|S[ÉE]PTIMO|"
-    r"OCTAVO|NOVENO|D[ÉE]CIMO|[ÚU]NICO)\b", re.MULTILINE)
+    r"OCTAVO|NOVENO|D[ÉE]CIMO|[ÚU]NICO)\b"
+    # 'VER ARTICULO SEGUNDO TRANSITORIO DEL DECRETO…' es una cita partida por el
+    # renglón (notas del editor en la CDMX), no otro artículo del decreto.
+    r"(?!\s+TRANSITORIO)", re.MULTILINE)
 
 
 def _solo_articulado(texto: str) -> str:
@@ -505,7 +610,9 @@ def _sin_rotulo_final(texto: str) -> str:
 
 def parse(pdf_path: str, doc: Documento) -> list[Unidad]:
     """Parsea el PDF de una ley/código/reglamento y devuelve sus unidades."""
-    return parse_texto(texto_limpio(pdf_path, doc))
+    return parse_texto(texto_limpio(pdf_path, doc), huecos=doc.huecos,
+                       notas=re.compile(doc.notas) if doc.notas else None,
+                       notas_previas=re.compile(doc.notas_previas) if doc.notas_previas else None)
 
 
 NIVELES = ("titulo", "capitulo", "seccion", "epigrafe")
@@ -543,10 +650,100 @@ def _articulos_ordinales(texto: str) -> str:
     return _ART_ORDINAL_RE.sub(num, cuerpo) + resto
 
 
-def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
-    """Segmenta texto ya limpio en unidades. Separado para poder probarlo sin PDF."""
+# Tras el número, una cita sigue con minúscula ('Artículo 89 de la Constitución'):
+# un salto en la numeración nunca se acepta sobre una línea así.
+_CITA_TRAS_NUMERO_RE = re.compile(r"^\s*[a-záéíóúñ]")
+
+
+def _ultima_aparicion(lineas: list[str]) -> dict[int, int]:
+    """Número de artículo (sin sufijo) → último renglón donde abre un artículo."""
+    ult: dict[int, int] = {}
+    for i, raw in enumerate(lineas):
+        am = ARTICULO_RE.match(raw.strip())
+        if am and not (am.group(2) or am.group(3) or am.group(4)):
+            ult[int(am.group(1).replace(",", ""))] = i
+    return ult
+
+
+MAX_RENGLONES_NOTA = 4
+
+
+def _parentesis_cerrados(texto: str) -> bool:
+    return texto.count("(") <= texto.count(")")
+
+
+def _notas_al_final(u: Unidad | None, notas_previas: re.Pattern | None) -> list[str]:
+    """Quita del final del cuerpo de `u` los renglones de nota que anotan al
+    artículo siguiente y los devuelve en orden. Si el cuerpo quedaría vacío
+    (el artículo solo es su nota: '(DEROGADO, G.O. …)'), se queda con ellas."""
+    if u is None or notas_previas is None:
+        return []
+    lineas = u.cuerpo.rstrip("\n").split("\n")
+    j, grupos = len(lineas), []
+    while j > 1:
+        if not lineas[j - 1].strip():
+            j -= 1
+            continue
+        # La nota puede ocupar varios renglones: abre en uno que casa con la
+        # regex y cierra su paréntesis justo en el último (no antes).
+        k = next((k for k in range(j - 1, max(0, j - 1 - MAX_RENGLONES_NOTA), -1)
+                  if notas_previas.match(lineas[k].strip())
+                  and _parentesis_cerrados("\n".join(lineas[k:j]))
+                  and (k == j - 1 or not _parentesis_cerrados("\n".join(lineas[k:j - 1])))),
+                 None)
+        if k is None or k == 0:
+            break
+        grupos.insert(0, "\n".join(ln.strip() for ln in lineas[k:j]))
+        j = k
+    notas = grupos
+    if not notas:
+        return []
+    m = ARTICULO_RE.match(lineas[0].strip())
+    queda = "\n".join(lineas[:j])
+    primera = lineas[0].strip()[m.end():] if m else lineas[0]
+    if not (primera.strip() or any(ln.strip() for ln in lineas[1:j])):
+        return []
+    u.cuerpo = queda + "\n"
+    return notas
+
+
+def _notas_antes(lineas: list[str], notas_previas: re.Pattern | None) -> list[str]:
+    """Las notas previas pegadas al primer artículo (lo anterior a él no es de
+    ningún artículo y se descarta, pero su nota sí es suya)."""
+    if notas_previas is None:
+        return []
+    u = Unidad(numero=0)
+    u.cuerpo = "\n".join(["Artículo 0.", "-", *lineas[-(MAX_RENGLONES_NOTA * 3):]])
+    return _notas_al_final(u, notas_previas)
+
+
+def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
+                notas: re.Pattern | None = None,
+                notas_previas: re.Pattern | None = None) -> list[Unidad]:
+    """Segmenta texto ya limpio en unidades. Separado para poder probarlo sin PDF.
+
+    La numeración se exige continua (así se descartan las citas a otros
+    artículos al inicio de renglón). Con `huecos` (PDF que omite los artículos
+    derogados, como varios estatales) se acepta saltar a un número mayor solo
+    si ninguno de los que faltan vuelve a aparecer como artículo en el resto
+    del texto: si apareciera, el salto sería una cita.
+
+    Las fechas de reforma salen de las notas 'DOF DD-MM-AAAA' y, en una fuente
+    estatal, de los renglones que casan con `notas`.
+
+    Con `notas_previas`, las notas de reforma que el PDF pone justo antes de un
+    artículo ('(REFORMADO, G.O. …)') abren ese artículo en vez de cerrar el
+    anterior: quedan como su primer párrafo, en el mismo orden que en el PDF.
+    """
     texto = _solo_articulado(_articulos_ordinales(clean_text))
     lineas = texto.splitlines()
+    ultima = _ultima_aparicion(lineas) if huecos else {}
+
+    def salto_valido(numero: int, i: int, resto: str) -> bool:
+        """¿Se puede saltar de `esperado` a `numero` en el renglón `i`?"""
+        if not huecos or numero <= esperado or _CITA_TRAS_NUMERO_RE.match(resto):
+            return False
+        return all(ultima.get(k, -1) < i for k in range(esperado, numero))
 
     unidades: list[Unidad] = []
     actual: Unidad | None = None
@@ -567,11 +764,32 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
     previa = ""                      # última línea no vacía
 
     abiertos: set[tuple] = set()
+    # Notas previas dentro de un bloque de encabezado: son del artículo que lo cierra.
+    previas_bloque: list[str] = []
+
+    def siguiente_abre(i: int) -> bool:
+        """¿El siguiente renglón no vacío tras `i` abre un artículo aceptable?"""
+        j = next((j for j in range(i + 1, len(lineas)) if lineas[j].strip()), None)
+        return j is not None and abre_articulo(lineas[j].strip(), j)
+
+    def entra_bloque() -> None:
+        """Empieza un bloque de encabezado: las notas previas que cerraban el
+        artículo anterior anotan ese encabezado (su denominación, el capítulo
+        adicionado), no a ningún artículo; como las notas 'Capítulo adicionado
+        DOF …' de la Cámara, se quedan en la estructura."""
+        _notas_al_final(actual, notas_previas)
+        previas_bloque.clear()
+
+    def es_nota_bloque(s: str) -> bool:
+        return _es_nota_de_bloque(s) or (notas is not None and bool(notas.match(s)))
 
     def flush(u: Unidad | None) -> None:
         if u is not None:
             u.cuerpo = u.cuerpo.strip()
             u.fechas_reforma = fechas_reforma_en(u.cuerpo)
+            if notas is not None:
+                u.fechas_reforma = sorted(set(u.fechas_reforma) | set(
+                    fechas_en_notas(u.cuerpo, notas)))
             primer = u.cuerpo.split("\n", 1)[0]
             u.derogado = bool(DEROGADO_RE.search(primer))
             unidades.append(u)
@@ -590,13 +808,14 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             v = jer[ultimo_nivel]
             jer[ultimo_nivel] = f"{v}{' ' if '. ' in v or ultimo_nivel == 'epigrafe' else '. '}{linea}"
 
-    def abre_articulo(s: str) -> bool:
-        """¿`s` abre un artículo que la secuencia aceptaría ahora mismo?"""
+    def abre_articulo(s: str, i: int | None = None) -> bool:
+        """¿`s` (renglón `i`) abre un artículo que la secuencia aceptaría ahora mismo?"""
         am = ARTICULO_RE.match(s)
         if not am:
             return False
         numero, sufijo = int(am.group(1).replace(",", "")), bool(am.group(2) or am.group(3) or am.group(4))
         return ((numero == esperado and not sufijo)
+                or (not sufijo and i is not None and salto_valido(numero, i, s[am.end():]))
                 or (actual is not None and numero == actual.numero and sufijo))
 
     def desemboca_en_articulo(i: int, max_lineas: int = MAX_LINEAS_ENCABEZADO,
@@ -605,21 +824,27 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
         `solo_estructura`, todas las intermedias deben ser encabezados, nombres o
         notas."""
         vistas = 0
-        for sig in lineas[i + 1:]:
-            s = sig.strip()
+        en_nota = False
+        for j in range(i + 1, len(lineas)):
+            s = lineas[j].strip()
             if not s:
                 continue
-            if abre_articulo(s):
+            if abre_articulo(s, j):
                 return True
+            # El renglón que sigue a una nota sin cerrar es parte de la nota.
+            sigue_nota = en_nota
+            en_nota = (es_nota_bloque(s) or sigue_nota) and not s.endswith((".", ")"))
+            if sigue_nota:
+                continue
             if solo_estructura and not (
-                    _es_encabezado(s) or _es_nota_de_bloque(s) or _es_nombre_suelto(s)
+                    _es_encabezado(s) or es_nota_bloque(s) or _es_nombre_suelto(s)
                     or _es_nombre_suelto(s, continuacion=True)
                     or re.fullmatch(r"[IVXLCDM]+", s)):
                 return False
             # Encabezados, notas y nombres entre corchetes no cuentan: un bloque
             # Libro/Título/Capítulo con sus notas de reforma e invalidez puede
             # pasar de MAX_LINEAS_ENCABEZADO renglones y aun así es estructura.
-            if (_es_encabezado(s) or _es_nota_de_bloque(s)
+            if (_es_encabezado(s) or es_nota_bloque(s)
                     or (s.startswith("[") and len(s) < 150
                         and not re.match(r"\[\s*Art[ií]culo\b", s)
                         and not MARCA_FORMULA_RE.match(s))):
@@ -663,7 +888,8 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
                 p.isupper() for p in (*partes, stripped)) and not partes[-1].endswith((".", ";", ":"))
             acumulable = not partes or (
                 not estricto and len(partes) < (MAX_LINEAS_NOMBRE if en_mayusculas else 2))
-            if acumulable and _es_nombre_encabezado(stripped, estricto=estricto):
+            if (acumulable and _es_nombre_encabezado(stripped, estricto=estricto)
+                    and not es_nota_bloque(stripped)):
                 pendiente = (nivel, encabezado, partes + [stripped])
                 continue
             # Muchas leyes de la Cámara ponen el encabezado en MAYÚSCULAS y el
@@ -684,6 +910,13 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
                     stripped, continuacion=bool(partes)) and desemboca_en_articulo(i):
                 pendiente = (nivel, encabezado, partes + [stripped])
                 continue
+            # Un rótulo de dos partes que cierra con punto ('De los contratos
+            # preparatorios.- La promesa.') también es nombre si el artículo sigue
+            # justo debajo; una oración ('Las personas morales deberán …') no.
+            if (estricto and not partes and stripped.endswith(".") and ".- " in stripped
+                    and _es_nombre_suelto(stripped[:-1]) and siguiente_abre(i)):
+                pendiente = (nivel, encabezado, [stripped])
+                continue
             pendiente = None
             nombre = " ".join(partes)
             # 'TÍTULO IV. DE LAS PERSONAS FÍSICAS'; sin nombre: solo número.
@@ -699,7 +932,10 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             nivel = None
         if nivel:
             pendiente = (nivel, stripped, [])
-            if actual is not None and desemboca_en_articulo(i):
+            if en_bloque:
+                previas_bloque.clear()          # anotaban la estructura de arriba
+            elif actual is not None and desemboca_en_articulo(i):
+                entra_bloque()
                 en_bloque = True
             continue
 
@@ -711,16 +947,27 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
                 (re.fullmatch(r"[IVXLCDM]+", stripped)
                  and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))
                 or (_es_nombre_suelto(stripped) and not stripped.endswith(",")
-                    and (anterior.endswith((".", ";", ":")) or _es_nota_de_bloque(anterior))
+                    and (anterior.endswith((".", ";", ":")) or es_nota_bloque(anterior))
                     and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))):
             fijar("epigrafe", stripped)
+            entra_bloque()
             en_bloque = True
             continue
 
+        if (en_bloque and nota_previa and stripped and not nota_previa.endswith((".", ")"))
+                and not abre_articulo(stripped, i)):
+            nota_previa = stripped      # la nota sigue: 'ARTÍCULO 14 DE LAS DISPOSICIONES …'
+            continue
         if en_bloque and not ARTICULO_RE.match(stripped):
             if not stripped:
                 continue
-            if _es_nota_de_bloque(stripped):
+            if previas_bloque and not _parentesis_cerrados(previas_bloque[-1]):
+                previas_bloque[-1] += "\n" + stripped     # la nota previa sigue
+                continue
+            if notas_previas is not None and notas_previas.match(stripped):
+                previas_bloque.append(stripped)
+                continue
+            if es_nota_bloque(stripped):
                 nota_previa = stripped
                 continue
             if nota_previa and (stripped[:1].islower()
@@ -731,6 +978,7 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             if (_es_nombre_suelto(stripped) or _es_nombre_suelto(stripped, continuacion=True)
                     or re.fullmatch(r"[IVXLCDM]+", stripped)):
                 ampliar_nombre(stripped)
+                previas_bloque.clear()
                 continue
 
         am = ARTICULO_RE.match(stripped)
@@ -744,7 +992,8 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             tiene_sufijo = bool(letra or guion_num or ordinal)
             # Aceptar solo el siguiente esperado (bare) o una variante del actual.
             # Así se descartan las citas "Artículo 89 de la Constitución".
-            es_siguiente = numero == esperado and not tiene_sufijo
+            es_siguiente = not tiene_sufijo and (
+                numero == esperado or salto_valido(numero, i, stripped[am.end():]))
             es_variante = (actual is not None and numero == actual.numero
                            and tiene_sufijo)
             # Una cita al inicio de renglón ("Artículo 46 Bis 3 de la presente
@@ -755,6 +1004,9 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
             if es_siguiente or es_variante:
                 abiertos.add(clave)
                 en_bloque = nota_previa = False
+                previas = (_notas_al_final(actual, notas_previas) if actual is not None
+                           else _notas_antes(lineas[:i], notas_previas)) + previas_bloque
+                previas_bloque = []
                 flush(actual)
                 actual = Unidad(
                     numero=numero, letra=letra, guion_num=guion_num, ordinal=ordinal,
@@ -763,6 +1015,11 @@ def parse_texto(clean_text: str, start: int = 1) -> list[Unidad]:
                     seccion=jer["seccion"], epigrafe=jer["epigrafe"],
                 )
                 actual.cuerpo = line + "\n"
+                if previas:
+                    # Encabezado, las notas (cada una su párrafo) y el texto que
+                    # seguía al encabezado en su renglón: el orden del PDF.
+                    actual.cuerpo = (line[:am.end()].rstrip() + "\n\n" + "\n\n".join(previas)
+                                     + "\n\n" + line[am.end():] + "\n")
                 if es_siguiente:
                     esperado = numero + 1
                 continue

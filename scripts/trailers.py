@@ -100,13 +100,18 @@ def lista(texto: str | None) -> list[str]:
 # ------------------------------------------------------------------ disposición
 
 def esquema_de(documento: str) -> str:
-    """'cpeum' (constitucion-mexicana), 'estatal' (leyes-estatales: un
-    `<estado>/constitucion`) o 'corpus' (fiscal-mexicano, leyes-federales)."""
+    """'cpeum' (constitucion-mexicana), 'estatal' (leyes-estatales: la
+    constitución o una ley de un estado, `<estado>/<clave>`) o 'corpus'
+    (fiscal-mexicano, leyes-federales)."""
     if documento == "cpeum":
         return "cpeum"
-    if documento.endswith("/constitucion"):
+    if "/" in documento:
         return "estatal"
     return "corpus"
+
+
+def es_constitucion_estatal(documento: str) -> bool:
+    return documento.endswith("/constitucion")
 
 
 def documento_de_ruta(ruta: str, esquema: str) -> str | None:
@@ -116,7 +121,9 @@ def documento_de_ruta(ruta: str, esquema: str) -> str | None:
     if esquema == "cpeum":
         return "cpeum" if partes[0] in ("articulos", "metadata", "fuente") and len(partes) > 1 else None
     if esquema == "estatal":
-        return f"{partes[0]}/constitucion" if len(partes) > 2 and partes[1] == "constitucion" else None
+        # `<estado>/<clave>/…`: su constitución (constitucion-extractor) o una de
+        # sus leyes (fiscal-extractor), cada una en su carpeta.
+        return f"{partes[0]}/{partes[1]}" if len(partes) > 2 and not partes[0].startswith(".") else None
     if partes[0] == "metadata":
         return partes[1] if len(partes) > 2 else None
     if partes[0].startswith(".") or len(partes) < 2:
@@ -136,6 +143,27 @@ def _dir_metadata(documento: str) -> str:
         f"{documento}/metadata/" if e == "estatal" else f"metadata/{documento}/")
 
 
+def carpetas(documento: str) -> list[str]:
+    """Las carpetas del repo que son del documento (para `git status/add --`)."""
+    e = esquema_de(documento)
+    if e == "cpeum":
+        return ["articulos", "metadata", "fuente"]
+    if e == "estatal":
+        return [documento]
+    return [documento, f"metadata/{documento}"]
+
+
+def esquema_repo(raiz_dirs: Iterable[str], tiene_constitucion: Callable[[str], bool]) -> str:
+    """Esquema de un repo de datos por su raíz: 'cpeum' si tiene `articulos/`,
+    'estatal' si alguna carpeta tiene `constitucion/`, si no 'corpus'."""
+    dirs = list(raiz_dirs)
+    if "articulos" in dirs:
+        return "cpeum"
+    if any(tiene_constitucion(d) for d in dirs):
+        return "estatal"
+    return "corpus"
+
+
 def clave_articulo(ruta: str, documento: str) -> str | None:
     """'004' de `lgs/004.md`; None si la ruta no es un artículo del documento."""
     base = _dir_articulos(documento)
@@ -146,12 +174,13 @@ def clave_articulo(ruta: str, documento: str) -> str | None:
 
 
 def rutas_fuente(documento: str) -> tuple[str, ...]:
-    """Archivo oficial guardado en el repo (solo constituciones). El .doc va
-    primero: cuando existe es el original descargado y el PDF su conversión."""
+    """Archivo oficial guardado en el repo (solo constituciones; de las leyes se
+    guarda su sha256). El .doc va primero: cuando existe es el original
+    descargado y el PDF su conversión."""
     e = esquema_de(documento)
     if e == "cpeum":
         return ("fuente/CPEUM.pdf",)
-    if e == "estatal":
+    if e == "estatal" and es_constitucion_estatal(documento):
         return (f"{documento}/fuente/constitucion.doc", f"{documento}/fuente/constitucion.pdf")
     return ()
 
@@ -183,9 +212,13 @@ def info(documento: str, leer: Lector) -> dict:
     e = esquema_de(documento)
     if e == "cpeum":
         sigla, medio = "CPEUM", "DOF"
-    elif e == "estatal":
+    elif e == "estatal" and es_constitucion_estatal(documento):
         sigla = documento.split("/")[0]
         medio = ((idx or {}).get("fuente") or "").split(" — ")[0].strip() or None
+    elif e == "estatal":
+        # Una ley estatal: su sigla ('CC Jalisco') y su periódico oficial.
+        sigla = (idx or {}).get("sigla") or documento
+        medio = (idx or {}).get("medio")
     else:
         sigla, medio = (idx or {}).get("sigla") or documento.upper(), "DOF"
     return {"existe": idx is not None, "version": (idx or {}).get("version"),

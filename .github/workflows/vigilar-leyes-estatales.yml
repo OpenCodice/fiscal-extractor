@@ -1,0 +1,438 @@
+name: Vigilar leyes estatales
+
+# Las leyes de cada estado además de su constitución (códigos, leyes orgánicas…),
+# declaradas en extractor/estatales/ y publicadas en leyes-estatales, junto a la
+# constitución de cada estado: {estado}/{ley}/. Mismo flujo que la vigilancia
+# federal: se compara la URL y las cabeceras del PDF vigente de cada ley contra
+# fuentes.json de leyes-estatales y se reprocesa solo lo que cambió (leyes nuevas
+# por tandas, PDF distintos y, si cambió el parser, todas). Lo que no queda fiel
+# al PDF se deja fuera (si es nuevo) o conserva su versión publicada (si ya
+# estaba), y queda anotado en fuentes.json. Una ley nueva se publica solo tras su
+# revisión completa contra el PDF (scripts/revision.py).
+#
+# A diferencia de la federal, aquí el agente no repara el extractor: un arreglo
+# al parser entra por main y pasa por impacto.yml, que mide su efecto en todo lo
+# publicado (federal, fiscal y estatal).
+#
+# Las constituciones de leyes-estatales las vigila constitucion-extractor
+# (vigilar-estatales.yml); este flujo no toca {estado}/constitucion/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reintento:
+        description: 'Reintento automático tras una falla'
+        type: boolean
+        default: false
+      docs:
+        description: 'Solo estas claves (estado/ley), separadas por espacio (vacío = todo lo que cambió)'
+        required: false
+        default: ''
+      estados:
+        description: 'Solo las leyes de estos estados, separados por espacio'
+        required: false
+        default: ''
+      lote:
+        description: 'Máximo de leyes nuevas en esta corrida (vacío = sin límite)'
+        required: false
+        default: '8'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: vigilar-leyes-estatales
+  cancel-in-progress: false
+
+env:
+  EXTRACTOR_REPO: https://github.com/OpenCodice/fiscal-extractor.git
+  DATOS: OpenCodice/leyes-estatales
+  RAMA: reforma/leyes-estatales
+
+jobs:
+  planear:
+    runs-on: ubuntu-latest
+    outputs:
+      hay: ${{ steps.plan.outputs.hay }}
+      extraer: ${{ steps.plan.outputs.extraer }}
+      shards: ${{ steps.plan.outputs.shards }}
+      pendientes: ${{ steps.plan.outputs.pendientes }}
+      extractor: ${{ steps.extractor.outputs.sha }}
+    steps:
+      - name: Esperar a que se fusione el PR de la corrida anterior
+        # Planear sobre un main sin ese PR produce un PR en conflicto que
+        # repite lo mismo.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 20); do
+            n=$(gh pr list -R "$DATOS" --head "$RAMA" --state open --json number -q length)
+            [ "$n" = "0" ] && exit 0
+            echo "Hay un PR de vigilancia abierto; espero ($i/20)…"; sleep 30
+          done
+          echo "::error::El PR de la corrida anterior sigue abierto: fusiónalo o ciérralo antes de vigilar."
+          exit 1
+      - uses: actions/checkout@v5
+        with:
+          repository: OpenCodice/leyes-estatales
+          token: ${{ secrets.PR_TOKEN }}
+          persist-credentials: false
+          sparse-checkout: fuentes.json
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Clonar extractor
+        id: extractor
+        run: |
+          git clone -q "$EXTRACTOR_REPO" /tmp/extractor
+          pip install -q -r /tmp/extractor/requirements.txt
+          echo "sha=$(git -C /tmp/extractor rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Planear
+        id: plan
+        env:
+          DOCS: ${{ inputs.docs }}
+          ESTADOS: ${{ inputs.estados }}
+          LOTE: ${{ inputs.lote || '8' }}
+          EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
+        run: |
+          args=()
+          for d in $DOCS; do args+=(--doc "$d"); done
+          for e in $ESTADOS; do args+=(--estado "$e"); done
+          [ -n "$LOTE" ] && args+=(--lote "$LOTE")
+          cd /tmp/extractor
+          python -m extractor estatal planear --out "$GITHUB_WORKSPACE" \
+            --plan /tmp/plan/plan.json --shards 8 "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.hay == 'true'
+        with:
+          name: plan
+          path: /tmp/plan/plan.json
+
+  extraer:
+    needs: planear
+    if: needs.planear.outputs.extraer == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.planear.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: OpenCodice/leyes-estatales
+          token: ${{ secrets.PR_TOKEN }}
+          persist-credentials: false
+          sparse-checkout: fuentes.json
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Clonar extractor (el mismo commit que planeó)
+        run: |
+          git clone -q "$EXTRACTOR_REPO" /tmp/extractor
+          git -C /tmp/extractor checkout -q "${{ needs.planear.outputs.extractor }}"
+          pip install -q -r /tmp/extractor/requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: plan
+          path: /tmp/plan
+      - name: Descargar, extraer y auditar
+        env:
+          EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
+        run: |
+          cd /tmp/extractor
+          python -m extractor estatal extraer --plan /tmp/plan/plan.json \
+            --out "$GITHUB_WORKSPACE" --pdf-dir /tmp/pdfs --shard ${{ matrix.shard }} \
+            --staging /tmp/staging
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staging-${{ matrix.shard }}
+          path: /tmp/staging
+          retention-days: 7
+
+  cerrar:
+    needs: [planear, extraer]
+    if: ${{ !cancelled() && needs.planear.outputs.hay == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    outputs:
+      pr: ${{ steps.pr.outputs.pull-request-number }}
+      continuar: ${{ (needs.planear.outputs.pendientes != '0' || steps.cierre.outputs.aplazadas == 'true') && 'true' || 'false' }}
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      TIENE_CLAUDE: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+      OUT: ${{ github.workspace }}
+      PDF_DIR: /tmp/pdfs
+      PLAN: /tmp/plan/plan.json
+      AGENTE_DIR: /tmp/agente
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: OpenCodice/leyes-estatales
+          token: ${{ secrets.PR_TOKEN }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Clonar extractor (el mismo commit que planeó)
+        run: |
+          git clone -q "$EXTRACTOR_REPO" /tmp/extractor
+          git -C /tmp/extractor checkout -q -B main "${{ needs.planear.outputs.extractor }}"
+          git -C /tmp/extractor branch -q --set-upstream-to=origin/main main
+          pip install -q -r /tmp/extractor/requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: plan
+          path: /tmp/plan
+      - uses: actions/download-artifact@v4
+        if: needs.planear.outputs.extraer == 'true'
+        with:
+          pattern: staging-*
+          path: /tmp/staging
+          merge-multiple: true
+      - name: Integrar los grupos
+        id: integrar
+        run: |
+          cd /tmp/extractor
+          python -m extractor estatal integrar --plan "$PLAN" --staging /tmp/staging \
+            --out "$OUT" --pdf-dir "$PDF_DIR" --trabajo "$AGENTE_DIR"
+
+      - name: Veredictos de revisiones a medias
+        # La revisión completa de un código grande puede no caber en una corrida:
+        # lo ya revisado (por la huella del texto de cada bloque) se retoma.
+        uses: actions/cache@v4
+        with:
+          path: /tmp/agente/revision
+          key: revision-estatal-${{ github.run_id }}
+          restore-keys: revision-estatal-
+
+      - name: Agente — revisión completa de las altas
+        # Una ley nueva no se publica solo con las compuertas deterministas: el
+        # agente la revisa entera contra su PDF, por bloques, varias a la vez.
+        if: env.TIENE_CLAUDE == 'true'
+        timeout-minutes: 300
+        # Si se acaba el tiempo, lo revisado se conserva en la caché y las altas
+        # a medias se aplazan (paso siguiente): la corrida sigue.
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          REVISION_BRIEF: brief-revision-estatal.md
+          REVISION_MAX_ALTAS: '8'
+          REVISION_MAX_CARACTERES: '2500000'
+          REVISION_PARALELO: '4'
+        run: bash /tmp/extractor/scripts/agente/revision-federal.sh revisar
+
+      - name: Resultado de la revisión de las altas
+        # Sin el agente no hay revisión completa: las altas se aplazan.
+        env:
+          EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
+          EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
+          REVISION_CORPUS: leyes estatales
+          REVISION_MAX_ALTAS: ${{ env.TIENE_CLAUDE == 'true' && '8' || '0' }}
+          REVISION_MAX_CARACTERES: '2500000'
+        run: bash /tmp/extractor/scripts/agente/revision-federal.sh cerrar
+
+      - name: Decidir altas, exclusiones y el commit
+        id: cierre
+        run: |
+          cd /tmp/extractor
+          python -m extractor estatal cerrar --plan "$PLAN" --out "$OUT" --trabajo "$AGENTE_DIR" --pdf-dir "$PDF_DIR"
+
+      - name: Validar invariantes (gate)
+        run: |
+          cd /tmp/extractor
+          python -m extractor validar --out "$OUT" > /tmp/validar.log || { tail -n 40 /tmp/validar.log; exit 1; }
+          tail -n 1 /tmp/validar.log
+
+      - name: Guardar el trabajo de la corrida
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trabajo
+          path: |
+            /tmp/agente/*.json
+            /tmp/agente/*.md
+            /tmp/agente/*.txt
+            /tmp/agente/*.tsv
+            /tmp/agente/impacto-*/resumen.json
+            /tmp/agente/impacto-*/pendientes.json
+            /tmp/agente/impacto-*/veredicto*.json
+            /tmp/agente/revision/**/veredicto*.json
+            /tmp/agente/revision/**/resultado.json
+            /tmp/agente/revision/**/agente.log
+          retention-days: 30
+
+      - name: Un commit por documento
+        id: commits
+        # Un commit por ley con su título y sus trailers (los decide la causa
+        # que registró `estatal cerrar` en contexto.json) y uno aparte para el
+        # registro (fuentes.json).
+        if: success()
+        run: |
+          git -C "$OUT" config user.name "${{ github.actor }}"
+          git -C "$OUT" config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          echo "base=$(git -C "$OUT" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          python /tmp/extractor/scripts/commits_por_documento.py "$OUT" \
+            --contexto /tmp/agente/contexto.json --extractor-dir /tmp/extractor \
+            --titulo-indice "Registro de las leyes estatales"
+
+      - name: Correcciones por confirmar
+        # Una corrección (mismo PDF, otro extractor) solo se publica si cada
+        # artículo que cambia está confirmado como mejora en el registro del
+        # extractor (scripts/impacto.py); casi siempre ya lo está desde que el
+        # arreglo entró (impacto.yml). Lo que falte lo juzga el agente.
+        id: correcciones
+        if: steps.commits.outcome == 'success'
+        run: |
+          python /tmp/extractor/scripts/impacto.py pendientes-commits "$OUT" \
+            --base "${{ steps.commits.outputs.base }}" --trabajo /tmp/agente/impacto-vigilancia \
+            --pdf-dir "$PDF_DIR"
+
+      - name: Agente — confirmar las correcciones
+        if: steps.correcciones.outputs.pendientes == 'true' && env.TIENE_CLAUDE == 'true'
+        timeout-minutes: 120
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          IMPACTO: /tmp/agente/impacto-vigilancia
+        run: bash /tmp/extractor/scripts/agente/impacto.sh
+
+      - name: Registrar y exigir las correcciones confirmadas
+        id: exigir
+        if: steps.commits.outcome == 'success'
+        env:
+          EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
+          EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
+        run: |
+          if [ "${{ steps.correcciones.outputs.pendientes }}" = true ]; then
+            python /tmp/extractor/scripts/impacto.py cerrar --trabajo /tmp/agente/impacto-vigilancia \
+              --extractor "OpenCodice/fiscal-extractor@$(git -C /tmp/extractor rev-parse HEAD)" \
+              --reporte /tmp/agente/impacto-vigilancia.md || true
+          fi
+          bash /tmp/extractor/scripts/agente/publicar_registro.sh "Correcciones verificadas de leyes estatales"
+          python /tmp/extractor/scripts/impacto.py exigir "$OUT" \
+            --base "${{ steps.commits.outputs.base }}" || true
+
+      - name: Rehacer los commits sin las correcciones no confirmadas
+        if: steps.exigir.outputs.rehacer == 'true'
+        run: |
+          git -C "$OUT" reset -q --mixed "${{ steps.commits.outputs.base }}"
+          python /tmp/extractor/scripts/commits_por_documento.py "$OUT" \
+            --contexto /tmp/agente/contexto.json --extractor-dir /tmp/extractor \
+            --titulo-indice "Registro de las leyes estatales" \
+            --verificadas /tmp/extractor/verificaciones/impacto
+          [ -f /tmp/agente/impacto-vigilancia.md ] && cat /tmp/agente/impacto-vigilancia.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: ¿Quedó algo que publicar?
+        id: publicable
+        if: steps.commits.outcome == 'success'
+        run: echo "si=$([ "$(git -C "$OUT" rev-list --count "${{ steps.commits.outputs.base }}..HEAD")" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Abrir Pull Request
+        # La rama empieza con 'reforma/': revisar-pr de leyes-estatales solo
+        # fusiona solo esas.
+        id: pr
+        if: steps.publicable.outputs.si == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.PR_TOKEN || github.token }}
+          branch: ${{ env.RAMA }}
+          base: main
+          title: ${{ steps.cierre.outputs.asunto }}
+          body-path: /tmp/agente/pr.md
+          labels: |
+            actualizacion
+            automatico
+            verificado
+          delete-branch: true
+
+      - name: Anotar leyes con la versión anterior conservada
+        if: steps.cierre.outputs.retenidas == 'true'
+        run: |
+          { echo "## Versión anterior conservada"; cat /tmp/agente/pr.md; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Alertar fuentes fallidas
+        if: steps.cierre.outputs.fuentes_fallidas == 'true'
+        run: |
+          echo "::error::Alguna fuente no se pudo descargar. Revisa el paso de extracción."
+          exit 1
+
+  continuar:
+    # Quedan leyes por dar de alta o revisiones a medias: en cuanto
+    # `revisar-pr` fusione este PR, otra corrida.
+    needs: cerrar
+    if: needs.cerrar.outputs.continuar == 'true' && needs.cerrar.outputs.pr != ''
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Esperar la fusión y lanzar la siguiente corrida
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ needs.cerrar.outputs.pr }}
+        run: |
+          for i in $(seq 1 90); do
+            estado=$(gh pr view "$PR" -R "$DATOS" --json state -q .state)
+            case "$estado" in
+              MERGED) gh workflow run vigilar-leyes-estatales.yml -R "$GITHUB_REPOSITORY" --ref main
+                      echo "Siguiente corrida lanzada."; exit 0 ;;
+              CLOSED) echo "El PR se cerró sin fusionar; no se continúa."; exit 0 ;;
+            esac
+            sleep 30
+          done
+          echo "::warning::El PR #$PR no se fusionó en 45 minutos; la siguiente vigilancia semanal lo retoma."
+
+  salud:
+    needs: [planear, extraer, cerrar]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Reintentar una vez si falló
+        # Casi todas las fallas son de red o de la fuente oficial: se reintenta
+        # solo, una vez. Si el reintento también falla, la siguiente vigilancia
+        # semanal lo vuelve a intentar.
+        if: (needs.planear.result == 'failure' || needs.cerrar.result == 'failure') && inputs.reintento != true
+        run: gh workflow run vigilar-leyes-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f reintento=true
+
+      - name: Dejar constancia si también falló el reintento
+        if: (needs.planear.result == 'failure' || needs.cerrar.result == 'failure') && inputs.reintento == true
+        run: |
+          titulo="🚨 Falló: ${{ github.workflow }}"
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          n=$(gh issue list -R "$GITHUB_REPOSITORY" --state open \
+                --search "in:title \"$titulo\"" --json number -q '.[0].number')
+          if [ -n "$n" ]; then
+            gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "Volvió a fallar tras reintentar: $url"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$titulo" \
+              --body "Falló dos veces seguidas; la vigilancia de la próxima semana lo reintenta: $url"
+          fi
+
+      - name: Avisar a la web
+        # constitucion.app genera /estado, /leyes y la bitácora de los repos de
+        # datos, así que se redespliega en cuanto termina una vigilancia. Antes se
+        # espera a que `revisar-pr` fusione los PR que abrió.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.PR_TOKEN }}
+        run: |
+          for _ in $(seq 1 30); do
+            abiertos=$(gh pr list -R "$DATOS" --state open --label automatico --json number -q 'length')
+            [ "$abiertos" = 0 ] && break
+            sleep 30
+          done
+          for intento in 1 2 3; do
+            gh api repos/OpenCodice/constitucion-web/dispatches -f event_type=datos-actualizados && exit 0
+            sleep $((intento * 30))
+          done
+          echo "::warning::No se pudo avisar a constitucion-web tras tres intentos."

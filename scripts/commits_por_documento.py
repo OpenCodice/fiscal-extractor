@@ -64,11 +64,19 @@ def cambios(repo: str, *rutas: str) -> list[str]:
     return [e[3:] for e in salida.split("\0") if e]
 
 
-def agrupar(rutas: list[str]) -> tuple[dict[str, list[str]], list[str]]:
+def esquema(repo: str) -> str:
+    """'estatal' en leyes-estatales (cada ley en `<estado>/<clave>/`), si no
+    'corpus'."""
+    raiz = Path(repo)
+    return tr.esquema_repo((p.name for p in raiz.iterdir() if p.is_dir()),
+                           lambda d: (raiz / d / "constitucion").is_dir())
+
+
+def agrupar(rutas: list[str], esq: str = "corpus") -> tuple[dict[str, list[str]], list[str]]:
     por_doc: dict[str, list[str]] = {}
     resto: list[str] = []
     for r in rutas:
-        doc = tr.documento_de_ruta(r, "corpus")
+        doc = tr.documento_de_ruta(r, esq)
         if doc:
             por_doc.setdefault(doc, []).append(r)
         else:
@@ -98,12 +106,12 @@ def mensaje_doc(repo: str, doc: str, tipo: str, rutas: list[str], ctx: dict,
 
 
 def _articulos(raiz: Path, doc: str) -> dict[str, bytes]:
-    d = raiz / doc
+    d = raiz / tr._dir_articulos(doc)
     return {p.name: p.read_bytes() for p in sorted(d.glob("*.md"))} if d.is_dir() else {}
 
 
 def _copiar_doc(origen: Path, destino: Path, doc: str) -> None:
-    for rel in (doc, f"metadata/{doc}"):
+    for rel in tr.carpetas(doc):
         if (destino / rel).exists():
             shutil.rmtree(destino / rel)
         if (origen / rel).exists():
@@ -164,13 +172,13 @@ def sin_confirmar(repo: str, doc: str, ctx: dict, registro: dict | None) -> list
     confirma como mejora (vacío si no se exige)."""
     if registro is None:
         return []
-    corregidos = tr.cambios_de_articulos(doc, cambios(repo, doc, f"metadata/{doc}"),
+    corregidos = tr.cambios_de_articulos(doc, cambios(repo, *tr.carpetas(doc)),
                                          tr.lector_git(repo, "HEAD"), tr.lector_fs(repo))
     return impacto.faltantes(registro, doc, ctx.get("sha256") or "-", corregidos)
 
 
 def _restaurar_doc(repo: str, doc: str) -> None:
-    for rel in (doc, f"metadata/{doc}"):
+    for rel in tr.carpetas(doc):
         _git(repo, "checkout", "-q", "HEAD", "--", rel, check=False)
         _git(repo, "clean", "-fdq", "--", rel)
 
@@ -178,7 +186,7 @@ def _restaurar_doc(repo: str, doc: str) -> None:
 def _entrada_indice(repo: str, doc: str) -> dict | None:
     """La entrada de metadata/documentos.json que `build` deriva del índice
     del documento en disco (escribir_indice_maestro)."""
-    d = tr._json(tr.lector_fs(repo), f"metadata/{doc}/articulos.json")
+    d = tr._json(tr.lector_fs(repo), tr._dir_metadata(doc) + "articulos.json")
     if not isinstance(d, dict):
         return None
     return {"clave": d.get("documento", doc), "etiqueta": d.get("etiqueta"), "sigla": d.get("sigla"),
@@ -229,7 +237,7 @@ def commits_documento(repo: str, doc: str, ctx: dict, *, extractor_repo: str,
     si no se publica)."""
     antes, despues = tr.lector_git(repo, "HEAD"), tr.lector_fs(repo)
     actual = tr.extractor_id(extractor_repo, ctx["extractor_sha"]) if ctx.get("extractor_sha") else None
-    rutas = cambios(repo, doc, f"metadata/{doc}")
+    rutas = cambios(repo, *tr.carpetas(doc))
     tipo = tr.tipo_por_existencia(doc, antes, despues)
     if tipo:
         commit(repo, rutas, mensaje_doc(repo, doc, tipo, rutas, ctx, actual))
@@ -255,7 +263,7 @@ def commits_documento(repo: str, doc: str, ctx: dict, *, extractor_repo: str,
             final, inter = _articulos(Path(repo), doc), _articulos(datos, doc)
             publicado = {Path(r).name: antes(r)
                          for r in _git(repo, "ls-tree", "-z", "--name-only", "HEAD",
-                                       f"{doc}/").split("\0")
+                                       tr._dir_articulos(doc)).split("\0")
                          if r.endswith(".md")}
             if inter == final:
                 decision = "reforma"            # el extractor nuevo no cambia nada aquí
@@ -265,11 +273,11 @@ def commits_documento(repo: str, doc: str, ctx: dict, *, extractor_repo: str,
                 guardado = trabajo / f"final-{doc}"
                 _copiar_doc(Path(repo), guardado, doc)
                 _copiar_doc(datos, Path(repo), doc)
-                r1 = cambios(repo, doc, f"metadata/{doc}")
+                r1 = cambios(repo, *tr.carpetas(doc))
                 commit(repo, r1, mensaje_doc(repo, doc, "reforma", r1, ctx,
                                              tr.extractor_id(extractor_repo, anterior)))
                 _copiar_doc(guardado, Path(repo), doc)
-                r2 = cambios(repo, doc, f"metadata/{doc}")
+                r2 = cambios(repo, *tr.carpetas(doc))
                 if not r2:
                     return ["reforma"]
                 faltan = sin_confirmar(repo, doc, ctx, registro)
@@ -385,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if not (a.titulo_indice and a.extractor_dir and (a.pdf_dir or a.contexto)):
         ap.error("faltan --titulo-indice, --extractor-dir y --pdf-dir o --contexto")
-    por_doc, _ = agrupar(cambios(repo))
+    por_doc, _ = agrupar(cambios(repo), esquema(repo))
     if a.contexto:
         c = json.loads(Path(a.contexto).read_text(encoding="utf-8"))
         ctx, build = c.get("documentos", {}), c.get("build", {})

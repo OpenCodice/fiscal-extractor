@@ -317,7 +317,7 @@ def _git(repo: str, *args: str, binario: bool = False):
 def _indice_pdfs(dirs: list[str]) -> dict[str, str]:
     res = {}
     for d in dirs:
-        for p in sorted(Path(d).glob("*.pdf")):
+        for p in sorted(Path(d).rglob("*.pdf")):        # leyes estatales: en subcarpetas
             res[tr.sha256_bytes(p.read_bytes())] = str(p)
     return res
 

@@ -1,6 +1,10 @@
-"""Subcomandos `federal …`: la vigilancia del corpus de leyes federales.
+"""Subcomandos `federal …` y `estatal …`: la vigilancia de los corpus de leyes
+federales (leyes-federales) y estatales (leyes-estatales). Comparten todo menos
+`planear`, que lee el índice de LeyesBiblio o el registro de
+`extractor/estatales/`; el plan dice a qué corpus pertenece.
 
     federal planear   --out REPO --plan plan.json [--doc X] [--lote N] [--shards N]
+    estatal planear   --out REPO --plan plan.json [--estado E] [--doc X] [--lote N]
     federal extraer   --plan plan.json --out REPO --pdf-dir D --shard I --staging S
     federal integrar  --plan plan.json --staging S --out REPO --pdf-dir D --trabajo T
     federal reevaluar --plan plan.json --out REPO --pdf-dir D --trabajo T
@@ -16,6 +20,7 @@ import shutil
 from pathlib import Path
 
 from . import federal, registro
+from .disposicion import rutas
 
 
 def _salida_gh(**pares) -> None:
@@ -61,8 +66,32 @@ def _cmd_planear(a) -> int:
     return 0
 
 
+def _cmd_planear_estatal(a) -> int:
+    from . import estatal
+    docs = estatal.documentos(a.estado)
+    plan = federal.planear(a.out, docs, solo=a.doc, lote=a.lote, shards=a.shards,
+                           corpus=estatal.ESTATAL)
+    _escribir_json(a.plan, plan)
+    motivos: dict[str, int] = {}
+    for d in plan["documentos"]:
+        motivos[d["motivo"]] = motivos.get(d["motivo"], 0) + 1
+    # Una ley declarada fuera que aún no figura en fuentes.json también pide
+    # corrida: `cerrar` la registra como excluida.
+    previos = {d["clave"] for d in federal.leer_fuentes(a.out)["documentos"]}
+    por_registrar = [c for c in estatal.ESTATAL.fuera if c not in previos]
+    print(f"Registro: {len(docs)} leyes. A procesar: {len(plan['documentos'])} "
+          f"{motivos or ''} en {len(plan['shards'])} grupos; nuevas pendientes para otra "
+          f"tanda: {plan['nuevos_pendientes']}; fuera por registrar: {len(por_registrar)}")
+    hay = bool(plan["documentos"] or por_registrar)
+    _salida_gh(hay="true" if hay else "false",
+               shards=json.dumps(list(range(len(plan["shards"])))),
+               extraer="true" if plan["documentos"] else "false",
+               pendientes=plan["nuevos_pendientes"])
+    return 0
+
+
 def _copiar_doc(origen: Path, destino: Path, clave: str) -> None:
-    for rel in (clave, f"metadata/{clave}"):
+    for rel in rutas(clave):
         if (destino / rel).exists():
             shutil.rmtree(destino / rel)
         if (origen / rel).exists():
@@ -74,7 +103,8 @@ def _cmd_extraer(a) -> int:
     plan = _leer_json(a.plan)
     claves = a.doc or plan["shards"][a.shard]
     # Lo que sale del corpus no se extrae: `cerrar` lo retira.
-    claves = [c for c in claves if c not in federal.FUERA_DEL_CORPUS]
+    fuera = federal.corpus_del_plan(plan).fuera
+    claves = [c for c in claves if c not in fuera]
     res = federal.extraer(a.plan, a.out, a.pdf_dir, claves=claves)
     staging = Path(a.staging)
     for clave, r in res.items():
@@ -165,8 +195,13 @@ def _cmd_cerrar(a) -> int:
 
 
 def registrar(sub) -> None:
-    fp = sub.add_parser("federal", help="vigilancia del corpus de leyes federales")
-    fsub = fp.add_subparsers(dest="federal_cmd", required=True)
+    for corpus in ("federal", "estatal"):
+        _registrar(sub, corpus)
+
+
+def _registrar(sub, corpus: str) -> None:
+    fp = sub.add_parser(corpus, help=f"vigilancia del corpus de leyes {corpus}es")
+    fsub = fp.add_subparsers(dest=f"{corpus}_cmd", required=True)
 
     sp = fsub.add_parser("planear", help="decide qué documentos reprocesar")
     sp.add_argument("--out", required=True, help="repo de datos (lee su fuentes.json)")
@@ -175,8 +210,12 @@ def registrar(sub) -> None:
     sp.add_argument("--lote", type=int, default=None,
                     help="máximo de documentos nuevos por corrida")
     sp.add_argument("--shards", type=int, default=12)
-    sp.add_argument("--indice-html", default=None, help="índice ya descargado (pruebas)")
-    sp.set_defaults(fn=_cmd_planear)
+    if corpus == "federal":
+        sp.add_argument("--indice-html", default=None, help="índice ya descargado (pruebas)")
+        sp.set_defaults(fn=_cmd_planear)
+    else:
+        sp.add_argument("--estado", action="append", help="solo las leyes de estos estados")
+        sp.set_defaults(fn=_cmd_planear_estatal)
 
     sp = fsub.add_parser("extraer", help="descarga, construye y audita un grupo del plan")
     sp.add_argument("--plan", required=True)

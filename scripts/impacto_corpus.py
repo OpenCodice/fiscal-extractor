@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Impacto del extractor, tal como está en disco, sobre todo lo publicado.
 
-Reconstruye cada documento publicado de fiscal-mexicano y de leyes-federales
-desde el PDF exacto de su versión publicada (el sha256 que guardan
+Reconstruye cada documento publicado de fiscal-mexicano, de leyes-federales y
+de las leyes de leyes-estatales (no sus constituciones, que son de
+constitucion-extractor) desde el PDF exacto de su versión publicada (el sha256 que guardan
 `metadata/documentos.json` y `fuentes.json` o, si no, el `Fuente-Sha256` del
 último commit del documento), compara unidad por unidad contra
 el texto publicado (HEAD del repo de datos, no su árbol de trabajo) y deja en
@@ -24,7 +25,7 @@ por verificar, 2 si hay regresiones de cobertura, errores de extracción o
 correcciones ya rechazadas.
 
 Uso:
-  impacto_corpus.py --trabajo T [--fiscal REPO] [--federal REPO] [--pdf-dir D]...
+  impacto_corpus.py --trabajo T [--fiscal REPO] [--federal REPO] [--estatal REPO] [--pdf-dir D]...
       [--cache C] [--solo DOC]...
 """
 from __future__ import annotations
@@ -43,6 +44,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import impacto  # noqa: E402
+import trailers as tr  # noqa: E402
 
 EXTRACTOR = Path(__file__).resolve().parent.parent
 ORG = "https://github.com/OpenCodice"
@@ -64,10 +66,8 @@ def clonar(nombre: str, destino: Path) -> Path:
 def sha_publicado(repo: Path, clave: str) -> str | None:
     """Fuente-Sha256 del último commit del documento: el PDF de su versión
     publicada, cuando el índice no lo guarda."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import trailers as tr
-    for rev in _git(repo, "log", "--format=%H", "-n", "20", "HEAD", "--", clave,
-                    f"metadata/{clave}").split():
+    for rev in _git(repo, "log", "--format=%H", "-n", "20", "HEAD", "--",
+                    *tr.carpetas(clave)).split():
         _, t = tr.parsear(_git(repo, "log", "-1", "--format=%B", rev))
         if tr.valor(t, "Documento") == clave and tr.valor(t, "Fuente-Sha256"):
             return tr.valor(t, "Fuente-Sha256")
@@ -82,9 +82,12 @@ def _sha256(ruta: Path) -> str:
     return h.hexdigest()
 
 
-def documentos(fiscal: Path | None, federal: Path | None, trabajo: Path) -> list[dict]:
+def documentos(fiscal: Path | None, federal: Path | None, trabajo: Path,
+               estatal: Path | None = None) -> list[dict]:
     """Cada documento publicado: repo, clave, URL, sha256 del PDF publicado y
-    registro con el que se construye (None: el fiscal de registro.py)."""
+    registro con el que se construye (None: el fiscal de registro.py). De
+    leyes-estatales, solo las leyes de su fuentes.json: las constituciones son
+    de constitucion-extractor."""
     docs = []
     if fiscal:
         indice = json.loads(_git(fiscal, "show", "HEAD:metadata/documentos.json"))
@@ -103,6 +106,15 @@ def documentos(fiscal: Path | None, federal: Path | None, trabajo: Path) -> list
                              "url": e.get("url"),
                              "sha256": (e.get("pdf") or {}).get("sha256") or sha_publicado(federal, e["clave"]),
                              "registro": str(registro)})
+    if estatal and _git(estatal, "ls-tree", "--name-only", "HEAD", "fuentes.json").strip():
+        registro = trabajo / "fuentes-estatal.json"
+        registro.write_bytes(_git(estatal, "show", "HEAD:fuentes.json", binario=True))
+        for e in json.loads(registro.read_text(encoding="utf-8"))["documentos"]:
+            if e.get("estado") == "incluida":
+                docs.append({"repo": estatal, "nombre": "leyes-estatales", "clave": e["clave"],
+                             "url": e.get("url"),
+                             "sha256": (e.get("pdf") or {}).get("sha256") or sha_publicado(estatal, e["clave"]),
+                             "registro": str(registro)})
     return docs
 
 
@@ -115,9 +127,10 @@ class PDFs:
         self.por_sha = {p.stem: str(p) for p in cache.glob("*.pdf")}
         self.por_clave: dict[str, str] = {}
         for d in dirs:
-            for p in Path(d).glob("*.pdf"):
+            # Las leyes estatales ('jalisco/codigo-civil.pdf') van en subcarpetas.
+            for p in Path(d).rglob("*.pdf"):
                 self.por_sha.setdefault(_sha256(p), str(p))
-                self.por_clave.setdefault(p.stem.lower(), str(p))
+                self.por_clave.setdefault(p.relative_to(d).with_suffix("").as_posix().lower(), str(p))
 
     def obtener(self, sha: str | None, url: str | None, clave: str) -> str | None:
         """El PDF con ese sha256; sin sha (versiones publicadas antes de que se
@@ -150,10 +163,10 @@ class PDFs:
 
 def _exportar_publicado(repo: Path, clave: str, destino: Path) -> dict[str, bytes]:
     """Unidades y metadata publicadas (HEAD) del documento, en `destino`."""
-    datos = _git(repo, "archive", "--format=tar", "HEAD", clave, f"metadata/{clave}", binario=True)
+    datos = _git(repo, "archive", "--format=tar", "HEAD", *tr.carpetas(clave), binario=True)
     with tarfile.open(fileobj=io.BytesIO(datos)) as tar:
         tar.extractall(destino, filter="data")
-    return {p.stem: p.read_bytes() for p in (destino / clave).glob("*.md")}
+    return {p.stem: p.read_bytes() for p in (destino / tr._dir_articulos(clave)).glob("*.md")}
 
 
 def _extractor(args: list[str], registro: str | None) -> str | None:
@@ -172,7 +185,7 @@ def _auditar(out: Path, pdf_dir: Path, registro: str | None) -> set[str] | None:
 
 
 def evaluar(d: dict, trabajo: Path, pdfs: PDFs) -> dict:
-    nombre = f"{d['nombre']}__{d['clave']}"
+    nombre = f"{d['nombre']}__{d['clave'].replace('/', '__')}"
     res = {"documento": d["clave"], "repo": d["nombre"], "pdf_sha256": d["sha256"], "pdf": None,
            "error": None, "sin_pdf": False, "cambios": [], "regresiones": []}
     pdf = pdfs.obtener(d["sha256"], d["url"], d["clave"])
@@ -184,7 +197,7 @@ def evaluar(d: dict, trabajo: Path, pdfs: PDFs) -> dict:
     pdf_dir = trabajo / "pdf" / nombre
     for p in (pub, nuevo, pdf_dir):
         shutil.rmtree(p, ignore_errors=True)
-    pdf_dir.mkdir(parents=True)
+    (pdf_dir / f"{d['clave']}.pdf").parent.mkdir(parents=True, exist_ok=True)
     (pdf_dir / f"{d['clave']}.pdf").symlink_to(Path(pdf).resolve())
     publicado = _exportar_publicado(d["repo"], d["clave"], pub)
     nuevo.mkdir(parents=True)
@@ -195,7 +208,7 @@ def evaluar(d: dict, trabajo: Path, pdfs: PDFs) -> dict:
     if not d["sha256"]:
         # Sin el sha256 publicado, el PDF de hoy solo vale si es la misma
         # versión (la fecha de su portada) que la publicada.
-        leer = lambda raiz: json.loads((raiz / "metadata" / d["clave"] / "articulos.json")
+        leer = lambda raiz: json.loads((raiz / tr._dir_metadata(d["clave"]) / "articulos.json")
                                        .read_text(encoding="utf-8")).get("version")
         try:
             misma = leer(pub) == leer(nuevo)
@@ -205,7 +218,7 @@ def evaluar(d: dict, trabajo: Path, pdfs: PDFs) -> dict:
             res["sin_pdf"] = True
             return res
         res["pdf_sha256"] = _sha256(Path(pdf))
-    nuevos = {p.stem: p.read_bytes() for p in (nuevo / d["clave"]).glob("*.md")}
+    nuevos = {p.stem: p.read_bytes() for p in (nuevo / tr._dir_articulos(d["clave"])).glob("*.md")}
     for clave in sorted(set(publicado) | set(nuevos)):
         a, b = publicado.get(clave), nuevos.get(clave)
         if a != b:
@@ -226,8 +239,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--trabajo", required=True)
     ap.add_argument("--fiscal", default=None, help="clon de fiscal-mexicano (si no, se clona)")
     ap.add_argument("--federal", default=None, help="clon de leyes-federales (si no, se clona)")
+    ap.add_argument("--estatal", default=None, help="clon de leyes-estatales (si no, se clona)")
     ap.add_argument("--sin-fiscal", action="store_true")
     ap.add_argument("--sin-federal", action="store_true")
+    ap.add_argument("--sin-estatal", action="store_true")
     ap.add_argument("--pdf-dir", action="append", default=[])
     ap.add_argument("--cache", default=None, help="caché de PDF por sha256")
     ap.add_argument("--solo", action="append", help="limitar a estas claves")
@@ -241,7 +256,9 @@ def main(argv: list[str] | None = None) -> int:
         Path(a.fiscal) if a.fiscal else clonar("fiscal-mexicano", t / "clones" / "fiscal"))
     federal = None if a.sin_federal else (
         Path(a.federal) if a.federal else clonar("leyes-federales", t / "clones" / "federal"))
-    docs = [d for d in documentos(fiscal, federal, t) if not a.solo or d["clave"] in a.solo]
+    estatal = None if a.sin_estatal else (
+        Path(a.estatal) if a.estatal else clonar("leyes-estatales", t / "clones" / "estatal"))
+    docs = [d for d in documentos(fiscal, federal, t, estatal) if not a.solo or d["clave"] in a.solo]
     pdfs = PDFs(a.pdf_dir, Path(a.cache) if a.cache else t / "cache")
     with ThreadPoolExecutor(max_workers=max(1, a.procesos)) as pool:
         resultados = list(pool.map(lambda d: evaluar(d, t, pdfs), docs))

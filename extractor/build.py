@@ -29,28 +29,30 @@ from .parsers import (articulado as _articulado, reglas as _reglas,
                       criterios as _criterios, fichas as _fichas,
                       apartados as _apartados)
 from .registro import Documento, POR_CLAVE, activos
+from .disposicion import dir_metadata, dir_unidades, es_estatal, indices, rel_unidades
 
 
-def render_markdown(u: Unidad) -> str:
+def render_markdown(u: Unidad, doc: Documento | None = None) -> str:
     """Texto de la unidad: encabezado + cuerpo en párrafos. Sin metadata."""
-    body = normalize_body(u.cuerpo, u.etiqueta)
+    notas = re.compile(doc.notas) if doc is not None and doc.notas else None
+    body = normalize_body(u.cuerpo, u.etiqueta, notas)
     return f"# {u.etiqueta}\n\n{body}\n"
 
 
 def escribir_texto(unidades: list[Unidad], doc: Documento, data_repo: str) -> None:
     """Capa 1: escribe los archivos de texto `<clave>/NNN.md`."""
-    art_dir = Path(data_repo) / doc.clave
+    art_dir = dir_unidades(data_repo, doc.clave)
     art_dir.mkdir(parents=True, exist_ok=True)
     for old in art_dir.glob("*.md"):       # limpiar para reflejar supresiones en git
         old.unlink()
     for u in unidades:
-        (art_dir / f"{u.clave}.md").write_text(render_markdown(u), encoding="utf-8")
+        (art_dir / f"{u.clave}.md").write_text(render_markdown(u, doc), encoding="utf-8")
 
 
 def escribir_metadata(unidades: list[Unidad], doc: Documento, data_repo: str,
                       version: str | None = None) -> None:
     """Capa 3: índice derivado en `metadata/<clave>/` (no toca los .md)."""
-    meta_dir = Path(data_repo) / "metadata" / doc.clave
+    meta_dir = dir_metadata(data_repo, doc.clave)
     meta_dir.mkdir(parents=True, exist_ok=True)
 
     indice = [
@@ -70,7 +72,7 @@ def escribir_metadata(unidades: list[Unidad], doc: Documento, data_repo: str,
             "ultima_reforma": u.ultima_reforma.isoformat() if u.ultima_reforma else None,
             "num_reformas": len(u.fechas_reforma),
             "reformas": [d.isoformat() for d in u.fechas_reforma],
-            "archivo": f"{doc.clave}/{u.clave}.md",
+            "archivo": f"{rel_unidades(doc.clave)}/{u.clave}.md",
         }
         for u in unidades
     ]
@@ -79,7 +81,11 @@ def escribir_metadata(unidades: list[Unidad], doc: Documento, data_repo: str,
         "etiqueta": doc.etiqueta,
         "sigla": doc.sigla,
         "tipo": doc.tipo,
-        "fuente": doc.url,
+        # Las leyes estatales resuelven su PDF en cada vigilancia: su fuente
+        # estable es la página índice (el PDF de cada versión va en el commit).
+        "fuente": doc.url or doc.indice,
+        # Periódico oficial de una ley estatal (el trailer Medio de sus commits).
+        **({"medio": doc.medio} if doc.medio else {}),
         "version": version,
         "num_articulos": len(unidades),
         "articulos": indice,
@@ -102,9 +108,12 @@ def escribir_indice_maestro(data_repo: str) -> None:
     exista en disco. Así es independiente del orden de build (construir un solo
     documento no borra a los demás del índice)."""
     meta = Path(data_repo) / "metadata"
+    if any(es_estatal(d.clave) for d in POR_CLAVE.values()):
+        # leyes-estatales no lleva índice maestro: su registro es fuentes.json.
+        return
     meta.mkdir(parents=True, exist_ok=True)
     resumen = []
-    for idx_path in sorted(meta.glob("*/articulos.json")):
+    for idx_path in indices(data_repo):
         d = json.loads(idx_path.read_text(encoding="utf-8"))
         resumen.append({
             "clave": d["documento"], "etiqueta": d["etiqueta"], "sigla": d["sigla"],
@@ -132,7 +141,7 @@ def _vigencia_anual(clave: str) -> tuple[str | None, str | None]:
 
 
 def escribir_reglas_texto(reglas: list[Regla], doc: Documento, data_repo: str) -> None:
-    dirp = Path(data_repo) / doc.clave
+    dirp = dir_unidades(data_repo, doc.clave)
     dirp.mkdir(parents=True, exist_ok=True)
     for old in dirp.glob("*.md"):
         old.unlink()
@@ -142,7 +151,7 @@ def escribir_reglas_texto(reglas: list[Regla], doc: Documento, data_repo: str) -
 
 def escribir_reglas_metadata(reglas: list[Regla], doc: Documento, data_repo: str,
                              version: str | None) -> None:
-    meta_dir = Path(data_repo) / "metadata" / doc.clave
+    meta_dir = dir_metadata(data_repo, doc.clave)
     meta_dir.mkdir(parents=True, exist_ok=True)
     desde, hasta = _vigencia_anual(doc.clave)
     indice = [
@@ -159,7 +168,7 @@ def escribir_reglas_metadata(reglas: list[Regla], doc: Documento, data_repo: str
             "referencias": r.referencias,
             "vigente_desde": desde,
             "vigente_hasta": hasta,
-            "archivo": f"{doc.clave}/{r.clave}.md",
+            "archivo": f"{rel_unidades(doc.clave)}/{r.clave}.md",
         }
         for r in reglas
     ]
@@ -181,7 +190,7 @@ def _escribir_anomalias(anomalias: list[dict], doc: Documento, data_repo: str) -
     No es la fuente de verdad; es el registro de lo descartado para que el
     validador / un humano confirmen que ninguna era una regla real perdida.
     """
-    meta_dir = Path(data_repo) / "metadata" / doc.clave
+    meta_dir = dir_metadata(data_repo, doc.clave)
     meta_dir.mkdir(parents=True, exist_ok=True)
     (meta_dir / "anomalias.json").write_text(
         json.dumps({"documento": doc.clave, "anomalias": anomalias},
@@ -195,7 +204,7 @@ def render_criterio_markdown(c: Criterio) -> str:
 
 
 def escribir_criterios_texto(crits: list[Criterio], doc: Documento, data_repo: str) -> None:
-    dirp = Path(data_repo) / doc.clave
+    dirp = dir_unidades(data_repo, doc.clave)
     dirp.mkdir(parents=True, exist_ok=True)
     for old in dirp.glob("*.md"):
         old.unlink()
@@ -205,7 +214,7 @@ def escribir_criterios_texto(crits: list[Criterio], doc: Documento, data_repo: s
 
 def escribir_criterios_metadata(crits: list[Criterio], doc: Documento, data_repo: str,
                                 version: str | None) -> None:
-    meta_dir = Path(data_repo) / "metadata" / doc.clave
+    meta_dir = dir_metadata(data_repo, doc.clave)
     meta_dir.mkdir(parents=True, exist_ok=True)
     anio = (version or "")[:4]
     desde = f"{anio}-01-01" if anio else None
@@ -216,7 +225,7 @@ def escribir_criterios_metadata(crits: list[Criterio], doc: Documento, data_repo
             "estado": c.estado, "etiqueta": c.etiqueta, "rubro": c.rubro,
             "cita": f"Criterio {c.numero}", "seccion": c.seccion,
             "vigente_desde": desde, "vigente_hasta": hasta,
-            "archivo": f"{doc.clave}/{c.clave}.md",
+            "archivo": f"{rel_unidades(doc.clave)}/{c.clave}.md",
         }
         for c in crits
     ]
@@ -234,7 +243,7 @@ def escribir_criterios_metadata(crits: list[Criterio], doc: Documento, data_repo
 # ------------------- fichas de trámite y apartados de anexos --------------- #
 def escribir_unidades_texto(unidades: list, doc: Documento, data_repo: str) -> None:
     """Capa 1 genérica: cualquier unidad con `.clave`, `.etiqueta` y `.cuerpo`."""
-    dirp = Path(data_repo) / doc.clave
+    dirp = dir_unidades(data_repo, doc.clave)
     dirp.mkdir(parents=True, exist_ok=True)
     for old in dirp.glob("*.md"):
         old.unlink()
@@ -245,7 +254,7 @@ def escribir_unidades_texto(unidades: list, doc: Documento, data_repo: str) -> N
 
 def escribir_fichas_metadata(fichas: list[Ficha], doc: Documento, data_repo: str,
                              version: str | None) -> None:
-    meta_dir = Path(data_repo) / "metadata" / doc.clave
+    meta_dir = dir_metadata(data_repo, doc.clave)
     meta_dir.mkdir(parents=True, exist_ok=True)
     desde, hasta = _vigencia_anual(doc.clave)
     indice = [
@@ -254,7 +263,7 @@ def escribir_fichas_metadata(fichas: list[Ficha], doc: Documento, data_repo: str
             "etiqueta": f.etiqueta, "rubro": f.rubro,
             "cita": f"Ficha de trámite {f.numero}, {doc.sigla}",
             "vigente_desde": desde, "vigente_hasta": hasta,
-            "archivo": f"{doc.clave}/{f.clave}.md",
+            "archivo": f"{rel_unidades(doc.clave)}/{f.clave}.md",
         }
         for f in fichas
     ]
@@ -271,7 +280,7 @@ def escribir_fichas_metadata(fichas: list[Ficha], doc: Documento, data_repo: str
 
 def escribir_apartados_metadata(aps: list[Apartado], doc: Documento, data_repo: str,
                                 version: str | None) -> None:
-    meta_dir = Path(data_repo) / "metadata" / doc.clave
+    meta_dir = dir_metadata(data_repo, doc.clave)
     meta_dir.mkdir(parents=True, exist_ok=True)
     desde, hasta = _vigencia_anual(doc.clave)
     indice = [
@@ -280,7 +289,7 @@ def escribir_apartados_metadata(aps: list[Apartado], doc: Documento, data_repo: 
             "etiqueta": a.etiqueta, "rubro": a.rubro,
             "cita": f"{doc.sigla}, apartado {a.numero}",
             "vigente_desde": desde, "vigente_hasta": hasta,
-            "archivo": f"{doc.clave}/{a.clave}.md",
+            "archivo": f"{rel_unidades(doc.clave)}/{a.clave}.md",
         }
         for a in aps
     ]
@@ -307,7 +316,7 @@ def escribir_pasajes(unidades: list, doc: Documento, pdf_path: str,
     es_ruido = (_articulado.es_ruido_factory(pdf_path, doc)
                 if doc.parser == "articulado" else _reglas.es_ruido)
     annotate(pasajes, pdf_path, es_ruido)
-    meta_dir = Path(data_repo) / "metadata" / doc.clave
+    meta_dir = dir_metadata(data_repo, doc.clave)
     meta_dir.mkdir(parents=True, exist_ok=True)
     with (meta_dir / "pasajes.jsonl").open("w", encoding="utf-8") as fh:
         for p in pasajes:
@@ -369,7 +378,7 @@ def build_documento(doc: Documento, pdf_path: str, data_repo: str,
         return unidades
     unidades = resolver(doc.parser)(pdf_path, doc)
     # articulado
-    v = fecha_version(pdf_path)
+    v = fecha_version(pdf_path, doc)
     version = v.isoformat() if v else None
     if what in ("all", "text"):
         escribir_texto(unidades, doc, data_repo)

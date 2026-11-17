@@ -17,7 +17,9 @@ import json
 import re
 from pathlib import Path
 
+from .disposicion import dir_metadata, dir_unidades
 from .parsers.reglas import DOF_HEADER_RE, _ctx_prefijo, _consistente
+from .registro import POR_CLAVE
 
 # Marcas de encabezado/pie que NUNCA deben aparecer en el texto.
 LEAK_MARKERS = ("CÁMARA DE DIPUTADOS", "Secretaría de Servicios")
@@ -58,20 +60,29 @@ def validar(data_repo: str, claves: list[str] | None = None
     def chk(ok: bool, label: str, detail: str = "") -> None:
         checks.append((bool(ok), label, detail))
 
-    if claves is None:
+    if claves is None and (repo / "metadata" / "documentos.json").exists():
         docs = json.loads((repo / "metadata" / "documentos.json")
                           .read_text(encoding="utf-8"))["documentos"]
         chk(bool(docs), "índice maestro no vacío", f"{len(docs)} documentos")
         claves = [d["clave"] for d in docs]
+    elif claves is None:
+        # Repo estatal: sin índice maestro, las leyes incluidas de fuentes.json.
+        fuentes = repo / "fuentes.json"
+        docs = (json.loads(fuentes.read_text(encoding="utf-8"))["documentos"]
+                if fuentes.exists() else [])
+        claves = [d["clave"] for d in docs if d.get("estado") == "incluida"]
+        chk(bool(claves) or fuentes.exists(), "registro de documentos",
+            f"{len(claves)} documentos")
 
     for clave in claves:
-        idx_path = repo / "metadata" / clave / "articulos.json"
+        meta = dir_metadata(repo, clave)
+        idx_path = meta / "articulos.json"
         if not idx_path.exists():
             chk(False, f"[{clave}] índice del documento", "falta articulos.json")
             continue
         idx = json.loads(idx_path.read_text(encoding="utf-8"))
         items = _items(idx)
-        mds = sorted((repo / clave).glob("*.md"))
+        mds = sorted(dir_unidades(repo, clave).glob("*.md"))
         chk(bool(items), f"[{clave}] al menos una unidad", f"{len(items)} unidades")
 
         # --- comunes a todo documento --------------------------------------
@@ -89,13 +100,13 @@ def validar(data_repo: str, claves: list[str] | None = None
         truncados = [n for n, t in textos.items() if len(_cuerpo(t)) < MIN_BODY_CHARS]
         chk(not truncados, f"[{clave}] ningún cuerpo truncado", ", ".join(truncados[:4]))
 
-        ref = json.loads((repo / "metadata" / clave / "reformas.json")
+        ref = json.loads((meta / "reformas.json")
                          .read_text(encoding="utf-8"))
         malas = [f for f in ref if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", f)]
         chk(not malas, f"[{clave}] fechas de reforma ISO", ", ".join(malas[:4]))
 
         # --- pasajes con ubicación en el PDF (si existen) ------------------
-        pas_path = repo / "metadata" / clave / "pasajes.jsonl"
+        pas_path = meta / "pasajes.jsonl"
         if pas_path.exists():
             pas = [json.loads(l) for l in pas_path.read_text(encoding="utf-8").splitlines() if l.strip()]
             loc = sum(1 for p in pas if p.get("coordenadas"))
@@ -149,6 +160,13 @@ def _validar_articulado(clave: str, items: list[dict], chk) -> None:
     if not nums:
         return
     huecos = [n for n in range(nums[0], nums[-1] + 1) if n not in set(nums)]
+    doc = POR_CLAVE.get(clave)
+    if doc is not None and doc.huecos:
+        # El PDF omite números (artículos derogados sin rótulo): el parser solo
+        # salta un número si no aparece en todo el resto del texto.
+        chk(True, f"[{clave}] secuencia de artículos (con huecos del PDF)",
+            f"{len(huecos)} números ausentes")
+        return
     chk(not huecos, f"[{clave}] secuencia de artículos continua",
         f"huecos: {huecos[:10]}" + (" …" if len(huecos) > 10 else ""))
 
@@ -179,7 +197,7 @@ def _validar_reglas(clave: str, idx: dict, items: list[dict], repo: Path, chk) -
         f"{len(grupos)} grupos, {huecos_tot} huecos (normal: reglas derogadas)")
 
     # 3) anomalías registradas en el build (líneas ambiguas no tomadas como regla).
-    anom_path = repo / "metadata" / clave / "anomalias.json"
+    anom_path = dir_metadata(repo, clave) / "anomalias.json"
     if anom_path.exists():
         anom = json.loads(anom_path.read_text(encoding="utf-8"))["anomalias"]
         riesgo = [a for a in anom if a["motivo"] == "cita_otra_rama_capitalizada"]

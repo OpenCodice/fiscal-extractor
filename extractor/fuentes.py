@@ -17,12 +17,14 @@ excepción: mejor un job rojo que vigilar un PDF muerto durante meses.
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
+from pathlib import Path
 import ssl
 import urllib.request
 from html import unescape
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 UA = "Mozilla/5.0 (fiscal-extractor; vigilancia de reformas)"
 
@@ -31,6 +33,9 @@ UA = "Mozilla/5.0 (fiscal-extractor; vigilancia de reformas)"
 # desactivar la verificación del certificado. Solo se habla con *.gob.mx.
 _SSL_GOB = ssl.create_default_context()
 _SSL_GOB.set_ciphers("DEFAULT:@SECLEVEL=1")
+# Intermedios que algunos sitios estatales no envían (ver certs/README.md).
+for _pem in sorted((Path(__file__).resolve().parent.parent / "certs").glob("*.pem")):
+    _SSL_GOB.load_verify_locations(cafile=str(_pem))
 
 _HREF_PDF = re.compile(r'href="([^"]+\.pdf)"', re.IGNORECASE)
 _FECHA_NOMBRE = re.compile(r"(\d{2})(\d{2})(\d{4})\.pdf$", re.IGNORECASE)
@@ -38,9 +43,25 @@ _ANCLA = re.compile(r"""<a\s[^>]*?href=["']([^"']+)["'][^>]*>(.*?)</a>""",
                     re.IGNORECASE | re.DOTALL)
 
 
-def descargar(url: str, dest: str) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=180, context=_SSL_GOB) as r, \
+# Worker de Cloudflare en México (constitucion-extractor/egress-mx/) para los
+# sitios estatales que rechazan IP de fuera del país (`via: "mx"` en el registro).
+EGRESS_MX = os.environ.get("EGRESS_MX_URL", "https://egress-mx.danielcardeenas.workers.dev/")
+
+
+def _peticion(url: str, via: str | None = None) -> urllib.request.Request:
+    if via == "mx":
+        token = os.environ.get("EGRESS_MX_TOKEN", "")
+        if not token:
+            raise RuntimeError("falta EGRESS_MX_TOKEN para descargar vía México")
+        return urllib.request.Request(f"{EGRESS_MX}?url={quote(url, safe='')}",
+                                      headers={"User-Agent": UA,
+                                               "Authorization": f"Bearer {token}"})
+    return urllib.request.Request(url, headers={"User-Agent": UA})
+
+
+def descargar(url: str, dest: str, via: str | None = None) -> None:
+    Path(dest).parent.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(_peticion(url, via), timeout=180, context=_SSL_GOB) as r, \
             open(dest, "wb") as f:
         shutil.copyfileobj(r, f)
 
@@ -54,10 +75,43 @@ def _fecha_nombre(href: str) -> tuple[int, int, int]:
     return (int(yyyy), int(mm), int(dd))
 
 
-def _leer_indice(url: str) -> str:
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=60, context=_SSL_GOB) as r:
-        return r.read().decode("utf-8", errors="replace")
+def _leer_indice(url: str, via: str | None = None) -> str:
+    with urllib.request.urlopen(_peticion(url, via), timeout=60, context=_SSL_GOB) as r:
+        crudo = r.read()
+    # El SAT sirve UTF-8; algunos congresos estatales, ISO-8859-1 (Jalisco), con
+    # acentos en las rutas de los PDF que no pueden perderse.
+    try:
+        return crudo.decode("utf-8")
+    except UnicodeDecodeError:
+        return crudo.decode("latin-1")
+
+
+_FECHA_DDMMAA = re.compile(r"(\d{2})(\d{2})(\d{2})\.pdf$", re.IGNORECASE)
+
+
+def _fecha_ddmmaa(href: str) -> tuple[int, int, int]:
+    m = _FECHA_DDMMAA.search(href)
+    return (2000 + int(m.group(3)), int(m.group(2)), int(m.group(1))) if m else (0, 0, 0)
+
+
+def _codificar(url: str) -> str:
+    """Percent-encode de la ruta (espacios y acentos), sin tocar lo ya codificado."""
+    partes = urlsplit(url)
+    return urlunsplit(partes._replace(path=quote(partes.path, safe="/%")))
+
+
+def _elegir(doc, candidatos: list[str]) -> str:
+    """El PDF vigente entre los href que casan, según `doc.orden`."""
+    orden = getattr(doc, "orden", "ddmmaaaa")
+    if orden == "unico":
+        rutas = sorted(set(candidatos))
+        if len(rutas) > 1:
+            raise LookupError(f"{doc.clave}: {doc.indice} enlaza {len(rutas)} PDF distintos "
+                              f"para {doc.patron!r}: {rutas[:3]}")
+        return rutas[0]
+    if orden == "ddmmaa":
+        return max(candidatos, key=_fecha_ddmmaa)
+    return max(candidatos, key=_fecha_nombre)
 
 
 def url_vigente(doc, leer=_leer_indice) -> str:
@@ -82,12 +136,13 @@ def url_vigente(doc, leer=_leer_indice) -> str:
         if not doc.url:
             raise LookupError(f"{doc.clave}: sin URL ni página índice en el registro")
         return doc.url
-    html = leer(doc.indice)
+    via = getattr(doc, "via", None)
+    html = leer(doc.indice, via) if via else leer(doc.indice)
     patron = re.compile(doc.patron, re.IGNORECASE)
-    candidatos = [h for h in _HREF_PDF.findall(html) if patron.search(h)]
+    candidatos = [unescape(h) for h in _HREF_PDF.findall(html) if patron.search(unescape(h))]
     if not candidatos:
         raise LookupError(
             f"{doc.clave}: ningún PDF coincide con {doc.patron!r} en {doc.indice} "
-            "(¿cambió la estructura de la página del SAT?)"
+            "(¿cambió la estructura de la página?)"
         )
-    return urljoin(doc.indice, max(candidatos, key=_fecha_nombre))
+    return _codificar(urljoin(doc.indice, _elegir(doc, candidatos)))

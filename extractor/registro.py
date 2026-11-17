@@ -41,6 +41,27 @@ class Documento:
     # (además de las genéricas de la Cámara). Suele ser el título del documento.
     titulos_encabezado: tuple[str, ...] = field(default_factory=tuple)
     activo: bool = True              # False = declarado pero su parser aún no existe
+    # --- leyes estatales (ver estatal.py) ---------------------------------
+    # Periódico oficial donde se publican sus reformas ('Periódico Oficial del
+    # Estado de Jalisco'): el trailer Medio de sus commits.
+    medio: str | None = None
+    # Cómo elegir entre los PDF del índice que casan con `patron`: 'ddmmaaaa'
+    # (la fecha más reciente en el nombre, SAT), 'ddmmaa' (Jalisco) o 'unico'
+    # (el índice enlaza solo el vigente; dos rutas distintas son un error).
+    orden: str = "ddmmaaaa"
+    # La numeración del PDF tiene huecos: los estados suelen omitir el artículo
+    # derogado en vez de dejar "Se deroga". Ver `articulado.parse_texto`.
+    huecos: bool = False
+    # Regex de las notas de reforma de la fuente ('Párrafo reformado G.O. CDMX
+    # 08/12/23'): cada una es un párrafo en cursiva y de ellas salen las fechas
+    # de reforma, como de las 'DOF DD-MM-AAAA' de la Cámara.
+    notas: str | None = None
+    # Las que el PDF pone ANTES de lo que anotan ('(REFORMADO, G.O. 25 DE MAYO
+    # DE 2000)' sobre el artículo, en la CDMX): las que quedan justo antes de
+    # un artículo son de ese artículo.
+    notas_previas: str | None = None
+    # 'mx': el sitio rechaza IP extranjeras; se descarga por el Worker egress-mx.
+    via: str | None = None
 
 
 def _ley(clave, etiqueta, sigla, archivo, encabezado="", *, parser="articulado",
@@ -200,6 +221,13 @@ def a_dict(doc: Documento) -> dict:
             d[campo] = getattr(doc, campo)
     if doc.titulos_encabezado:
         d["titulos_encabezado"] = list(doc.titulos_encabezado)
+    for campo in ("medio", "notas", "notas_previas", "via"):
+        if getattr(doc, campo):
+            d[campo] = getattr(doc, campo)
+    if doc.orden != "ddmmaaaa":
+        d["orden"] = doc.orden
+    if doc.huecos:
+        d["huecos"] = True
     return d
 
 
@@ -210,6 +238,10 @@ def de_dict(d: dict) -> Documento:
         indice=d.get("indice"), patron=d.get("patron"),
         texto_enlace=d.get("texto_enlace"),
         titulos_encabezado=tuple(d.get("titulos_encabezado", ())),
+        medio=d.get("medio"), orden=d.get("orden", "ddmmaaaa"),
+        huecos=bool(d.get("huecos")), notas=d.get("notas"),
+        notas_previas=d.get("notas_previas"),
+        via=d.get("via"),
     )
 
 
@@ -222,8 +254,12 @@ def usar(documentos: list[Documento]) -> None:
 
 
 def cargar(ruta) -> None:
-    """Usa como corpus los documentos de un `fuentes.json` (o de un plan)."""
+    """Usa como corpus los documentos de un `fuentes.json` (o de un plan). Una
+    ley estatal se define en `extractor/estatales/` (cómo leer su PDF):
+    fuentes.json solo la identifica, así que gana la definición del código."""
     import json
     from pathlib import Path
+    from .estatales import documentos as estatales, fuera
     datos = json.loads(Path(ruta).read_text(encoding="utf-8"))
-    usar([de_dict(d) for d in datos["documentos"]])
+    codigo = {d.clave: d for d in estatales()} | {c: d for c, (d, _) in fuera().items()}
+    usar([codigo.get(d["clave"]) or de_dict(d) for d in datos["documentos"]])

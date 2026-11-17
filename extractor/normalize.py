@@ -48,10 +48,14 @@ def _note_is_complete(note: str) -> bool:
     return bool(NOTE_COMPLETE_RE.search(note.strip()))
 
 
-def normalize_body(body: str, heading_label: str) -> str:
+def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = None) -> str:
     """Devuelve el cuerpo de la unidad como párrafos, sin la línea de encabezado.
 
     Las notas de reforma quedan en *cursiva* como anotación al pie de su bloque.
+    `notas` reconoce además las notas propias de una fuente estatal
+    ('(REFORMADO, G.O. 25 DE MAYO DE 2000)'), que no llevan 'DOF' y anotan el
+    párrafo que les sigue: cada una es su propio párrafo, hasta el paréntesis
+    que la cierra.
     """
     lines = [ln.rstrip() for ln in body.splitlines()]
 
@@ -77,6 +81,19 @@ def normalize_body(body: str, heading_label: str) -> str:
         if not s:
             flush_buf()
             i += 1
+            continue
+        if notas is not None and notas.match(s):
+            flush_buf()
+            # Sigue en el renglón siguiente si no cerró su paréntesis o, la nota
+            # del editor ('N. DE E. EN RELACIÓN CON …'), si no cerró la oración.
+            note, j = s, i + 1
+            while (j < n and (j - i) <= MAX_NOTE_CONT_LINES and lines[j].strip()
+                   and (note.count("(") > note.count(")")
+                        or (note.startswith("N. DE E.") and not note.endswith(".")))):
+                note = f"{note} {lines[j].strip()}"
+                j += 1
+            blocks.append(f"_{note}_")
+            i = j
             continue
         if NOTA_NORMATECA_RE.match(s):
             flush_buf()

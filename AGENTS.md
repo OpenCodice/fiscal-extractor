@@ -2,9 +2,11 @@
 
 Convierte los PDF oficiales de la legislación fiscal mexicana en un archivo
 Markdown por unidad (artículo, regla, criterio, ficha) más metadata derivada.
-Es código; los datos viven en `fiscal-mexicano` y en `leyes-federales` (todas
-las leyes de LeyesBiblio, con el mismo parser `articulado`), que nunca se
-editan a mano: si una unidad está mal, se corrige aquí.
+Es código; los datos viven en `fiscal-mexicano`, en `leyes-federales` (todas
+las leyes de LeyesBiblio, con el mismo parser `articulado`) y, para las leyes
+de cada estado además de su constitución, en `leyes-estatales`
+(`{estado}/{ley}/`, ver «Leyes estatales»). Nunca se editan a mano: si una
+unidad está mal, se corrige aquí.
 
 ## Estructura
 
@@ -27,6 +29,10 @@ editan a mano: si una unidad está mal, se corrige aquí.
   se genera del índice de LeyesBiblio y vive en `leyes-federales/fuentes.json`
   (no en `registro.py`). `--registro <archivo>` (o un `fuentes.json` en el repo
   de `--out`) sustituye el corpus fiscal en cualquier comando.
+- `extractor/estatal.py`, `extractor/estatales/` (un módulo por estado) y
+  `extractor/disposicion.py` — el corpus de leyes estatales y dónde vive cada
+  documento en su repo de datos. Ver «Leyes estatales».
+- `.github/workflows/vigilar-leyes-estatales.yml` — su vigilancia.
 - `.github/workflows/vigilar-fiscal.yml` y `vigilar-federal.yml` — la vigilancia
   de `fiscal-mexicano` y `leyes-federales`. Viven aquí, no en los repos de
   datos, para que el historial de esos repos solo tenga cambios de texto legal.
@@ -213,3 +219,67 @@ revisar) se queda fuera de esa corrida. Las leyes federales nuevas pasan por lo
 mismo (`revision-federal.sh`, hasta 3 por corrida; las demás se aplazan): con
 hallazgos quedan `excluida` en `fuentes.json` con su motivo y se reintentan
 cuando cambia el PDF o el extractor.
+
+## Leyes estatales
+
+Las leyes de cada estado distintas de su constitución (códigos civiles y
+penales, de procedimientos, leyes orgánicas…). Diseño, decidido al empezar esta
+fase (2026-11-17):
+
+- **Datos:** en `leyes-estatales`, junto a la constitución del estado, una
+  carpeta por ley: `{estado}/{ley}/articulos/NNN.md` y `{estado}/{ley}/metadata/`
+  (la misma forma que `{estado}/constitucion/`). `Documento` de sus commits:
+  `<estado>/<ley>` (`jalisco/codigo-civil`). `disposicion.py` decide la ruta por
+  la clave (con `/` → estatal) y `scripts/trailers.py` aplica la misma regla
+  (una prueba exige que coincidan). El PDF no se guarda en el repo (sí su
+  sha256 y su URL en `fuentes.json`), como en el corpus federal: 32 estados con
+  decenas de códigos de varios MB no caben en git.
+- **Parser:** `articulado`, el mismo de las leyes federales (los códigos
+  estatales tienen la estructura de los federales: libros, títulos, capítulos,
+  artículos Bis…). Lo propio de cada fuente va en la definición de la ley
+  (`Documento`): `medio` (periódico oficial, trailer Medio), `huecos` (el PDF
+  omite artículos derogados: se salta un número solo si no vuelve a aparecer
+  en el resto del texto), `notas` (regex de sus notas de reforma: van en
+  cursiva y dan las fechas de `reformas.json`), `notas_previas` (las que el PDF
+  pone ANTES del artículo, como la CDMX: pasan a ser su primer párrafo; las que
+  anotan un encabezado se quedan con la estructura) y `titulos_encabezado`. La
+  versión sale de la portada ('Última reforma publicada … el 20 de agosto de
+  2026') o de la última fecha de su tabla de reformas (Jalisco). Las reglas de
+  `verificar.py` que dependen de esas convenciones (el rótulo propio entre la
+  nota previa y el texto; un cuerpo 'SE DEROGA' o una enumeración abierta al
+  final) solo aplican a las leyes estatales: la auditoría federal no cambia.
+- **Registro:** `extractor/estatales/<estado>.py` (`MEDIO`, `LEYES` con
+  `ley(...)`, `FUERA` con su motivo en lenguaje llano). La clave es el nombre
+  oficial sin el ámbito ('del Estado de Jalisco', 'para el Distrito Federal'),
+  en minúsculas con guiones, y no cambia una vez publicada. La URL vigente se
+  resuelve en cada vigilancia contra la página índice del sitio oficial
+  (`indice` + `patron` + `orden`: `ddmmaa` en Jalisco, `unico` en la CDMX);
+  `via="mx"` descarga por el Worker `egress-mx` (`EGRESS_MX_TOKEN`).
+  `fuentes.json` de leyes-estatales guarda lo publicado (incluida/excluida y por
+  qué, PDF, extractor), solo con los campos que identifican a la ley: cómo leer
+  su PDF vive en el código y `registro.cargar` lo toma de ahí.
+- **Vigilancia:** `vigilar-leyes-estatales.yml`, el flujo federal
+  (`extractor estatal planear|extraer|integrar|cerrar`, mismos pasos que
+  `federal …`) por tandas (`--lote`, 8 altas por corrida). Las altas pasan la
+  revisión completa por bloques (`revision-federal.sh` con
+  `brief-revision-estatal.md`), de la más corta a la más larga, hasta 2.5
+  millones de caracteres por corrida y 4 a la vez; una revisión a medias se
+  aplaza y retoma sus veredictos de la caché de Actions. Aquí el agente no
+  repara el extractor: un arreglo entra por main y pasa por `impacto.yml`, que
+  mide ya también estas leyes (`impacto_corpus.py --estatal`). El PR va a la
+  rama `reforma/leyes-estatales`, la que `revisar-pr` de leyes-estatales
+  fusiona; ese `revisar-pr` valida los trailers con la copia de
+  `scripts/validar_commits.py` de constitucion-extractor, que debe estar al día.
+- Las constituciones las sigue produciendo y vigilando constitucion-extractor
+  (`{estado}/constitucion/`); este flujo no las toca, y aquel no toca las leyes.
+
+```bash
+.venv/bin/python -m extractor estatal planear --out ../leyes-estatales --plan /tmp/plan.json [--estado jalisco] [--lote 8]
+# luego extraer / integrar / cerrar como en el corpus federal, con `estatal`
+```
+
+Agregar una ley: una entrada `ley(...)` en el módulo de su estado (o el módulo
+nuevo, con su `MEDIO`), `build` + `auditar` en cero problemas sobre su PDF, y la
+vigilancia la da de alta tras su revisión completa. Si no puede quedar fiel
+(p. ej. el Código de Procedimientos Civiles de la CDMX, que reinicia su
+numeración en el Título Especial), va en `FUERA` con su motivo.
