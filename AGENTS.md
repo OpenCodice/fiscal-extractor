@@ -278,6 +278,15 @@ fase (2026-11-17):
 # luego extraer / integrar / cerrar como en el corpus federal, con `estatal`
 ```
 
+`estatal planear --revisar <estado/ley>` (input `revisar` del workflow) hace
+pasar la revisión completa a una ley ya publicada, como si fuera un alta: con
+hallazgos conserva su versión y queda `revision_pendiente` con el motivo. Así
+se revisaron las seis leyes de la CDMX que la primera corrida publicó sin
+revisión (un cierre de revisión que falló contaba como "sin hallazgos"; ya no).
+Lo que la revisión suele encontrar en los PDF estatales y el texto plano no
+resuelve: cortes de párrafo que dependen del ancho del renglón (un renglón
+justificado que termina en punto sin cerrar el párrafo).
+
 Agregar una ley: una entrada `ley(...)` en el módulo de su estado (o el módulo
 nuevo, con su `MEDIO`), `build` + `auditar` en cero problemas sobre su PDF, y la
 vigilancia la da de alta tras su revisión completa. Si no puede quedar fiel
