@@ -38,17 +38,35 @@ unidad está mal, se corrige aquí.
   datos, para que el historial de esos repos solo tenga cambios de texto legal.
   Las lanza cada lunes el Worker `scheduler` (constitucion-extractor/scheduler/)
   y abren en el repo de datos un PR con un commit por documento
-  (`scripts/commits_por_documento.py`), que `revisar-pr` fusiona con rebase.
+  (`scripts/commits_por_documento.py`), que su job `revisar` valida y fusiona
+  con rebase.
+- `.github/workflows/revisar-pr.yml` (reutilizable) y `scripts/validar_pr.sh` —
+  el gate de los PR de los repos de datos, que así no necesitan workflows
+  propios. Cada vigilancia lo llama tras abrir su PR (y se puede lanzar a mano
+  con `gh workflow run revisar-pr.yml -f repo=OpenCodice/<repo> -f pr=<n> -f
+  prefijo=actualizacion/` para un PR que quedó abierto). El job `validar`, sin
+  secretos, corre `validar_pr.sh` sobre el sha de la cabeza del PR: `extractor
+  validar` (en `leyes-estatales`, también cada `{estado}/constitucion` con el
+  de constitucion-extractor) y `validar_commits.py` sobre cada commit. Solo si
+  pasó, `fusionar` (con `PR_TOKEN`) fusiona con rebase un PR de la rama de la
+  vigilancia con la etiqueta `verificado`, atado a ese sha
+  (`--match-head-commit`): si la cabeza cambió, no se fusiona. También publica
+  el resultado como commit status (`validar-externo`), solo informativo:
+  `PR_TOKEN` no tiene el permiso «Commit statuses», así que la protección de
+  main no puede exigirlo. El gate es que solo este job fusiona, y solo lo
+  validado. Mientras los repos de datos conserven su propio `revisar-pr.yml`,
+  los dos validan y el primero que fusiona gana.
 - `scripts/commits_por_documento.py` — un commit por documento con sus
   trailers (y uno `Tipo: indice` para lo compartido). `scripts/trailers.py` los
-  calcula y `scripts/validar_commits.py` los comprueba desde `revisar-pr` de
-  cada repo de datos. Con `--verificadas`, una corrección sin confirmar no se
+  calcula y `scripts/validar_commits.py` los comprueba antes de fusionar (ver
+  `revisar-pr.yml`). Con `--verificadas`, una corrección sin confirmar no se
   publica (si había reforma, sale solo la reforma, construida con el extractor
-  anterior). `trailers.py`, `validar_commits.py`, `impacto.py`, `revision.py`,
-  `agente/impacto.sh`, `agente/brief-impacto.md`, `agente/brief_revision.py` y
-  `agente/publicar_registro.sh` existen idénticos en `constitucion-extractor`
-  (y `tests/test_trailers.py`, `tests/test_impacto.py`): un cambio se hace en
-  los dos.
+  anterior). `trailers.py`, `validar_commits.py`, `validar_pr.sh`,
+  `impacto.py`, `revision.py`, `agente/impacto.sh`, `agente/brief-impacto.md`,
+  `agente/brief_revision.py`, `agente/publicar_registro.sh` y
+  `.github/workflows/revisar-pr.yml` existen idénticos en
+  `constitucion-extractor` (y `tests/test_trailers.py`,
+  `tests/test_impacto.py`): un cambio se hace en los dos.
 - `scripts/readme_fiscal.py` y `readme_federal.py` — regeneran las tablas del
   README de cada repo de datos; las corre su vigilancia.
 - `scripts/agente/` — el agente de CI: `brief.md` (su encargo), `correr.sh`
@@ -328,9 +346,9 @@ fase (2026-11-17):
   `reparar` (ver «Reparación autónoma»); un arreglo a mano entra por main y
   pasa por `impacto.yml`, que mide ya también estas leyes
   (`impacto_corpus.py --estatal`). El PR va a la
-  rama `reforma/leyes-estatales`, la que `revisar-pr` de leyes-estatales
-  fusiona; ese `revisar-pr` valida los trailers con la copia de
-  `scripts/validar_commits.py` de constitucion-extractor, que debe estar al día.
+  rama `reforma/leyes-estatales` y lo valida y fusiona el job `revisar`
+  (`revisar-pr.yml`): todo `leyes-estatales`, leyes y constituciones, con los
+  dos extractores.
 - Las constituciones las sigue produciendo y vigilando constitucion-extractor
   (`{estado}/constitucion/`); este flujo no las toca, y aquel no toca las leyes.
 
