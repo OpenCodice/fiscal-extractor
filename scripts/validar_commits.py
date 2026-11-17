@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Valida los trailers de cada commit de un PR de un repo de datos.
 
-Lo llama `revisar-pr.yml` de cada repo de datos. El PR se fusiona con rebase,
+Lo llama `validar_pr.sh` (desde `revisar-pr.yml`). El PR se fusiona con rebase,
 así que cada commit llega tal cual al historial: todos deben llevar trailers
 bien formados, un título coherente con ellos y listas de artículos que
 coincidan exactamente con su diff (ver scripts/trailers.py).

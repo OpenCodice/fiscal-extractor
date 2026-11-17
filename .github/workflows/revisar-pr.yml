@@ -52,9 +52,9 @@ permissions:
   contents: read
 
 env:
-  # Nombre del commit status. Mientras los repos de datos conserven su propio
-  # revisar-pr.yml (cuyo job `validar` es hoy el check obligatorio de main),
-  # este va con otro nombre para no confundirse con aquel.
+  # Nombre del commit status, solo informativo: PR_TOKEN no tiene el permiso
+  # «Commit statuses», así que la protección de main de los repos de datos no
+  # puede exigirlo. El gate es que solo el job `fusionar` fusiona.
   CONTEXTO: validar-externo
 
 jobs:

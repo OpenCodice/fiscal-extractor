@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Valida un PR de un repo de datos sobre el sha exacto de su cabeza: los
 # invariantes de cada documento (`extractor validar`) y los trailers de cada
-# commit (`validar_commits.py`). Es el check que exige main en los repos de
-# datos; lo corre `.github/workflows/revisar-pr.yml` en un job sin secretos,
-# y solo con su resultado se publica el commit status y se fusiona.
+# commit (`validar_commits.py`). Lo corre `.github/workflows/revisar-pr.yml`
+# en un job sin secretos, y solo con su resultado se publica el commit status
+# y se fusiona: los repos de datos no tienen workflows propios.
 #
 # Uso: validar_pr.sh <OpenCodice/repo-datos> <número de PR> [sha esperado]
 #

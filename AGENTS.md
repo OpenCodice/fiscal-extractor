@@ -54,8 +54,7 @@ unidad está mal, se corrige aquí.
   el resultado como commit status (`validar-externo`), solo informativo:
   `PR_TOKEN` no tiene el permiso «Commit statuses», así que la protección de
   main no puede exigirlo. El gate es que solo este job fusiona, y solo lo
-  validado. Mientras los repos de datos conserven su propio `revisar-pr.yml`,
-  los dos validan y el primero que fusiona gana.
+  validado.
 - `scripts/commits_por_documento.py` — un commit por documento con sus
   trailers (y uno `Tipo: indice` para lo compartido). `scripts/trailers.py` los
   calcula y `scripts/validar_commits.py` los comprueba antes de fusionar (ver
@@ -179,11 +178,13 @@ Extractor: OpenCodice/fiscal-extractor@b897ca4
   `-Derogados` (reforma; derogado = el cuerpo pasa a "Se deroga"/"Derogado" o el
   archivo desaparece) y `Articulos-Corregidos` (corrección).
 
-El historial de los dos repos se reescribió por última vez el 2026-11-17: cada
+El historial de los dos repos se reescribió el 2026-11-17 (la final): cada
 documento empieza en su alta y sigue solo con sus reformas reales, con todos
 los trailers (también Fuente, Fuente-Sha256 y Extractor), y
 `metadata/documentos.json` guarda ya `pdf_sha256` y `extractor_sha` de cada
-documento. Desde entonces no se reescribe: los hashes son estables.
+documento. Ese mismo día una última reescritura solo quitó del historial la
+infraestructura (`.github/`, `AGENTS.md`, `CLAUDE.md`, `.gitignore`; ver el
+`AGENTS.md` raíz). Desde entonces no se reescribe: los hashes son estables.
 `trailers.calcular(documento, tipo, rutas, lector_antes, lector_despues)` sobre
 dos árboles (`lector_git(repo, rev)`) y `trailers.formatear` dan el mensaje de
 cualquier commit.
