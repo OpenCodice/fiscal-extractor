@@ -58,18 +58,24 @@ ARTICULO_RE = re.compile(
 
 # Las leyes estatales (ver estatal.py) admiten además lo que sus PDF escriben y
 # los de la Cámara no: el rótulo en plural ('ARTÍCULOS 50.-', 'Artículos 175.'),
-# el punto pegado al texto ('Artículo 127.Se deroga.', 'Artículo 36.A través'),
-# dos puntos ('Artículo 276 Quater: Comete'), el guion separado ('ARTÍCULO 29
-# BIS. - ') y el numeral tras punto ('Artículo 176-Bis. 3.'). Es otra regex
-# para no cambiar la lectura de las leyes federales.
+# abreviado ('Art. 229.'), el punto pegado al texto ('Artículo 127.Se deroga.',
+# 'Artículo 36.A través'), dos puntos ('Artículo 276 Quater: Comete'), el guion
+# separado ('ARTÍCULO 29 BIS. - ') o antes del punto ('Artículo 137-.'), la
+# letra sin guion ('Artículo 132G.'), el numeral tras punto o pegado al ordinal
+# ('Artículo 176-Bis. 3.', 'Artículo 176-Ter2.'), los ordinales latinos más
+# allá de Quinquies y sus erratas ('323 Sextus', '135 Quitus', '356 CUARTER').
+# Es otra regex para no cambiar la lectura de las leyes federales. El paréntesis
+# que sigue al rótulo ('Artículo 58 (Derogado)') es del texto.
+ORDINALES_ESTATAL = (ORDINALES + "|Quitus|Quintos|Sextus|Sexties|S[ée]ptimus|Octavus|"
+                     "Undecies|Duodecies|Cuarter")
 ARTICULO_ESTATAL_RE = re.compile(
-    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
+    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art(?=\.\s*\d)|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
-    r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-]))([A-Z])(?![A-Za-z]))?"  # letra "-A" PEGADA o " A." (118 A.)
+    r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-])|(?<=\d)(?=[A-Z]\.))([A-Z])(?![A-Za-z]))?"  # letra "-A", " A." (118 A.) o "132G."
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
-    rf"(?:[\s.\-]+(?i:({ORDINALES}))"               # ordinal
-    r"(?:(?:[\s\-]+|\.\s?)(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1", "Bis. 3") y letra ("Bis 35 A.-")
-    r"(?:\s*\.?\s?-?(?:\s|$|\()|\.-(?=\S)"         # separador final ("29 BIS. - ", o ".-" pegado)
+    rf"(?:[\s.\-]+(?i:({ORDINALES_ESTATAL}))"         # ordinal
+    r"(?:(?:[\s\-]+|\.\s?|(?=\d))(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1", "Bis. 3", "Ter2") y letra ("Bis 35 A.-")
+    r"(?:\s*\.?\s?-?\.?(?:\s|$|(?=\())|\.-(?=\S)"   # separador final ("29 BIS. - ", "137-.", o ".-" pegado)
     r"|\.(?=[A-ZÁÉÍÓÚÑ](?:[a-záéíóúñ]|\s))"            # o el punto pegado: "127.Se deroga.", "36.A través"
     r"|:(?=\s))"                                     # o dos puntos: "Artículo 276 Quater: Comete"
 )
@@ -447,6 +453,142 @@ def texto_limpio(pdf_path: str, doc: Documento) -> str:
     return limpiar_paginas(paginas, doc, formulas=True)
 
 
+# Cortes de párrafo por la geometría del PDF (leyes estatales). En texto plano
+# un renglón justificado que termina en punto ('…a juicio de la autoridad
+# judicial;' / 'si la reincidencia fuere…') no se distingue del final de un
+# párrafo, ni el final de un párrafo sin punto ('…la normatividad
+# correspondiente' / 'El o la titular…') de un renglón que sigue. En el PDF sí:
+# entre párrafos hay más espacio que entre renglones, y un renglón que no es el
+# último de su párrafo no deja sitio para la primera palabra del siguiente
+# (justificado llega al margen; sin justificar, se queda antes, pero sin sitio).
+_MIN_RENGLONES_MARGEN = 5
+_INTERLINEADO_NORMAL = 1.3     # × el interlineado: renglones del mismo párrafo
+_INTERLINEADO_PARRAFO = 1.5    # × el interlineado: espacio entre párrafos
+# Un renglón que acabó con sitio de sobra y sin más espacio que el normal cierra
+# su párrafo solo si cierra también la oración o el inciso ('…; y', '…; o') y
+# el siguiente no sigue en minúscula: si no, es un salto forzado a media oración
+# ('…a través de la Dirección' / 'General del Registro Civil.') y se decide
+# como siempre, por el texto.
+_CIERRA_RE = re.compile(r"(?:[.:;)]|[;,]\s+[yoeu])$")
+_ABRE_PARRAFO_RE = re.compile(r"^(?:[^a-záéíóúüñ]|[a-zñ]{1,4}[.)]\s)")   # o un inciso: 'd. ', 'ii) '
+
+
+def _renglones_con_geometria(pdf) -> list[list[dict]]:
+    """Por página, sus renglones con texto y posición, en el mismo orden y con
+    el mismo texto que `extract_text`. Una página donde no coinciden queda sin
+    renglones (sin geometría: su corte lo decide el texto, como siempre)."""
+    paginas, margenes = [], []
+    for page in pdf.pages:
+        lineas = page.extract_text_lines()
+        texto = page.extract_text() or ""
+        if [ln["text"] for ln in lineas] != texto.split("\n"):
+            lineas = []
+        # El margen derecho es donde acaban los renglones justificados: el
+        # final más común de la página, o del documento si la página tiene pocos.
+        margenes.append(Counter(round(ln["x1"]) for ln in lineas if ln["x1"] > page.width * 0.6))
+        paginas.append([{"texto": unicodedata.normalize("NFC", ln["text"]).strip(),
+                         "top": ln["top"], "x1": ln["x1"],
+                         "palabra": _ancho_primera_palabra(ln["chars"])} for ln in lineas])
+    total = sum(margenes, Counter())
+    general = total.most_common(1)[0][0] if total else None
+    for renglones, m in zip(paginas, margenes):
+        (propio, veces), = m.most_common(1) or [(None, 0)]
+        for r in renglones:
+            r["margen"] = propio if veces >= _MIN_RENGLONES_MARGEN else general
+    return paginas
+
+
+def _ancho_primera_palabra(chars: list[dict]) -> float | None:
+    """Lo que ocuparía la primera palabra del renglón al final del anterior,
+    con el espacio que la separa (un cuarto del cuerpo de la letra)."""
+    visibles = [c for c in chars if c["text"].strip()]
+    if not visibles:
+        return None
+    fin = visibles[0]
+    for c in visibles[1:]:
+        if c["x0"] - fin["x1"] > 1.0 or c["top"] > fin["bottom"]:
+            break
+        fin = c
+    return fin["x1"] - visibles[0]["x0"] + 0.25 * visibles[0]["size"]
+
+
+def _sin_sitio(a: dict, b: dict) -> bool | None:
+    """¿El renglón `a` acabó porque la primera palabra de `b` no cabía?"""
+    if a["margen"] is None or b["palabra"] is None:
+        return None
+    return a["margen"] - a["x1"] < b["palabra"]
+
+
+def _interlineado(paginas: list[list[dict]]) -> float | None:
+    """El paso más común entre renglones seguidos de una página."""
+    pasos = Counter(round(b["top"] - a["top"]) for p in paginas for a, b in zip(p, p[1:])
+                    if b["top"] > a["top"])
+    return float(pasos.most_common(1)[0][0]) if pasos else None
+
+
+def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str, str], bool]:
+    """(renglón, renglón siguiente) del texto limpio → True si el PDF abre ahí
+    un párrafo, False si el primero sigue en el segundo. Solo los pares que la
+    geometría decide; un par que aparece dos veces con decisiones distintas se
+    descarta. Cada renglón del texto se busca, en orden, entre los renglones de
+    las páginas (los encabezados y pies quitados no tienen pareja)."""
+    paso = _interlineado(paginas)
+    if not paso:
+        return {}
+    crudos = [(n, k, r) for n, p in enumerate(paginas) for k, r in enumerate(p)]
+    lineas = [ln.strip() for ln in texto.split("\n")]
+    ubicados: list[int | None] = []
+    j = 0
+    for s in lineas:
+        hallado = None
+        if s:
+            hallado = next((m for m in range(j, min(j + 8, len(crudos)))
+                            if crudos[m][2]["texto"] == s), None)
+        if hallado is not None:
+            j = hallado + 1
+        ubicados.append(hallado)
+
+    def decide(a: int, b: int) -> bool | None:
+        (pa, ka, ra), (pb, kb, rb) = crudos[a], crudos[b]
+        if pa == pb:
+            if kb != ka + 1:
+                return None
+            salto = rb["top"] - ra["top"]
+            if salto >= _INTERLINEADO_PARRAFO * paso:
+                return True
+            if salto <= 0 or salto > _INTERLINEADO_NORMAL * paso:
+                return None
+        elif pb != pa + 1:
+            return None
+        sin_sitio = _sin_sitio(ra, rb)
+        if sin_sitio is None:
+            return None
+        if sin_sitio:
+            return False
+        if _CIERRA_RE.search(ra["texto"]) and _ABRE_PARRAFO_RE.match(rb["texto"]):
+            return True
+        return None
+
+    cortes: dict[tuple[str, str], bool | None] = {}
+    for i in range(len(lineas) - 1):
+        a, b = ubicados[i], ubicados[i + 1]
+        if a is None or b is None:
+            continue
+        par = (lineas[i], lineas[i + 1])
+        d = decide(a, b)
+        cortes[par] = d if cortes.get(par, d) == d else None
+    return {par: d for par, d in cortes.items() if d is not None}
+
+
+def texto_y_cortes(pdf_path: str, doc: Documento) -> tuple[str, dict[tuple[str, str], bool]]:
+    """`texto_limpio` y, sobre ese mismo texto, sus `cortes_geometricos`."""
+    with pdfplumber.open(pdf_path) as pdf:
+        paginas = [page.extract_text() or "" for page in pdf.pages]
+        geometria = _renglones_con_geometria(pdf)
+    texto = limpiar_paginas(paginas, doc, formulas=True)
+    return texto, cortes_geometricos(geometria, texto)
+
+
 # Fórmulas matemáticas compuestas en el PDF con fuentes de símbolos: pdfplumber
 # las entrega como renglones de fragmentos sueltos ('i,t', '\uf03d', 'i,t\uf02d 1')
 # sin orden legible. No se pueden reconstruir, así que se sustituyen por una marca
@@ -653,11 +795,21 @@ def es_rotulo_corto(s: str, maximo: int = EPIGRAFE_MAX_ESTATAL) -> bool:
 
 
 def parse(pdf_path: str, doc: Documento) -> list[Unidad]:
-    """Parsea el PDF de una ley/código/reglamento y devuelve sus unidades."""
-    return parse_texto(texto_limpio(pdf_path, doc), huecos=doc.huecos, estatal=bool(doc.medio),
-                       epigrafe_max=EPIGRAFE_MAX_ESTATAL if doc.medio else None,
-                       notas=re.compile(doc.notas) if doc.notas else None,
-                       notas_previas=re.compile(doc.notas_previas) if doc.notas_previas else None)
+    """Parsea el PDF de una ley/código/reglamento y devuelve sus unidades. En
+    una ley estatal, cada unidad lleva los cortes de párrafo que dice la
+    geometría del PDF (los usa `normalize_body`)."""
+    cortes = None
+    if doc.medio:
+        texto, cortes = texto_y_cortes(pdf_path, doc)
+    else:
+        texto = texto_limpio(pdf_path, doc)
+    unidades = parse_texto(texto, huecos=doc.huecos, estatal=bool(doc.medio),
+                           epigrafe_max=EPIGRAFE_MAX_ESTATAL if doc.medio else None,
+                           notas=re.compile(doc.notas) if doc.notas else None,
+                           notas_previas=re.compile(doc.notas_previas) if doc.notas_previas else None)
+    for u in unidades:
+        u.cortes = cortes
+    return unidades
 
 
 NIVELES = ("titulo", "capitulo", "seccion", "epigrafe")
@@ -915,6 +1067,8 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
         return False
 
     def nivel_de(s: str) -> str | None:
+        if estatal and re.fullmatch(r"(?:T[íi]tulo|Cap[íi]tulo|Secci[óo]n|Libro)\s.*[^.]\.", s):
+            s = s[:-1]                  # 'Título Séptimo Bis.' (Código Electoral de Jalisco)
         if (TITULO_RE.match(s) or LIBRO_RE.match(s) or PARTE_RE.match(s)) and (
                 actual is None or len(s) < 35):
             return "titulo"

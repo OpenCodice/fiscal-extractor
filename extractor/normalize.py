@@ -25,6 +25,9 @@ REFORM_NOTE_START_RE = re.compile(
 )
 NOTE_COMPLETE_RE = re.compile(r"\d{2}-\d{2}-\d{4}[.)]?$")
 MAX_NOTE_CONT_LINES = 4
+# Las notas estatales cierran con su paréntesis; las del editor ('(las porciones
+# normativas resaltadas fueron reformadas mediante Decreto…)') ocupan más renglones.
+MAX_NOTA_ESTATAL_LINES = 8
 
 # Nota de reforma de las compilaciones de la normateca del SAT (RISAT):
 # "(DOF 21 de diciembre de 2021)" en línea propia, siempre completa.
@@ -49,7 +52,8 @@ def _note_is_complete(note: str) -> bool:
 
 
 def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = None,
-                   rotulo: re.Pattern = ARTICULO_RE) -> str:
+                   rotulo: re.Pattern = ARTICULO_RE,
+                   cortes: dict[tuple[str, str], bool] | None = None) -> str:
     """Devuelve el cuerpo de la unidad como párrafos, sin la línea de encabezado.
 
     Las notas de reforma quedan en *cursiva* como anotación al pie de su bloque.
@@ -58,8 +62,16 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
     párrafo que les sigue: cada una es su propio párrafo, hasta el paréntesis
     que la cierra. `rotulo` reconoce el encabezado del artículo en el primer
     renglón (el de las leyes estatales admite más formas).
+
+    `cortes` (leyes estatales) dice, para un par de renglones seguidos, si el
+    PDF abre ahí un párrafo (True) o el primero sigue en el segundo (False),
+    por su geometría; manda sobre el punto final. Un renglón que sigue y abre
+    con marcador ('406. Para tal efecto…') solo se une si el anterior no cerró
+    con puntuación: un inciso que cierra justo en el margen no se une al
+    siguiente.
     """
     lines = [ln.rstrip() for ln in body.splitlines()]
+    originales = [ln.strip() for ln in lines]
 
     # Quitar el encabezado "Artículo N ...": el texto que le sigue en el mismo
     # renglón se conserva.
@@ -70,6 +82,7 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
 
     blocks: list[str] = []
     buf: list[str] = []
+    anterior = ""            # renglón original (con rótulo) del último en `buf`
 
     def flush_buf() -> None:
         if buf:
@@ -89,7 +102,7 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             # Sigue en el renglón siguiente si no cerró su paréntesis o, la nota
             # del editor ('N. DE E. EN RELACIÓN CON …'), si no cerró la oración.
             note, j = s, i + 1
-            while (j < n and (j - i) <= MAX_NOTE_CONT_LINES and lines[j].strip()
+            while (j < n and (j - i) <= MAX_NOTA_ESTATAL_LINES and lines[j].strip()
                    and (note.count("(") > note.count(")")
                         or (note.startswith("N. DE E.") and not note.endswith(".")))):
                 note = f"{note} {lines[j].strip()}"
@@ -119,14 +132,21 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             blocks.append(f"_{note}_")
             i = j
             continue
+        corte = cortes.get((anterior, originales[i])) if cortes and buf else None
         if _is_struct_marker(s):
+            sigue = corte is False and not SENTENCE_END_RE.search(buf[-1])
+        else:
+            sigue = corte is False or (corte is None and not (buf and SENTENCE_END_RE.search(buf[-1])))
+        if not sigue:
             flush_buf()
-            buf.append(s)
+        elif corte is False and re.search(r"\w-$", buf[-1]):
+            # 'DIF-' / 'CDMX.': el guion de una palabra compuesta no lleva espacio.
+            buf[-1] += s
+            anterior = originales[i]
             i += 1
             continue
-        if buf and SENTENCE_END_RE.search(buf[-1]):
-            flush_buf()
         buf.append(s)
+        anterior = originales[i]
         i += 1
 
     flush_buf()

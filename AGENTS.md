@@ -283,9 +283,14 @@ pasar la revisión completa a una ley ya publicada, como si fuera un alta: con
 hallazgos conserva su versión y queda `revision_pendiente` con el motivo. Así
 se revisaron las seis leyes de la CDMX que la primera corrida publicó sin
 revisión (un cierre de revisión que falló contaba como "sin hallazgos"; ya no).
-Lo que la revisión suele encontrar en los PDF estatales y el texto plano no
-resuelve: cortes de párrafo que dependen del ancho del renglón (un renglón
-justificado que termina en punto sin cerrar el párrafo).
+Los cortes de párrafo de una ley estatal salen de la geometría del PDF, no
+solo del texto plano (`articulado.cortes_geometricos`): entre párrafos hay más
+espacio que entre renglones, y un renglón que no es el último de su párrafo no
+deja sitio para la primera palabra del siguiente. Así, un renglón justificado
+que termina en punto sigue en el siguiente, y un párrafo que cierra sin punto
+se separa. Lo que la geometría no decide (un salto forzado a media oración, una
+página donde `extract_text_lines` no coincide con `extract_text`) se decide por
+el texto, como en las leyes federales, que no usan geometría.
 
 Agregar una ley: una entrada `ley(...)` en el módulo de su estado (o el módulo
 nuevo, con su `MEDIO`), `build` + `auditar` en cero problemas sobre su PDF, y la

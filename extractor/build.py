@@ -37,7 +37,8 @@ def render_markdown(u: Unidad, doc: Documento | None = None) -> str:
     notas = re.compile(doc.notas) if doc is not None and doc.notas else None
     estatal = doc is not None and bool(doc.medio)
     body = normalize_body(u.cuerpo, u.etiqueta, notas,
-                          rotulo=_articulado.ARTICULO_ESTATAL_RE if estatal else _articulado.ARTICULO_RE)
+                          rotulo=_articulado.ARTICULO_ESTATAL_RE if estatal else _articulado.ARTICULO_RE,
+                          cortes=u.cortes if estatal else None)
     return f"# {u.etiqueta}\n\n{body}\n"
 
 

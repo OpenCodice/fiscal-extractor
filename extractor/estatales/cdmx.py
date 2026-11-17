@@ -27,6 +27,9 @@ NOTAS = (NOTAS_PREVIAS + rf"|^\((?=[^)]*{_MEDIO})[^)]*?(?i:{_VERBO}|F\.\s?DE\s?E
          r"|^(?i:P[áa]rrafos?|Fracci[óo]n(?:es)?|Art[íi]culos?|Incisos?|"
          r"Cap[íi]tulos?|Denominaci[óo]n|Transitorios?|T[íi]tulos?|Secci[óo]n(?:es)?|"
          rf"Numerales?|Apartados?)\s+(?i:{_VERBO}[oa]s?)\b[^\n]*?{_MEDIO}"
+         # Fe de erratas y erratas señaladas, sin verbo: 'Fe de Erratas G.O. CDMX
+         # 13/11/2023', 'Sic. G.O. CDMX 07/06/2017'.
+         rf"|^(?i:Fe\s+de\s+erratas)\b[^\n]*?{_MEDIO}|^Sic\.\s*{_MEDIO}"
          # Notas del editor: 'N. DE E. EN RELACIÓN CON LA ENTRADA EN VIGOR …'.
          r"|^N\.\s?DE\s?E\.")
 

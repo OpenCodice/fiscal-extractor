@@ -61,6 +61,10 @@ class Unidad:
     cuerpo: str = ""                 # texto completo de la unidad
     fechas_reforma: list[date] = field(default_factory=list)
     derogado: bool = False
+    # Leyes estatales: dónde corta párrafo el PDF entre dos renglones seguidos,
+    # según su geometría (ver `articulado.cortes_geometricos`). Lo comparten
+    # todas las unidades del documento; no es parte del texto.
+    cortes: dict[tuple[str, str], bool] | None = field(default=None, repr=False, compare=False)
 
     @property
     def contexto(self) -> str:

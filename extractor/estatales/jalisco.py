@@ -9,6 +9,10 @@ ADICIONES, de donde sale la versión (ver `articulado.fecha_version`).
 from . import ley
 
 MEDIO = "Periódico Oficial del Estado de Jalisco"
+# Notas del editor sobre porciones invalidadas o reformadas, entre paréntesis
+# tras el párrafo que anotan: '(La porción normativa resaltada fue declarada
+# Inconstitucional…)', '(las porciones normativas resaltadas fueron reformadas…)'.
+NOTAS = r"^\((?i:la\s+porci[óo]n\s+normativa|las\s+porciones\s+normativas)\b"
 INDICE = ("https://congresoweb.congresojal.gob.mx/bibliotecavirtual/busquedasleyes/"
           "Listado'2.cfm")
 
@@ -16,7 +20,7 @@ INDICE = ("https://congresoweb.congresojal.gob.mx/bibliotecavirtual/busquedasley
 def _jal(nombre: str, sigla: str, carpeta: str) -> object:
     # La carpeta y el nombre van tal cual en el enlace (con acentos y espacios);
     # a veces con un espacio antes del guion de la fecha.
-    return ley("jalisco", nombre, sigla, medio=MEDIO, indice=INDICE, orden="ddmmaa",
+    return ley("jalisco", nombre, sigla, medio=MEDIO, indice=INDICE, orden="ddmmaa", notas=NOTAS,
                patron=(rf"/Documentos_PDF-{carpeta}/{nombre}\s?-\d{{6}}\.pdf$"))
 
 
