@@ -129,9 +129,8 @@ Extractor: OpenCodice/fiscal-extractor@b897ca4
   reforma con `Separacion: no-disponible`. `alta` / `retiro` cuando el
   documento aparece o desaparece. Una corrección que no cambia el texto de
   ninguna unidad (solo metadata) es `metadatos`, con título `Metadatos de
-  <SIGLA>: <archivos>`; los `correccion` sin artículos ya publicados no se
-  reescriben y el validador los sigue aceptando (en commits nuevos los
-  rechaza).
+  <SIGLA>: <archivos>`; una `correccion` sin artículos la rechaza el
+  validador.
 - De dónde sale la causa: en fiscal, `metadata/documentos.json` guarda por
   documento `pdf_sha256` y `extractor_sha` de su versión publicada (`build` no
   los escribe; `commits_por_documento.py --conservar-indice` los trae de HEAD) y
@@ -146,10 +145,14 @@ Extractor: OpenCodice/fiscal-extractor@b897ca4
   `-Derogados` (reforma; derogado = el cuerpo pasa a "Se deroga"/"Derogado" o el
   archivo desaparece) y `Articulos-Corregidos` (corrección).
 
-Para el historial existente, `trailers.calcular(documento, tipo, rutas,
-lector_antes, lector_despues)` sobre dos árboles (`lector_git(repo, rev)`),
-`trailers.tipo_historico(...)` y `trailers.formatear` dan el mensaje sin
-Fuente ni Extractor.
+El historial de los dos repos se reescribió por última vez el 2026-11-17: cada
+documento empieza en su alta y sigue solo con sus reformas reales, con todos
+los trailers (también Fuente, Fuente-Sha256 y Extractor), y
+`metadata/documentos.json` guarda ya `pdf_sha256` y `extractor_sha` de cada
+documento. Desde entonces no se reescribe: los hashes son estables.
+`trailers.calcular(documento, tipo, rutas, lector_antes, lector_despues)` sobre
+dos árboles (`lector_git(repo, rev)`) y `trailers.formatear` dan el mensaje de
+cualquier commit.
 
 ## Al cambiar un parser
 
