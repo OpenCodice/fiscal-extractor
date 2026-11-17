@@ -137,6 +137,12 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             sigue = corte is False and not SENTENCE_END_RE.search(buf[-1])
         else:
             sigue = corte is False or (corte is None and not (buf and SENTENCE_END_RE.search(buf[-1])))
+            # Ley estatal: un ';' a media oración ('…a su testamento;' / 'si no
+            # supiere…') que la geometría no decide sigue en el renglón que abre
+            # en minúscula sin ser inciso.
+            if (not sigue and cortes and corte is None and buf and buf[-1].endswith(";")
+                    and re.match(r"[a-záéíóúüñ]{2,}\s", s) and not re.match(r"[a-zñ]{1,4}[.)]\s", s)):
+                sigue = True
         if not sigue:
             flush_buf()
         elif corte is False and re.search(r"\w-$", buf[-1]):

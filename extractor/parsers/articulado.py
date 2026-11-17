@@ -476,6 +476,11 @@ def _notas_aparte(paginas: list[str], nota: re.Pattern) -> list[str]:
             # Una fecha partida en su guion ('1-' / 'IX-17') se une sin espacio.
             partes.append(re.sub(r"\s*\n\s*", " ", re.sub(r"(?<=\d-)\s*\n\s*|\s*\n\s*(?=-)", "", m.group(0))))
             previo = m.end()
+            # Un dígito suelto pegado a la nota y al fin de renglón ('…19-VIII-24)9')
+            # es una marca del PDF, no texto.
+            pegado = re.match(r"\d{1,2}(?=\n|$)", texto[previo:])
+            if pegado:
+                previo += pegado.end()
             if previo < len(texto) and texto[previo] != "\n":
                 partes.append("\n")
                 previo += len(texto[previo:]) - len(texto[previo:].lstrip(" \t"))
@@ -511,6 +516,7 @@ _INTERLINEADO_PARRAFO = 1.5    # × el interlineado: espacio entre párrafos
 # como siempre, por el texto.
 _CIERRA_RE = re.compile(r"(?:[.:;)]|[;,]\s+[yoeu])$")
 _ACABA_EN_PARTICULA_RE = re.compile(r"\b(?:de|del|la|las|el|los|lo|al|en|con|por|para|un|una|su|sus|que)$")
+_FRACCION_ROMANA_RE = re.compile(r"^[IVX]{1,5}\.\s+[A-ZÁÉÍÓÚÑ]")
 _INCISO_MAYUSCULA_RE = re.compile(r"^[A-Z]\)\s+\S")
 _ABRE_PARRAFO_RE = re.compile(r"^(?:[^a-záéíóúüñ]|[a-zñ]{1,4}[.)]\s)")   # o un inciso: 'd. ', 'ii) '
 
@@ -618,8 +624,10 @@ def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str,
                 # Un renglón que acaba en una palabra que no puede cerrar un
                 # párrafo ('…del Poder Ejecutivo del') sigue en el siguiente aunque
                 # el PDF deje entre ambos el espacio de un párrafo.
+                # (salvo si lo que sigue es una fracción: 'integrado por' / 'I. La…').
                 if (_ACABA_EN_PARTICULA_RE.search(ra["texto"])
-                        and not _CIERRA_RE.search(ra["texto"])):
+                        and not _CIERRA_RE.search(ra["texto"])
+                        and not _FRACCION_ROMANA_RE.match(rb["texto"])):
                     return False
                 return True
             if salto <= 0 or salto > _INTERLINEADO_NORMAL * paso:
