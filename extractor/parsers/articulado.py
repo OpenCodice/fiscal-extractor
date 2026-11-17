@@ -177,6 +177,8 @@ def _es_nombre_suelto(s: str, continuacion: bool = False, estatal: bool = False)
         return False
     if re.match(r"\[\s*Art[ií]culo\b", s):
         return False                      # '[Artículo 28 Bis. Suprimido]': texto, no nombre
+    if estatal and re.fullmatch(r"[A-Z]\)\s+[A-ZÁÉÍÓÚÑ]{2,}(?:\s+[A-ZÁÉÍÓÚÑ]+)*", s):
+        return s[-1:] not in ".;:"        # rótulo 'C) DEL SECRETARIO DE FINANZAS' (C, D, L, M no son fracción)
     if re.fullmatch(r"[IVXLCDM]+", s) or re.match(r"^(?:[IVXLCDM]+|[a-zñ])\s*[.)\-–]", s):
         return False                      # numeral solo, fracción 'II.-' o inciso 'a)'
     if estatal and re.match(rf"^[IVXLCDM]+\s+(?:{ORDINALES})\b", s, re.IGNORECASE):
@@ -499,6 +501,8 @@ def texto_limpio(pdf_path: str, doc: Documento) -> str:
 # (justificado llega al margen; sin justificar, se queda antes, pero sin sitio).
 _MIN_RENGLONES_MARGEN = 5
 _INTERLINEADO_NORMAL = 1.3     # × el interlineado: renglones del mismo párrafo
+_MIN_FRECUENCIA_INTERLINEADO = 0.25   # del paso más común, para contar como interlineado
+_MIN_PARTE_RENGLON = 12        # caracteres de una parte de renglón para ubicarla
 _INTERLINEADO_PARRAFO = 1.5    # × el interlineado: espacio entre párrafos
 # Un renglón que acabó con sitio de sobra y sin más espacio que el normal cierra
 # su párrafo solo si cierra también la oración o el inciso ('…; y', '…; o') y
@@ -506,6 +510,8 @@ _INTERLINEADO_PARRAFO = 1.5    # × el interlineado: espacio entre párrafos
 # ('…a través de la Dirección' / 'General del Registro Civil.') y se decide
 # como siempre, por el texto.
 _CIERRA_RE = re.compile(r"(?:[.:;)]|[;,]\s+[yoeu])$")
+_ACABA_EN_PARTICULA_RE = re.compile(r"\b(?:de|del|la|las|el|los|lo|al|en|con|por|para|un|una|su|sus|que)$")
+_INCISO_MAYUSCULA_RE = re.compile(r"^[A-Z]\)\s+\S")
 _ABRE_PARRAFO_RE = re.compile(r"^(?:[^a-záéíóúüñ]|[a-zñ]{1,4}[.)]\s)")   # o un inciso: 'd. ', 'ii) '
 
 
@@ -556,10 +562,16 @@ def _sin_sitio(a: dict, b: dict) -> bool | None:
 
 
 def _interlineado(paginas: list[list[dict]]) -> float | None:
-    """El paso más común entre renglones seguidos de una página."""
+    """El paso entre renglones del mismo párrafo: el menor paso frecuente entre
+    renglones seguidos. Si casi todo el texto son párrafos de un renglón, el paso
+    más común es el de párrafo a párrafo (el doble) y no el interlineado."""
     pasos = Counter(round(b["top"] - a["top"]) for p in paginas for a, b in zip(p, p[1:])
                     if b["top"] > a["top"])
-    return float(pasos.most_common(1)[0][0]) if pasos else None
+    if not pasos:
+        return None
+    mayor = pasos.most_common(1)[0][1]
+    return float(min(paso for paso, veces in pasos.items()
+                     if veces >= _MIN_FRECUENCIA_INTERLINEADO * mayor))
 
 
 def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str, str], bool]:
@@ -577,11 +589,23 @@ def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str,
     j = 0
     for s in lineas:
         hallado = None
-        if s:
-            hallado = next((m for m in range(j, min(j + 8, len(crudos)))
-                            if crudos[m][2]["texto"] == s), None)
+        sigue_en_renglon = False
+        # Una nota entre paréntesis se repite idéntica por todo el texto: ubicarla
+        # arrastraría la búsqueda hasta otra copia más adelante.
+        if s and not (s.startswith("(") and s.endswith(")")):
+            for m in range(j, min(j + 8, len(crudos))):
+                crudo = crudos[m][2]["texto"]
+                if crudo == s or (len(s) >= _MIN_PARTE_RENGLON and crudo.endswith(" " + s)):
+                    hallado = m
+                    break
+                # El texto limpio separa a veces del final del renglón su nota
+                # ('…desplazamiento;' / '(Adición P. O. No. 38, 11-V-18)'): la
+                # primera parte ubica el renglón, y la nota queda en el mismo.
+                if len(s) >= _MIN_PARTE_RENGLON and crudo.startswith(s + " "):
+                    hallado, sigue_en_renglon = m, True
+                    break
         if hallado is not None:
-            j = hallado + 1
+            j = hallado if sigue_en_renglon else hallado + 1
         ubicados.append(hallado)
 
     def decide(a: int, b: int) -> bool | None:
@@ -591,6 +615,12 @@ def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str,
                 return None
             salto = rb["top"] - ra["top"]
             if salto >= _INTERLINEADO_PARRAFO * paso:
+                # Un renglón que acaba en una palabra que no puede cerrar un
+                # párrafo ('…del Poder Ejecutivo del') sigue en el siguiente aunque
+                # el PDF deje entre ambos el espacio de un párrafo.
+                if (_ACABA_EN_PARTICULA_RE.search(ra["texto"])
+                        and not _CIERRA_RE.search(ra["texto"])):
+                    return False
                 return True
             if salto <= 0 or salto > _INTERLINEADO_NORMAL * paso:
                 return None
@@ -602,6 +632,10 @@ def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str,
         if sin_sitio:
             return False
         if _CIERRA_RE.search(ra["texto"]) and _ABRE_PARRAFO_RE.match(rb["texto"]):
+            return True
+        # Un inciso en mayúscula ('B) El Secretario…') tras un renglón que acabó
+        # con sitio de sobra abre su propio párrafo aunque el anterior no cierre.
+        if _INCISO_MAYUSCULA_RE.match(rb["texto"]):
             return True
         return None
 
@@ -1043,6 +1077,13 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
         # El PDF escribe a veces la 'I' por el 1 en el número ('ARTÍCULO 22I BIS').
         texto = re.sub(r"(?m)^((?:ART[ÍI]CULO|Art[íi]culo)\s+\d+)I(?=\s+(?i:bis|ter|qu[aá]ter)\b)",
                        r"\g<1>1", texto)
+    if estatal:
+        # Glifos sueltos que el PDF deja en un renglón ('|', '.') y el título de
+        # estructura que comparte renglón con el final del artículo ('…menor de
+        # edad. TÍTULO SEPTIMO'): no son texto del artículo.
+        texto = re.sub(r"(?m)^[ \t]*[|.][ \t]*\n", "", texto)
+        texto = re.sub(rf"(?m)^(.*\S[.;:])[ \t]+(T[ÍI]TULO\s+(?:{_ORDINAL_MAY}))[ \t]*$",
+                       r"\1\n\2", texto)
     lineas = texto.splitlines()
     ultima = _ultima_aparicion(lineas, ART) if huecos else {}
 
