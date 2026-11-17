@@ -37,7 +37,10 @@ fi
 
 regenerar() {
   git -C "$OUT" checkout -q -- . && git -C "$OUT" clean -fdq
-  python -m extractor build --pdf-dir "$PDF_DIR" --out "$OUT" > /dev/null
+  rm -f "$TRABAJO/regenerar-fallo"
+  # Un build que falla deja el repo a medias: no se publica (ver publicar).
+  python -m extractor build --pdf-dir "$PDF_DIR" --out "$OUT" > /dev/null \
+    || { echo "::error::No se pudo regenerar el repo de datos."; touch "$TRABAJO/regenerar-fallo"; }
 }
 
 estado_arreglo() {
@@ -122,7 +125,9 @@ PY
   cat "$TRABAJO/impacto-arreglo.log"
   case "$rc" in
     0) estado_arreglo listo ;;
-    1) estado_arreglo impacto ;;
+    # 1 es "hay correcciones por verificar" solo si dejó qué verificar.
+    1) if [ -s "$IMPACTO/pendientes.json" ]; then estado_arreglo impacto
+       else descartar "la medición del impacto falló sin dejar qué verificar"; regenerar; fi ;;
     *) descartar "en el resto del corpus: $(grep '^✗' "$TRABAJO/impacto-arreglo.log" | head -3 | tr '\n' ' ')"
        regenerar ;;
   esac
@@ -168,8 +173,15 @@ retirar_altas() {
       motivo="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["motivo"])' "$rev/previa.json") (revisión anterior con el mismo PDF y extractor)"
     else
       motivo="$(python scripts/revision.py cerrar --repo "$RAIZ" --documento "$doc" \
-        --pdf "$PDF_DIR/$doc.pdf" --trabajo "$rev")" && motivo=""
+        --pdf "$PDF_DIR/$doc.pdf" --trabajo "$rev")"
+      rc=$?
       motivo="${motivo#✗ }"
+      # Solo el 0 es una revisión sin hallazgos; un cierre que falla no lo es.
+      if [ "$rc" = 0 ]; then
+        motivo=""
+      elif [ "$rc" != 2 ] || [ -z "$motivo" ]; then
+        motivo="no se pudo cerrar su revisión completa (código $rc)"
+      fi
     fi
     if [ -n "$motivo" ]; then
       echo "::warning::$doc no se publica: $motivo"
@@ -206,7 +218,8 @@ publicar() {
   if [ -s "$TRABAJO/cambiados.txt" ]; then fiel="$(campo fiel)"; else fiel=true; fi
 
   ok=false
-  if [ "$cobertura_ok" -eq 0 ] && [ "$fiel" = "true" ] && [ -z "$motivo_descarte" ]; then
+  if [ "$cobertura_ok" -eq 0 ] && [ "$fiel" = "true" ] && [ -z "$motivo_descarte" ] \
+      && [ ! -e "$TRABAJO/regenerar-fallo" ]; then
     ok=true
   fi
 

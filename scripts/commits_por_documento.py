@@ -257,6 +257,17 @@ def commits_documento(repo: str, doc: str, ctx: dict, *, extractor_repo: str,
         pdf = obtener_pdf(ctx, extractor_dir, trabajo / f"{doc}.pdf") if extractor_dir else None
         if anterior and pdf:
             datos = construir_con(extractor_dir, anterior, repo, doc, pdf, build, trabajo)
+        if datos is None and anterior:
+            # Se sabe que cambió el extractor pero no se pudo separar: publicar
+            # todo como reforma metería una corrección sin confirmar. Se
+            # conserva lo publicado y la vigilancia siguiente lo reintenta.
+            motivo = ("No se pudo reconstruir el PDF nuevo con el extractor de la versión "
+                      "publicada para separar la reforma de la corrección; se conserva el "
+                      "texto publicado.")
+            _restaurar_doc(repo, doc)
+            retener_en_indices(repo, doc, motivo, extractor_sha=None)
+            print(f"  · {doc}: no se publica; {motivo}")
+            return []
         if datos is None:
             decision = "sin-separacion"
         else:
@@ -321,7 +332,9 @@ def extractor_cambio(extractor_dir: str, anterior: str | None, actual: str) -> b
         return None
     r = subprocess.run(["git", "-C", extractor_dir, "diff", "--quiet", anterior, actual,
                         "--", "extractor/"], capture_output=True)
-    return {0: False, 1: True}.get(r.returncode)
+    # Un error de git (un commit que ya no existe) no dice que no cambió: se
+    # supone que sí, y la separación decide si se puede publicar.
+    return r.returncode != 0
 
 
 def contexto_fiscal(repo: str, pdf_dir: str, extractor_dir: str, docs: list[str]) -> dict:

@@ -229,7 +229,11 @@ def cerrar(repo, documento, pdf, trabajo, extractor_dir=EXTRACTOR,
             # que repara el extractor (scripts/agente/reparar.sh).
             detalle.append({"clave": str(h.get("clave", b["id"])) if isinstance(h, dict) else b["id"],
                             "nota": str(h.get("nota", "") if isinstance(h, dict) else h)[:600]})
-    if len(bls) > MAX_BLOQUES:
+    if not bls:
+        # Sin artículos que revisar (una ruta mal mapeada, un build fallido) no
+        # hay revisión, y no puede registrarse como fiel.
+        motivo = "La revisión completa no encontró artículos que revisar."
+    elif len(bls) > MAX_BLOQUES:
         motivo = (f"Demasiado extenso para la revisión completa automática "
                   f"({len(bls)} bloques; el tope es {MAX_BLOQUES}).")
     elif hallazgos:
@@ -242,7 +246,8 @@ def cerrar(repo, documento, pdf, trabajo, extractor_dir=EXTRACTOR,
     ok = not motivo
     sha = tr.sha256_bytes(Path(pdf).read_bytes())
     resultado = {"documento": documento, "pdf": sha, "extractor": huella_extractor(extractor_dir),
-                 "resultado": "fiel" if ok else ("incompleta" if faltan and not hallazgos else "hallazgos"),
+                 "resultado": "fiel" if ok else ("incompleta" if (faltan or not bls) and not hallazgos
+                                                 else "hallazgos"),
                  "motivo": motivo, "bloques": len(bls), "fecha": date.today().isoformat(),
                  **({"hallazgos": detalle[:300]} if detalle else {})}
     (t / "resultado.json").write_text(json.dumps(resultado, ensure_ascii=False, indent=1) + "\n",

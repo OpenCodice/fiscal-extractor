@@ -157,7 +157,7 @@ def test_cerrar_reforma_alta_y_exclusion(repo):
     (repo / "cpf" / "001.md").write_text("# Artículo 1o.\n\nMal.\n")
     plan = _plan(repo, [_d("lgs", "pdf"), _d("lft", "nuevo"), _d("cpf", "nuevo")])
     res = federal.cerrar(plan, str(repo), {
-        "lgs": R_OK, "lft": R_OK,
+        "lgs": R_OK, "lft": {**R_OK, "revisada": True},
         "cpf": {**R_OK, "problemas": {"cpf/001": [{"tipo": "no_literal"}]}}},
         reparacion={"reparados": ["lft"], "titulo": "arreglo"})
     assert res["reformas"] == [("lgs", "2026-01-15", ["4o"])]

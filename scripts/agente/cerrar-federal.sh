@@ -81,10 +81,7 @@ cargar = lambda n: json.load(open(f"{t}/{n}"))
 nuevo = cargar("nuevo.json")
 # La muestra es la primera alarma, barata; el impacto en todo lo publicado
 # viene después.
-try:
-    rotas = set(cargar("muestra-nuevo.json")["con_problemas"]) - set(cargar("muestra-base.json")["con_problemas"])
-except FileNotFoundError:
-    rotas = set()
+rotas = set(cargar("muestra-nuevo.json")["con_problemas"]) - set(cargar("muestra-base.json")["con_problemas"])
 fieles = [c for c, r in nuevo["resultados"].items()
           if not r.get("error") and not r.get("problemas") and not r.get("invariantes")]
 if rotas:
@@ -98,6 +95,9 @@ PY
   case "$veredicto" in
     ROMPE*) descartar "rompe la cobertura de: ${veredicto#ROMPE }"; return 0 ;;
     NADA*)  descartar "${veredicto#NADA }"; return 0 ;;
+    OK\ ?*) ;;
+    # Un veredicto que no salió (falta nuevo.json, la muestra falló) no es OK.
+    *)      descartar "no se pudo evaluar el arreglo (reevaluación o muestra fallida)"; return 0 ;;
   esac
   echo "${veredicto#OK }" > "$TRABAJO/arreglo-ok.txt"
   # El arreglo cambia el extractor de todo lo publicado: se reconstruye cada
@@ -110,7 +110,9 @@ PY
   cat "$TRABAJO/impacto-arreglo.log"
   case "$rc" in
     0) echo listo > "$TRABAJO/arreglo-estado.txt" ;;
-    1) echo impacto > "$TRABAJO/arreglo-estado.txt" ;;
+    # 1 es "hay correcciones por verificar" solo si dejó qué verificar.
+    1) if [ -s "$IMPACTO/pendientes.json" ]; then echo impacto > "$TRABAJO/arreglo-estado.txt"
+       else descartar "la medición del impacto falló sin dejar qué verificar"; fi ;;
     *) descartar "en el resto del corpus: $(grep '^✗' "$TRABAJO/impacto-arreglo.log" | head -3 | tr '\n' ' ')" ;;
   esac
 }

@@ -295,4 +295,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Una excepción saldría con 1, que aquí significa "hay correcciones por
+    # verificar": se confundiría con un resultado. Sale 3, que nadie acepta.
+    try:
+        sys.exit(main())
+    except Exception:                                # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        print("✗ impacto_corpus.py falló: no se pudo medir el impacto")
+        sys.exit(3)

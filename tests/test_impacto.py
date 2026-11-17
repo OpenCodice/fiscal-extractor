@@ -67,6 +67,10 @@ def test_cerrar_sin_veredicto_no_aprueba(tmp_path):
     ok, res = im.cerrar(tmp_path, EXT, tmp_path / "reg", "x")
     assert not ok and res["sin_veredicto"] == ["lgs:004"]
     assert im.cargar(tmp_path / "reg") == {}
+    # Sin la lista de pendientes no hay nada confirmado.
+    vacio = tmp_path / "vacio"
+    vacio.mkdir()
+    assert not im.cerrar(vacio, EXT, tmp_path / "reg", "y")[0]
 
 
 def _git(repo, *a):
@@ -178,3 +182,13 @@ def test_ya_confirmadas_en_el_arbol_de_trabajo(tmp_path):
                   "antes": im.huella(c.antes), "despues": im.huella(c.despues),
                   "veredicto": "mejora"}], reg, "x")
     assert im.main(args) == 0
+
+
+def test_el_veredicto_de_la_vigilancia_solo_aprueba_el_texto_que_vio(tmp_path):
+    v = tmp_path / "veredicto.json"
+    v.write_text(json.dumps({"fiel": True, "unidades": [{"clave": "004", "veredicto": "fiel"}]}))
+    c = _cambio("004")
+    assert len(im.aprobados_por_agente(v, [c], {PDF}, EXT, lambda d, k: c.despues)) == 1
+    # La corrección intermedia de una reforma separada deja otro texto: el
+    # agente no la vio y la juzga el agente de impacto.
+    assert im.aprobados_por_agente(v, [c], {PDF}, EXT, lambda d, k: "otro texto") == []

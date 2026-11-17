@@ -242,7 +242,10 @@ def test_cerrar_estatal_registra_lo_declarado_fuera(tmp_path):
                                 "documentos": [{**a_dict(ley), "motivo": "nuevo"}], "shards": []}))
     r = {"sha256": "s", "bytes": 1, "problemas": {}, "invariantes": [], "unidades": 1,
          "version": "2026-06-18", "url": "https://x/CC-240626.pdf"}
+    # Sin la marca de su revisión completa, un alta no se publica: se aplaza.
     res = federal.cerrar(str(plan), str(repo), {ley.clave: r})
+    assert res["altas"] == [] and res["aplazadas"] == [ley.clave]
+    res = federal.cerrar(str(plan), str(repo), {ley.clave: {**r, "revisada": True}})
     assert res["altas"] == [ley.clave]
     assert res["asunto"] == f"Alta de 1 ley estatal: {ley.sigla}"
     fuentes = {d["clave"]: d for d in json.loads((repo / "fuentes.json").read_text())["documentos"]}
@@ -311,14 +314,17 @@ def test_hallazgos_de_revision_persisten_hasta_otra_revision(tmp_path):
     _git(repo, "commit", "-qm", "inicio")
     r = {"sha256": "s", "bytes": 1, "problemas": {}, "invariantes": [], "unidades": 1}
 
-    def cerrar(revisar):
+    def cerrar(revisar, **extra):
         plan = tmp_path / "plan.json"
         plan.write_text(json.dumps({"corpus": "estatal", "huella": "h2", "revisar": revisar,
                                     "documentos": [{**a_dict(ley), "motivo": "extractor"}]}))
-        federal.cerrar(str(plan), str(repo), {ley.clave: r})
+        federal.cerrar(str(plan), str(repo), {ley.clave: {**r, **extra}})
         return json.loads((repo / "fuentes.json").read_text())["documentos"]
 
     e = next(d for d in cerrar([]) if d["clave"] == ley.clave)
     assert e["revision_pendiente"]["revisada"]          # las compuertas no la quitan
-    e = next(d for d in cerrar([ley.clave]) if d["clave"] == ley.clave)
+    # Ni una revisión pedida que quedó a medias (sin su marca positiva).
+    e = next(d for d in cerrar([ley.clave], aplazada=True) if d["clave"] == ley.clave)
+    assert e["revision_pendiente"]["revisada"]
+    e = next(d for d in cerrar([ley.clave], revisada=True) if d["clave"] == ley.clave)
     assert "revision_pendiente" not in e                 # una revisión sin hallazgos sí

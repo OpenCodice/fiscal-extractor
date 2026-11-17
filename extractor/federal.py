@@ -551,9 +551,11 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
             prev["pdf"] = huella_pdf
             continue
         publicada = prev is not None and prev.get("estado") == "incluida"
-        if r.get("aplazada") and not publicada:
-            # Su revisión completa no cupo en esta corrida: queda como si no
-            # se hubiera procesado y la siguiente la planea otra vez.
+        if not publicada and (r.get("aplazada") or (es_fiel(r) and not r.get("revisada"))):
+            # Su revisión completa no cupo en esta corrida (o no consta que se
+            # hiciera: un alta solo se publica con la marca positiva de
+            # revision-federal.sh): queda como si no se hubiera procesado y la
+            # siguiente la planea otra vez.
             _restaurar(out_p, clave)
             aplazadas.append(clave)
             continue
@@ -630,7 +632,8 @@ def cerrar(plan_path: str, out: str, resultados: dict, *, reparacion: dict | Non
                 and e["clave"] in resultados and es_fiel(resultados[e["clave"]]):
             # Los hallazgos de una revisión completa solo los quita otra revisión
             # completa sin hallazgos; pasar las compuertas deterministas no basta.
-            if (e.get("revision_pendiente") or {}).get("revisada") and e["clave"] not in revisadas:
+            if (e.get("revision_pendiente") or {}).get("revisada") and (
+                    e["clave"] not in revisadas or not resultados[e["clave"]].get("revisada")):
                 continue
             e.pop("revision_pendiente", None)
     fuentes["documentos"] = list(entradas.values())

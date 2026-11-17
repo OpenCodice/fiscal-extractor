@@ -216,6 +216,9 @@ jobs:
         id: correcciones
         if: steps.commits.outcome == 'success'
         run: |
+          # Huella del registro antes del agente juez: lo que cambie en él
+          # hasta `impacto.py cerrar` lo escribió el agente y no cuenta.
+          echo "registro=$(git -C /tmp/extractor status --porcelain -uall -- verificaciones | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
           python /tmp/extractor/scripts/impacto.py pendientes-commits "$GITHUB_WORKSPACE" \
             --base "${{ steps.commits.outputs.base }}" --trabajo /tmp/agente/impacto-vigilancia --pdf-dir /tmp/pdfs \
             --veredicto-agente /tmp/agente/veredicto.json \
@@ -236,6 +239,12 @@ jobs:
           EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
           EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
         run: |
+          # El registro solo lo escribe `impacto.py cerrar`: lo que haya
+          # cambiado en él durante el agente juez no puede contar como confirmado.
+          if [ "$(git -C /tmp/extractor status --porcelain -uall -- verificaciones | sha256sum | cut -c1-16)" != "${{ steps.correcciones.outputs.registro }}" ]; then
+            echo "::error::El registro de verificaciones cambió durante el agente juez; no se publica."
+            exit 1
+          fi
           if [ "${{ steps.correcciones.outputs.pendientes }}" = true ]; then
             python /tmp/extractor/scripts/impacto.py cerrar --trabajo /tmp/agente/impacto-vigilancia \
               --extractor "OpenCodice/fiscal-extractor@$(git -C /tmp/extractor rev-parse HEAD)" \
@@ -243,7 +252,10 @@ jobs:
           fi
           bash /tmp/extractor/scripts/agente/publicar_registro.sh "Correcciones verificadas del corpus fiscal"
           python /tmp/extractor/scripts/impacto.py exigir "$GITHUB_WORKSPACE" \
-            --base "${{ steps.commits.outputs.base }}" || true
+            --base "${{ steps.commits.outputs.base }}" && rc=0 || rc=$?
+          # 0: todo confirmado; 1: hay que rehacer los commits. Otra cosa (una
+          # excepción) no dice nada: no se publica.
+          [ "$rc" -le 1 ] || { echo "::error::No se pudo comprobar el registro de correcciones (código $rc)."; exit 1; }
 
       - name: Rehacer los commits sin las correcciones no confirmadas
         if: steps.exigir.outputs.rehacer == 'true'
@@ -254,11 +266,21 @@ jobs:
             --titulo-indice "Índice del corpus fiscal y README al día" \
             --verificadas /tmp/extractor/verificaciones/impacto
           [ -f /tmp/agente/impacto-vigilancia.md ] && cat /tmp/agente/impacto-vigilancia.md >> "$GITHUB_STEP_SUMMARY" || true
+          # Lo que quede sin confirmar después de rehacer no se publica.
+          python /tmp/extractor/scripts/impacto.py exigir "$GITHUB_WORKSPACE" --base "${{ steps.commits.outputs.base }}"
 
       - name: ¿Quedó algo que publicar?
         id: publicable
         if: steps.commits.outcome == 'success'
-        run: echo "si=$([ "$(git rev-list --count "${{ steps.commits.outputs.base }}..HEAD")" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        run: |
+          # create-pull-request también sube lo que quede sin commit, y eso no
+          # pasó por los commits verificados: se descarta.
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::warning::Quedaron cambios sin commit tras los commits verificados; se descartan."
+            git status --porcelain | head -20
+            git checkout -q -- . && git clean -fdq
+          fi
+          echo "si=$([ "$(git rev-list --count "${{ steps.commits.outputs.base }}..HEAD")" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: Abrir Pull Request
         id: pr

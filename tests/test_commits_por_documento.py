@@ -176,6 +176,21 @@ def test_sin_extractor_anterior_no_se_separa(entorno):
     assert tr.valor(t, "Separacion") == "no-disponible"
 
 
+def test_separacion_fallida_con_extractor_conocido_no_publica(entorno):
+    # Se sabe que cambió el extractor, pero el anterior no se puede reconstruir:
+    # todo como reforma metería una corrección sin confirmar. Se conserva.
+    e = entorno
+    _construir(e, e["v1"], "sep", "version|2026-01-01\n001|Una lectrua.\n")
+    (e["datos"] / "metadata" / "documentos.json").write_text(json.dumps({"documentos": [
+        {"clave": "sep", "version": "x", "pdf_sha256": "0" * 64, "extractor_sha": "f" * 40}]}))
+    _git(e["datos"], "add", "-A")
+    _git(e["datos"], "commit", "-qm", "publicado")
+    _construir(e, e["v2"], "sep", "version|2026-03-01\n001|Una lectrua reformado.\n")
+    commits = _correr(e)
+    assert not any(t.startswith(("Reforma SEP", "Corrección")) for t, _ in commits)
+    assert (e["datos"] / "sep" / "001.md").read_text() == _git(e["datos"], "show", "HEAD:sep/001.md")
+
+
 def test_validar_commits_rechaza_un_commit_sin_trailers(entorno):
     e = entorno
     _publicar(e, {"ref": (e["v1"], "version|2026-01-01\n001|Uno.\n")})

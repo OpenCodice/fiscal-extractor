@@ -28,16 +28,21 @@ export PYTHONPATH="$EXTRACTOR"
 
 # Altas fieles de esta corrida, en orden; se revisan ahora las primeras
 # REVISION_MAX_ALTAS mientras su texto no pase de REVISION_MAX_CARACTERES.
-python3 - "$TRABAJO" "${REVISION_MAX_ALTAS:-3}" "${REVISION_MAX_CARACTERES:-0}" "$OUT" "$PLAN" <<'PY'
+if python3 - "$TRABAJO" "${REVISION_MAX_ALTAS:-3}" "${REVISION_MAX_CARACTERES:-0}" "$OUT" "$PLAN" <<'PY'
 import json, pathlib, sys
 from extractor import federal
 from extractor.disposicion import dir_unidades
 t, maximo, tope, out = pathlib.Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
 plan = json.loads(pathlib.Path(sys.argv[5]).read_text(encoding="utf-8"))
-res = json.loads((t / "resultados.json").read_text(encoding="utf-8")) if (t / "resultados.json").exists() else {}
-# Las altas y lo publicado que el plan manda revisar (`revisar`).
+res = json.loads((t / "resultados.json").read_text(encoding="utf-8"))
+fuentes = pathlib.Path(out) / "fuentes.json"
+incluidas = {d["clave"] for d in json.loads(fuentes.read_text(encoding="utf-8"))["documentos"]
+             if d.get("estado") == "incluida"} if fuentes.exists() else set()
+# Las altas (todo lo que no está publicado, sea cual sea el motivo del plan) y
+# lo publicado que el plan manda revisar (`revisar`).
 altas = [c for c, r in sorted(res.items())
-         if (r.get("motivo") in ("nuevo", "reintento") or c in plan.get("revisar", []))
+         if (c not in incluidas or r.get("motivo") in ("nuevo", "reintento")
+             or c in plan.get("revisar", []))
          and not r.get("error_fuente") and not r.get("sin_cambio") and federal.es_fiel(r)]
 # De la más corta a la más larga: en una corrida caben más altas, y una ley
 # larga no detiene a las cortas que vienen detrás.
@@ -53,6 +58,11 @@ for c in altas:
 (t / "altas.txt").write_text("".join(f"{c}\n" for c in ahora), encoding="utf-8")
 (t / "altas-aplazadas.txt").write_text("".join(f"{c}\n" for c in altas[len(ahora):]), encoding="utf-8")
 PY
+then :; else
+  # Sin la lista de altas no se sabe qué revisar: nada se da por revisado.
+  echo "::error::No se pudo elegir las altas que se revisan." >&2
+  exit 1
+fi
 [ -s "$TRABAJO/altas.txt" ] || [ -s "$TRABAJO/altas-aplazadas.txt" ] || { echo "Sin altas que revisar."; exit 0; }
 RAIZ="$(git -C "$OUT" rev-parse --show-toplevel)"
 
@@ -101,7 +111,8 @@ cerrar() {
     [ -n "$doc" ] || continue
     REV="$TRABAJO/revision/$doc"
     if [ -s "$REV/previa.json" ]; then
-      motivo="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["motivo"])' "$REV/previa.json")"
+      motivo="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["motivo"])' "$REV/previa.json")" \
+        && [ -n "$motivo" ] || motivo="APLAZADA"
     else
       motivo="$(python scripts/revision.py cerrar --repo "$RAIZ" --documento "$doc" \
         --pdf "$PDF_DIR/$doc.pdf" --trabajo "$REV")"
@@ -120,7 +131,7 @@ cerrar() {
     fi
     printf '%s\t%s\n' "$doc" "$motivo"
   done < "$TRABAJO/altas.txt" > "$TRABAJO/revisiones.tsv"
-  python3 - "$TRABAJO" <<'PY'
+  if python3 - "$TRABAJO" <<'PY'
 import json, pathlib, sys
 t = pathlib.Path(sys.argv[1])
 res = json.loads((t / "resultados.json").read_text(encoding="utf-8"))
@@ -133,12 +144,18 @@ for linea in (t / "revisiones.tsv").read_text(encoding="utf-8").splitlines():
         res[clave]["revision"] = motivo
         print(f"✗ {clave}: {motivo}")
     else:
+        # La marca positiva: sin ella `federal cerrar` no publica un alta.
+        res[clave]["revisada"] = True
         print(f"✓ {clave}: revisión completa sin hallazgos")
 for clave in (t / "altas-aplazadas.txt").read_text(encoding="utf-8").split():
     res[clave]["aplazada"] = True
     print(f"… {clave}: su revisión completa queda para la siguiente corrida")
 (t / "resultados.json").write_text(json.dumps(res, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
+  then :; else
+    echo "::error::No se pudo anotar el resultado de la revisión de las altas." >&2
+    exit 1
+  fi
   bash scripts/agente/publicar_registro.sh "Revisión completa de las altas de ${REVISION_CORPUS:-leyes federales}"
 }
 

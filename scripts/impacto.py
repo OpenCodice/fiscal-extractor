@@ -269,7 +269,10 @@ def cerrar(trabajo: str | Path, extractor: str, registro_dir: str | Path = REGIS
     t = Path(trabajo)
     p = t / "pendientes.json"
     if not p.exists():
-        return True, {"mejora": 0, "rechazados": [], "sin_veredicto": []}
+        # Quien llama a cerrar espera algo que confirmar: sin la lista de
+        # pendientes no hay confirmación, y eso no puede contarse como mejora.
+        return False, {"mejora": 0, "rechazados": [],
+                       "sin_veredicto": ["(no hay pendientes.json: nada quedó juzgado)"]}
     pend = json.loads(p.read_text(encoding="utf-8"))
     por_grupo = veredictos(t)
     hoy = date.today().isoformat()
@@ -372,11 +375,13 @@ def _pdfs_de_fuente(repo: str, commits: list[tuple[str, str]], destino: Path) ->
 
 
 def aprobados_por_agente(veredicto: str | Path, cambios: list[Cambio], pdfs: set[str],
-                         extractor: str) -> list[dict]:
+                         extractor: str, final=None) -> list[dict]:
     """Entradas de registro para las correcciones que el agente de la
     vigilancia ya verificó: unidades que su veredicto declara `fiel` contra el
     mismo PDF del que sale el commit, con fidelidad global. Así no se paga dos
-    veces la misma revisión."""
+    veces la misma revisión. `final(documento, clave)` es el texto que el agente
+    vio (el del árbol publicado al final): una corrección que deja otro texto
+    (la intermedia de una reforma separada) no la vio, y no se aprueba aquí."""
     try:
         v = json.loads(Path(veredicto).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -390,6 +395,8 @@ def aprobados_por_agente(veredicto: str | Path, cambios: list[Cambio], pdfs: set
     for c in cambios:
         nota = fieles.get(f"{c.documento}/{c.clave}", fieles.get(c.clave))
         if nota is None or c.pdf not in pdfs or c.despues is None:
+            continue
+        if final is not None and final(c.documento, c.clave) != c.despues:
             continue
         llave = c.llave
         res.append({"documento": c.documento, "clave": c.clave, "pdf": c.pdf,
@@ -432,7 +439,13 @@ def cmd_pendientes_commits(a) -> int:
     if a.veredicto_agente and a.extractor:
         import uuid
         previos = cargar(a.registro)
-        nuevos = [e for e in aprobados_por_agente(a.veredicto_agente, cambios, set(pdfs), a.extractor)
+        cabeza = tr.lector_git(a.repo, "HEAD")
+
+        def final(documento: str, clave: str) -> str | None:
+            b = cabeza(f"{tr._dir_articulos(documento)}{clave}.md")
+            return b.decode("utf-8") if b is not None else None
+        nuevos = [e for e in aprobados_por_agente(a.veredicto_agente, cambios, set(pdfs), a.extractor,
+                                                  final)
                   if (e["documento"], e["clave"], e["pdf"], e["antes"], e["despues"]) not in previos]
         escribir(nuevos, a.registro, f"{date.today().isoformat()}-vigilancia-{uuid.uuid4().hex[:6]}")
         if nuevos:
