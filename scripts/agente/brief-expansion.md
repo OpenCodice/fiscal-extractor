@@ -63,6 +63,11 @@ sus opciones), los tres módulos que ya existen (`jalisco.py`, `cdmx.py`,
      `consulta=True`;
    - si el PDF tiene una ruta fija que no cambia con las reformas, `url=`.
    Comprueba que `url_vigente` resuelve exactamente el PDF que quieres.
+   Si ninguna de estas opciones sirve para encontrar o descargar el PDF
+   vigente (un índice que no casa con ninguna, una descarga que pide algo que
+   `fuentes.py` no hace), no lo rodees: es un hueco del extractor. Si deja
+   fuera a todas o casi todas las leyes, entrega `"resultado": "codigo"` (ver
+   «Entrega»): otro agente agrega la opción y la ronda vuelve a empezar.
    La clave sale sola del nombre oficial (`clave_de`); usa `clave=` solo si el
    nombre no lleva el ámbito del estado.
 4. Construye y audita cada ley en tu carpeta de trabajo (`__TRABAJO__`), nunca
@@ -83,7 +88,8 @@ sus opciones), los tres módulos que ya existen (`jalisco.py`, `cdmx.py`,
    en cero problemas y el texto sea fiel. Las notas de reforma de este estado
    (cómo cita su periódico oficial) casi siempre piden su propia expresión,
    como en Querétaro. Lo que no logres dejar limpio con esas opciones va a
-   `FUERA` con su motivo: no puedes cambiar el parser.
+   `FUERA` con su motivo: no puedes cambiar el parser (eso no es `codigo`: lo
+   arregla después la reparación autónoma).
 6. Escribe las pruebas y corre `EXPANSION_ESTADO=__ESTADO__ python -m pytest -q`: debe pasar entero.
 
 Termina antes de las __LIMITE__: a esa hora el paso se corta y tu trabajo se
@@ -115,14 +121,22 @@ Escribe `__VEREDICTO__` con esta forma, y nada más como salida final:
 
 ```json
 {
-  "resultado": "modulo | egress | sin-fuente",
+  "resultado": "modulo | egress | codigo | sin-fuente",
   "portal": "URL del portal oficial de leyes vigentes",
   "dominio": "con egress: el dominio que rechaza IP extranjeras",
   "motivo": "sin módulo: por qué, en una frase",
+  "falta": "con codigo: qué le falta al extractor para encontrar o descargar los PDF, con precisión (qué hace el sitio, qué no reconoce url_vigente o descargar, qué opción de ley() resolvería)",
+  "ejemplos": ["con codigo: 2 a 5 URL reales (página índice, href tal cual aparece, PDF) que muestran el caso"],
   "resumen": "dos o tres frases: de dónde salen los PDF, qué tiene de particular el formato, cuántas leyes quedaron en LEYES y cuántas en FUERA y por qué"
 }
 ```
 
 `modulo` si escribiste el módulo; `egress` si el sitio rechaza IP extranjeras y
-no tienes puerta hacia él; `sin-fuente` si el estado no publica sus leyes en
+no tienes puerta hacia él (un paso determinista comprueba que de verdad no
+responde desde aquí y, si el dominio es oficial —`.gob.mx`, o `.mx` del mismo
+dominio que la constitución del estado—, lo agrega al Worker y la ronda vuelve
+a empezar); `codigo` si el estado publica sus leyes en PDF con texto pero al
+extractor le falta una opción para encontrarlos o descargarlos (no del parser):
+deja tu borrador del módulo como lo escribirías con esa opción, sirve de
+ejemplo a quien la agregue; `sin-fuente` si el estado no publica sus leyes en
 PDF con texto en ninguna fuente oficial que encuentres.

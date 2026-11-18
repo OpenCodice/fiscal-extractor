@@ -55,11 +55,13 @@ def test_elegir_un_estado_pedido():
     assert lista["estados"][0]["situacion"] == "publicado"
 
 
-def test_permitidos_del_worker(tmp_path):
-    w = tmp_path / "worker.js"
-    w.write_text('const PERMITIDOS = new Set([\n  "a.gob.mx",\n  // nota\n  "b.gob.mx",\n]);\n')
+def test_permitidos_de_la_lista_de_egress(tmp_path):
+    w = tmp_path / "permitidos.json"
+    w.write_text(json.dumps({"_nota": "x", "dominios": ["a.gob.mx", "b.gob.mx", "no es dominio", 3]}))
     assert expansion.permitidos(str(w)) == {"a.gob.mx", "b.gob.mx"}
     assert expansion.permitidos(str(tmp_path / "no")) == set()
+    (tmp_path / "roto.json").write_text("{")
+    assert expansion.permitidos(str(tmp_path / "roto.json")) == set()
 
 
 def test_motivo_fuera():

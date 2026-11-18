@@ -8,18 +8,26 @@ La lista ordenada de estados por sumar y lo que pasó con cada uno vive en
 `extractor/estatales/pendientes.json` (no entra en la huella del extractor: no
 es un `*.py`). Situaciones: `pendiente`, `publicado`, `egress` (el sitio
 rechaza IP extranjeras y su dominio no está en el Worker egress-mx) y
-`agotado` (llegó al tope de intentos).
+`agotado` (llegó al tope de intentos; vuelve a la cola cuando cambia lo que
+el agente puede usar del extractor, o con el tiempo: ver `revive`).
 
 Subcomandos:
 
   listo     --out LEYES-ESTATALES   leyes declaradas sin alta todavía (y alcanzables)
-  elegir    [--estado E] [--permitidos worker.js]   el estado de esta ronda; cuenta el intento
+  elegir    [--estado E] [--permitidos permitidos.json]   el estado de esta ronda; cuenta el intento
   registro  --estado E --salida R   valida el módulo nuevo y escribe su registro (datos)
   descargar --registro R --pdfs D --resultado J   descarga sus PDF (sin importar código del agente)
   construir --registro R --pdfs D --descargas J --out O   build + auditar de cada ley
   fuera     --estado E --construccion C   pasa a FUERA las leyes que no quedaron limpias
-  anotar    --estado E --resultado publicado|egress|fallido [--motivo M] [--dominio H] …
+  anotar    --estado E --resultado publicado|egress|fallido|codigo|codigo-publicado|codigo-descartado …
   impacto-igual A B   el impacto en lo publicado es el mismo con y sin el módulo
+  egress-agregar --json permitidos.json --dominio H --estado E [--pista P]
+            agrega a la lista de egress-mx un dominio oficial (regla en `dominio_oficial`)
+  declaraciones --salida J [--indices H] [--fuentes F …] [--leer-de H]
+            la declaración y la URL vigente de todo el registro (compuerta de un
+            arreglo de código: con el extractor de partida, que descarga las
+            páginas índice, y con el arreglo, que las lee de H sin red)
+  declaraciones-iguales A B   el arreglo no cambia ninguna declaración ni URL
 """
 from __future__ import annotations
 
@@ -38,6 +46,15 @@ sys.path.insert(0, str(RAIZ))
 
 LISTA = RAIZ / "extractor" / "estatales" / "pendientes.json"
 MAX_LEYES = 30
+TOPE_CODIGO = 2           # arreglos de código por estado (y por vuelta a la cola)
+SEMANAS_HUELLA = 4        # un agotado vuelve si cambió la huella y pasó esto…
+SEMANAS_MAX = 12          # …o, sin cambios, tras esto
+# Lo que el agente de la ronda puede usar del extractor: si cambia, un estado
+# agotado puede tener otra salida. Los módulos de otros estados no cuentan
+# (cambian cada semana con la ronda misma).
+HUELLA_EXPANSION = ("parsers/*.py", "build.py", "modelo.py", "normalize.py", "verificar.py",
+                    "validate.py", "fuentes.py", "registro.py", "estatales/__init__.py",
+                    "estatal.py", "disposicion.py")
 
 
 def _salida_gh(**pares) -> None:
@@ -61,8 +78,20 @@ def modulo_de(estado: str) -> Path:
     return RAIZ / "extractor" / "estatales" / f"{estado.replace('-', '_')}.py"
 
 
+_HOST = re.compile(r"(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
+
+
 def _hoy() -> str:
     return datetime.date.today().isoformat()
+
+
+def huella_expansion(raiz: Path = RAIZ) -> str:
+    h = hashlib.sha256()
+    for patron in HUELLA_EXPANSION:
+        for p in sorted((raiz / "extractor").glob(patron)):
+            h.update(p.relative_to(raiz).as_posix().encode())
+            h.update(p.read_bytes())
+    return h.hexdigest()[:16]
 
 
 # ------------------------------------------------------------------ listo
@@ -100,23 +129,56 @@ def cmd_listo(a) -> int:
 # ------------------------------------------------------------------ elegir
 
 def permitidos(ruta: str | None) -> set[str]:
-    """Dominios del Worker egress-mx (`PERMITIDOS` en su worker.js)."""
+    """Dominios del Worker egress-mx: `dominios` de egress-mx/permitidos.json
+    (de main de constitucion-extractor, la lista que lee el Worker)."""
     if not ruta or not Path(ruta).exists():
         return set()
-    m = re.search(r"PERMITIDOS\s*=\s*new Set\(\[(.*?)\]\)", Path(ruta).read_text(encoding="utf-8"), re.S)
-    return set(re.findall(r'"([a-z0-9.-]+)"', m.group(1))) if m else set()
+    try:
+        datos = _leer(Path(ruta))
+    except ValueError:
+        return set()
+    return {d for d in datos.get("dominios", []) if isinstance(d, str) and _HOST.fullmatch(d)}
 
 
-def elegir(lista: dict, estado: str | None, dominios: set[str], hay_modulo) -> dict | None:
+def _semanas(desde: str | None, hoy: datetime.date) -> float:
+    try:
+        return (hoy - datetime.date.fromisoformat(desde or "")).days / 7
+    except ValueError:
+        return float("inf")
+
+
+def revive(e: dict, tope: int, huella: str | None, hoy: datetime.date) -> str | None:
+    """Si un estado `agotado` vuelve a la cola, por qué. Vuelve con un solo
+    intento más (y sus intentos de código de nuevo), así que uno sin salida
+    cuesta a lo más una sesión cada SEMANAS_HUELLA semanas si el extractor
+    cambia, o cada SEMANAS_MAX si no."""
+    a = e.get("agotado") or {}
+    semanas = _semanas(a.get("fecha") or e.get("ultimo_intento"), hoy)
+    if huella and a.get("huella") != huella and semanas >= SEMANAS_HUELLA:
+        return "cambió el extractor desde que se agotó"
+    if semanas >= SEMANAS_MAX:
+        return f"pasaron {SEMANAS_MAX} semanas desde que se agotó"
+    return None
+
+
+def elegir(lista: dict, estado: str | None, dominios: set[str], hay_modulo,
+           huella: str | None = None, hoy: datetime.date | None = None) -> dict | None:
     """El estado de esta ronda (o None). Un `egress` cuyo dominio ya está en el
-    Worker vuelve a `pendiente`; un estado con módulo ya está `publicado`."""
+    Worker vuelve a `pendiente`; un estado con módulo ya está `publicado`; un
+    `agotado` puede volver (ver `revive`). Primero los que nunca se agotaron."""
     tope = lista.get("tope_intentos", 3)
+    hoy = hoy or datetime.date.today()
     for e in lista["estados"]:
         if hay_modulo(e["estado"]) and e["situacion"] != "publicado":
             e["situacion"] = "publicado"
         if e["situacion"] == "egress" and e.get("dominio") in dominios:
             e["situacion"] = "pendiente"
+            e["intentos"] = min(e["intentos"], tope - 1)
             e["motivo"] = f"{e['dominio']} ya está en egress-mx: se reintenta"
+        if e["situacion"] == "agotado" and (por := revive(e, tope, huella, hoy)):
+            e.update(situacion="pendiente", intentos=tope - 1, intentos_codigo=0,
+                     revivido=e.get("revivido", 0) + 1, motivo=f"vuelve a la cola: {por}")
+            e.pop("agotado", None)
     if estado:
         e = next((x for x in lista["estados"] if x["estado"] == estado), None)
         if e is None:
@@ -126,14 +188,15 @@ def elegir(lista: dict, estado: str | None, dominios: set[str], hay_modulo) -> d
         if e["intentos"] >= tope:
             raise SystemExit(f"{estado} llegó al tope de {tope} intentos")
         return e
-    return next((x for x in lista["estados"]
-                 if x["situacion"] == "pendiente" and x["intentos"] < tope), None)
+    listos = [x for x in lista["estados"] if x["situacion"] == "pendiente" and x["intentos"] < tope]
+    return min(listos, key=lambda x: bool(x.get("revivido")), default=None)
 
 
 def cmd_elegir(a) -> int:
     lista = _leer(LISTA)
     dominios = permitidos(a.permitidos)
-    e = elegir(lista, a.estado or None, dominios, lambda s: modulo_de(s).exists())
+    e = elegir(lista, a.estado or None, dominios, lambda s: modulo_de(s).exists(),
+               huella_expansion())
     if e is None:
         _escribir(LISTA, lista)
         print("No queda ningún estado por intentar.")
@@ -320,21 +383,54 @@ def cmd_fuera(a) -> int:
 
 # ------------------------------------------------------------------ anotar
 
+def _agotar_o_seguir(e: dict, lista: dict, motivo: str) -> None:
+    if e["intentos"] >= lista.get("tope_intentos", 3):
+        e.update(situacion="agotado", agotado={"fecha": _hoy(), "huella": huella_expansion()})
+    else:
+        e["situacion"] = "pendiente"
+    e["motivo"] = motivo[:400]
+
+
 def cmd_anotar(a) -> int:
     lista = _leer(LISTA)
     e = next(x for x in lista["estados"] if x["estado"] == a.estado)
-    for k in ("motivo", "dominio", "leyes", "fuera_por_compuertas"):
-        e.pop(k, None)
+    if not a.resultado.startswith("codigo-"):
+        for k in ("motivo", "dominio", "leyes", "fuera_por_compuertas", "falta", "agotado"):
+            e.pop(k, None)
+    tope_codigo = lista.get("tope_codigo", TOPE_CODIGO)
     if a.resultado == "publicado":
         e.update(situacion="publicado", fecha=_hoy(), leyes=a.leyes,
                  **({"fuera_por_compuertas": a.fuera} if a.fuera else {}))
     elif a.resultado == "egress":
-        e.update(situacion="egress", dominio=a.dominio,
-                 motivo=f"necesita egress-mx: {a.dominio}" + (f" ({a.motivo})" if a.motivo else ""))
+        # No fue una falla del agente: el intento no cuenta. Con el dominio ya
+        # en la lista de egress-mx (`--agregado`), el estado vuelve a la cola.
+        e["intentos"] = max(0, e["intentos"] - 1)
+        e.update(situacion="pendiente" if a.agregado else "egress", dominio=a.dominio,
+                 motivo=(f"{a.dominio} agregado a egress-mx: se reintenta" if a.agregado
+                         else f"necesita egress-mx: {a.dominio}")
+                 + (f" ({a.motivo})" if a.motivo else ""))
+    elif a.resultado == "codigo":
+        # Le falta algo al extractor (no al parser): lo intenta el job `codigo`
+        # mientras queden intentos de código. El intento se cuenta aquí, antes
+        # de ese agente.
+        hay = e.get("intentos_codigo", 0) < tope_codigo
+        if hay:
+            e["intentos_codigo"] = e.get("intentos_codigo", 0) + 1
+            e["falta"] = " ".join(a.motivo.split())[:600]
+        _agotar_o_seguir(e, lista, f"necesita código en el extractor: {a.motivo}" if hay else
+                         f"necesita código en el extractor y se agotaron sus {tope_codigo} "
+                         f"intentos de código: {a.motivo}")
+        _salida_gh(codigo="true" if hay else "false")
+    elif a.resultado == "codigo-publicado":
+        # El extractor ya tiene lo que faltaba: el intento que lo pidió no
+        # cuenta y el estado se reintenta enseguida.
+        e["intentos"] = max(0, min(e["intentos"], lista.get("tope_intentos", 3)) - 1)
+        e.pop("agotado", None)
+        e.update(situacion="pendiente", motivo=f"el extractor ya tiene lo que faltaba ({a.motivo}): se reintenta"[:400])
+    elif a.resultado == "codigo-descartado":
+        e["motivo"] = (f"{e.get('motivo', '')}; arreglo de código descartado: {a.motivo}")[:400]
     else:
-        agotado = e["intentos"] >= lista.get("tope_intentos", 3)
-        e.update(situacion="agotado" if agotado else "pendiente",
-                 motivo=(a.motivo or "la ronda falló")[:400])
+        _agotar_o_seguir(e, lista, a.motivo or "la ronda falló")
     if a.corrida:
         e["corrida"] = a.corrida
     _escribir(LISTA, lista)
@@ -361,6 +457,139 @@ def cmd_impacto_igual(a) -> int:
     return 0 if iguales else 1
 
 
+# ------------------------------------------------------------------ egress-agregar
+
+# Segundos niveles de .mx que reparten dominios a cualquiera: ahí el dominio
+# registrable tiene tres etiquetas (congreso.com.mx), no dos.
+_SLD_MX = {"com", "org", "net", "edu", "gob"}
+
+
+def registrable(host: str) -> str:
+    partes = host.split(".")
+    n = 3 if len(partes) >= 3 and partes[-1] == "mx" and partes[-2] in _SLD_MX else 2
+    return ".".join(partes[-n:])
+
+
+def dominio_oficial(dominio: str, confiables: set[str]) -> str | None:
+    """Por qué `dominio` es plausiblemente oficial (o None). Regla estricta:
+    - termina en `.gob.mx`, que NIC México solo asigna a dependencias de
+      gobierno; o
+    - termina en `.mx` y su dominio registrable es el de un host que ya se
+      tiene por oficial: el de la constitución publicada del estado (su
+      pista) o uno de la lista de egress-mx.
+    Cualquier otro (un `.com`, un bucket, un `.mx` sin relación) no se agrega
+    solo: el intento cuenta como fallido."""
+    if not _HOST.fullmatch(dominio) or not dominio.endswith(".mx"):
+        return None
+    if dominio.endswith(".gob.mx"):
+        return "dominio .gob.mx"
+    base = registrable(dominio)
+    if base in {registrable(h) for h in confiables if h.endswith(".mx")}:
+        return f"mismo dominio que {base}, ya oficial"
+    return None
+
+
+def cmd_egress_agregar(a) -> int:
+    """Agrega `--dominio` a la lista de egress-mx si es oficial. Sale 0 si lo
+    agregó (o ya estaba), 3 si no es un dominio oficial reconocible."""
+    ruta = Path(a.json)
+    datos = _leer(ruta)
+    actuales = list(datos.get("dominios", []))
+    dominio = a.dominio.strip().lower().rstrip(".")
+    pista = {h.lower() for h in re.findall(r"https?://([^/\s:]+)", a.pista or "")}
+    por = dominio_oficial(dominio, set(actuales) | pista)
+    if por is None:
+        print(f"✗ {dominio}: no es un dominio oficial reconocible (.gob.mx, o .mx del mismo "
+              "dominio que la constitución del estado o que la lista de egress-mx)")
+        return 3
+    if dominio in actuales:
+        print(f"{dominio} ya está en egress-mx.")
+        return 0
+    datos["dominios"] = actuales + [dominio]
+    _escribir(ruta, datos)
+    print(f"✓ {dominio} agregado a egress-mx ({por}; {a.estado}).")
+    return 0
+
+
+# ------------------------------------------------------------------ declaraciones
+
+def _todas() -> list:
+    """Todo lo declarado en el código: el corpus fiscal, las leyes estatales y
+    sus FUERA."""
+    from extractor import registro
+    from extractor.estatales import documentos, fuera
+    return list(registro.DOCUMENTOS) + documentos() + [d for d, _ in fuera().values()]
+
+
+def cmd_declaraciones(a) -> int:
+    """La declaración (a_dict, sin campos vacíos) y la URL vigente de cada
+    documento del código y de los `--fuentes` (un fuentes.json: su registro
+    pasa por de_dict). Con `--indices` descarga cada página índice (el
+    extractor de partida, con la red y el token) y las guarda; con
+    `--leer-de` las lee de ese archivo, sin red (el arreglo, sin secretos).
+    Así un arreglo opcional se comprueba contra lo que ya está declarado: ni
+    una declaración ni una URL vigente pueden cambiar."""
+    from extractor.fuentes import _leer_indice, url_vigente
+    from extractor.registro import a_dict, de_dict
+    docs = {}
+    for d in _todas():
+        docs.setdefault(d.clave, d)
+    for f in a.fuentes or []:
+        for d in _leer(Path(f))["documentos"]:
+            docs.setdefault(d["clave"], de_dict(d))
+    paginas = _leer(Path(a.leer_de)) if a.leer_de else {}
+    nuevas, fallidas = {}, {}
+
+    def leer(url, via=None):
+        k = f"{via or ''} {url}"
+        if a.leer_de:
+            if k not in paginas:
+                raise LookupError(f"página índice no guardada: {url}")
+            return paginas[k]
+        if k in fallidas:
+            raise fallidas[k]
+        if k not in nuevas:
+            for intento in range(2):
+                try:
+                    nuevas[k] = _leer_indice(url, via) if via else _leer_indice(url)
+                    break
+                except Exception as e:               # noqa: BLE001 — se reporta
+                    if intento:
+                        fallidas[k] = e
+                        raise
+        return nuevas[k]
+
+    res = {}
+    for c, d in sorted(docs.items()):
+        decl = {k: v for k, v in a_dict(d).items() if v not in (None, False, "", [], ())}
+        try:
+            url = url_vigente(d, leer=leer)
+        except Exception:                            # noqa: BLE001 — se compara
+            # Sin la página índice no hay URL que comparar, con ninguno de los
+            # dos extractores: cuenta igual en ambos.
+            url = "error"
+        res[c] = {"declaracion": decl, "url": url}
+    _escribir(Path(a.salida), res)
+    if a.indices:
+        _escribir(Path(a.indices), nuevas)
+    errores = sum(1 for r in res.values() if r["url"] == "error")
+    print(f"{len(res)} documentos; {len(nuevas) or len(paginas)} páginas índice; "
+          f"{errores} sin URL resuelta.")
+    return 0
+
+
+def cmd_declaraciones_iguales(a) -> int:
+    antes, despues = _leer(Path(a.antes)), _leer(Path(a.despues))
+    difs = [c for c in sorted(set(antes) | set(despues)) if antes.get(c) != despues.get(c)]
+    for c in difs[:20]:
+        print(f"✗ {c}: {antes.get(c)} → {despues.get(c)}")
+    if difs:
+        print(f"✗ El arreglo cambia {len(difs)} declaraciones o URL vigentes.")
+        return 1
+    print(f"Ninguna de las {len(antes)} declaraciones ni URL vigentes cambia.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -376,17 +605,32 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("fuera"); s.add_argument("--estado", required=True); s.add_argument("--construccion", required=True)
     s = sub.add_parser("anotar")
     s.add_argument("--estado", required=True)
-    s.add_argument("--resultado", required=True, choices=["publicado", "egress", "fallido"])
+    s.add_argument("--resultado", required=True,
+                   choices=["publicado", "egress", "fallido", "codigo", "codigo-publicado",
+                            "codigo-descartado"])
+    s.add_argument("--agregado", action="store_true")
     s.add_argument("--motivo", default="")
     s.add_argument("--dominio", default="")
     s.add_argument("--leyes", type=int, default=0)
     s.add_argument("--fuera", type=int, default=0)
     s.add_argument("--corrida", default="")
     s = sub.add_parser("impacto-igual"); s.add_argument("antes"); s.add_argument("despues")
+    s = sub.add_parser("egress-agregar")
+    for k in ("--json", "--dominio", "--estado"):
+        s.add_argument(k, required=True)
+    s.add_argument("--pista", default="")
+    s = sub.add_parser("declaraciones")
+    s.add_argument("--salida", required=True)
+    s.add_argument("--indices")
+    s.add_argument("--leer-de")
+    s.add_argument("--fuentes", action="append")
+    s = sub.add_parser("declaraciones-iguales"); s.add_argument("antes"); s.add_argument("despues")
     a = p.parse_args(argv)
     return {"listo": cmd_listo, "elegir": cmd_elegir, "registro": cmd_registro,
             "descargar": cmd_descargar, "construir": cmd_construir, "fuera": cmd_fuera,
-            "anotar": cmd_anotar, "impacto-igual": cmd_impacto_igual}[a.cmd](a)
+            "anotar": cmd_anotar, "impacto-igual": cmd_impacto_igual,
+            "egress-agregar": cmd_egress_agregar, "declaraciones": cmd_declaraciones,
+            "declaraciones-iguales": cmd_declaraciones_iguales}[a.cmd](a)
 
 
 if __name__ == "__main__":

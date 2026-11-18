@@ -34,8 +34,9 @@ unidad está mal, se corrige aquí.
   documento en su repo de datos. Ver «Leyes estatales».
 - `.github/workflows/vigilar-leyes-estatales.yml` — su vigilancia, y
   `expandir-estatales.yml` (con `scripts/expansion.py`,
-  `scripts/agente/expandir.sh` y `brief-expansion.md`), la ronda que suma
-  estados (ver «Ronda de expansión»).
+  `scripts/agente/expandir.sh`, `brief-expansion.md` y
+  `brief-expansion-codigo.md`), la ronda que suma estados (ver «Ronda de
+  expansión»).
 - `.github/workflows/vigilar-fiscal.yml` y `vigilar-federal.yml` — la vigilancia
   de `fiscal-mexicano` y `leyes-federales`. Viven aquí, no en los repos de
   datos, para que el historial de esos repos solo tenga cambios de texto legal.
@@ -408,9 +409,10 @@ estado=<slug>]`). La parte determinista vive en `scripts/expansion.py`.
 - **La lista:** `extractor/estatales/pendientes.json`, los estados sin módulo
   en el orden en que se suman, cada uno con su `situacion` (`pendiente`,
   `publicado`, `egress`, `agotado`), sus `intentos`, el `motivo` del último y
-  una `pista` (de dónde sale su constitución). Tope: 3 intentos por estado. La
-  escribe solo la ronda (no es un `*.py`: no entra en la huella del extractor,
-  y `impacto.yml` la ignora).
+  una `pista` (de dónde sale su constitución). Tope: 3 intentos por estado
+  (`tope_intentos`) y, aparte, 2 arreglos de código (`intentos_codigo`, ver
+  «Arreglo de código»). La escribe solo la ronda (no es un `*.py`: no entra en
+  la huella del extractor, y `impacto.yml` la ignora).
 - **Solo cuando la cadena anterior terminó:** ninguna `vigilar-leyes-estatales`
   en curso o en cola, ningún PR suyo abierto y ninguna ley declarada sin alta
   cuyo PDF responda (`expansion.py listo`). Si quedan altas (una tanda que no
@@ -418,10 +420,12 @@ estado=<slug>]`). La parte determinista vive en `scripts/expansion.py`.
   Un estado por ronda. El input `sin_esperar` (solo a mano, para probar) se
   salta esta condición.
 - **Elegir y contar el intento** (`expansion.py elegir`): el primer `pendiente`
-  bajo el tope (o el del input `estado`). Un `egress` cuyo dominio ya aparece
-  en `PERMITIDOS` del Worker egress-mx (se lee de main de
-  constitucion-extractor) vuelve a `pendiente`. El intento se publica en main
-  antes del agente (`expandir.sh intento`): uno que se cae también cuenta.
+  bajo el tope (o el del input `estado`), primero los que nunca se agotaron.
+  Un `egress` cuyo dominio ya aparece en la lista de egress-mx
+  (`egress-mx/permitidos.json` de main de constitucion-extractor, leída por la
+  API para no ver una copia vieja) vuelve a `pendiente`. El intento se publica
+  en main antes del agente (`expandir.sh intento`): uno que se cae también
+  cuenta.
 - **El agente** (`expandir.sh agente`, `brief-expansion.md`; solo
   `CLAUDE_CODE_OAUTH_TOKEN`) encuentra el portal oficial de leyes vigentes
   (WebSearch/WebFetch para buscar, `curl` desde el runner para descargar) y
@@ -432,10 +436,11 @@ estado=<slug>]`). La parte determinista vive en `scripts/expansion.py`.
   que no quede fiel va a `FUERA`; lo arreglará `reparar` en otra ocasión). Si
   el sitio rechaza IP extranjeras y su dominio está en egress-mx, descarga por
   una puerta local (`scripts/agente/proxy_mx.py`, que tiene el token; el agente
-  no) y declara esas leyes con `via="mx"`; si no está, entrega `egress` y el
-  estado queda «necesita egress-mx: <dominio>» (se acepta solo si el dominio
-  de verdad no responde desde Actions). Agregar un dominio al Worker y
-  desplegarlo lo devuelve a la cola.
+  no) y declara esas leyes con `via="mx"`; si no está, entrega `egress` (ver
+  «Egress sin una persona»). Si al extractor le falta una opción para
+  encontrar o descargar los PDF (no del parser), entrega `codigo` con lo que
+  falta (`falta`, `ejemplos`) y su borrador del módulo (ver «Arreglo de
+  código»).
 - **Cerco** (un paso del workflow, sin secretos): solo cuentan dos archivos
   nuevos, el módulo y sus pruebas. Si hizo commits o tocó cualquier otra cosa
   (los demás módulos, `__init__.py`, el parser, `pendientes.json`), se deshace
@@ -460,7 +465,77 @@ estado=<slug>]`). La parte determinista vive en `scripts/expansion.py`.
   tandas tras la revisión completa, y `reparar` arregla lo que falle.
 - **Falla cerrada:** cualquier otro final (sin veredicto, una compuerta, un
   error) anota el intento como fallido con su motivo, y el estado se reintenta
-  la ronda siguiente; al tope queda `agotado`. Nada se asigna a una persona.
+  la ronda siguiente; al tope queda `agotado`, con la fecha y la huella de lo
+  que el agente puede usar del extractor (`expansion.huella_expansion`: el
+  parser, `build`/`normalize`/`verificar`, `fuentes.py`, `registro.py`,
+  `estatales/__init__.py`; no los módulos de los estados, que cambian cada
+  semana). Nada se asigna a una persona.
+- **Nada queda agotado para siempre** (`expansion.revive`): un `agotado` vuelve
+  a la cola cuando esa huella cambió y pasaron 4 semanas, o tras 12 semanas sin
+  cambios. Vuelve con un solo intento más (y sus intentos de código de nuevo),
+  detrás de los estados que nunca se agotaron: uno sin salida cuesta a lo más
+  una sesión cada 4 semanas, no una por semana.
+- **Egress sin una persona:** con `egress`, un paso determinista (no el
+  agente) comprueba que el dominio de verdad no responde desde Actions (dos
+  veces) y, si es oficial, lo agrega a `egress-mx/permitidos.json` de
+  constitucion-extractor con `PR_TOKEN` (`expandir.sh egress`, `expansion.py
+  egress-agregar`); el Worker lee esa lista de main cada pocos minutos, sin
+  desplegarse. Regla de dominio oficial (`expansion.dominio_oficial`):
+  termina en `.gob.mx` (NIC México solo lo asigna a dependencias de
+  gobierno), o en `.mx` con el mismo dominio registrable que un host ya
+  oficial (el de la constitución del estado, su `pista`, o uno de la lista).
+  Lo demás no se agrega solo y el intento cuenta como fallido (el Worker,
+  además, solo acepta de ese archivo dominios `.mx`). Agregado, el intento no
+  cuenta, el estado vuelve a `pendiente` y la ronda se relanza para él cuando
+  la lista nueva ya se ve en raw.githubusercontent.com.
+- **Ensayo** (solo a mano): `-f ensayo=true` hace todo sin subir nada (ni el
+  intento, ni el módulo, ni un arreglo, ni egress-mx) ni relanzar nada;
+  `-f simular=codigo|egress -f simular_texto=…` sustituye al agente de la ronda
+  por ese veredicto (implica ensayo), para probar el job `codigo` o el paso de
+  egress sin publicar nada falso.
+
+### Arreglo de código
+
+Cuando la ronda entrega `codigo` (al extractor le falta una opción para
+encontrar o descargar los PDF del estado, como le faltó `consulta` a Nuevo
+León), el job `codigo` de `expandir-estatales.yml` la agrega sin una persona,
+con la misma forma que `reparar`:
+
+1. El intento de código se cuenta en `pendientes.json` antes del agente
+   (`expansion.py anotar --resultado codigo`, que publica el paso que anota la
+   ronda); con 2 ya gastados el veredicto cuenta como fallido.
+2. Con el extractor de partida, desde un clon limpio (`python -I -S`, con
+   `EGRESS_MX_TOKEN`): `expansion.py declaraciones` deja la declaración
+   (`a_dict` sin campos vacíos) y la URL vigente de todo lo declarado (el
+   corpus fiscal, las leyes estatales y sus FUERA, y los `fuentes.json` de
+   leyes-estatales y leyes-federales), con las páginas índice de las que sale;
+   y `impacto_corpus.py --solo-pdfs` llena la caché de PDF.
+3. El agente (`expandir.sh codigo-agente`, `brief-expansion-codigo.md`; solo
+   `CLAUDE_CODE_OAUTH_TOKEN`), con lo que dijo el de la ronda y su borrador
+   como ejemplo, agrega una opción **opcional por ley** (un campo de
+   `Documento` cuyo valor por omisión deja todo igual, su paso por `ley()`,
+   `a_dict`, `de_dict` y su uso en `fuentes.py`) y una prueba nueva
+   `tests/test_expansion_<tema>.py`. Solo puede tocar `extractor/fuentes.py`,
+   `extractor/registro.py`, `extractor/estatales/__init__.py` y esa prueba: el
+   parser es de `reparar`.
+4. Cerco (un paso del workflow): commits u otro archivo tocado, o lo que dejó
+   el extractor de partida cambiado (por sha256), y se deshace todo.
+5. Compuertas, sin secretos (`expandir.sh codigo-compuertas`): algo cambió,
+   prueba nueva, `pytest` entero; `expansion.py declaraciones --leer-de`
+   resuelve todo con el arreglo sobre las mismas páginas, sin red, y
+   `declaraciones-iguales` (desde el clon limpio) exige que ninguna
+   declaración ni URL vigente cambie; `impacto_corpus.py` sobre todo lo
+   publicado sin cambios, o idénticos a los del extractor de partida
+   (`expandir.sh impacto`, la misma compuerta que el módulo de la ronda).
+6. Si pasa, `expandir.sh codigo-publicar` aplica el parche sobre un clon
+   limpio de main y lo sube en un commit «Leyes estatales: <opción> (ronda de
+   expansión)» con el estado de vuelta en `pendiente` y su intento devuelto
+   (el que pidió el código no cuenta: el agente hizo bien en pedirlo), y el
+   job relanza la ronda para ese estado. Decidido así, y no reintentar dentro
+   del mismo job, para que el reintento tenga su propio tiempo y pase por todo
+   lo de una ronda normal. Si no, anota el descarte con su motivo y el intento
+   sí cuenta. Al llegar a main, `impacto.yml` lo mide otra vez como cualquier
+   cambio del extractor.
 
 Un módulo nuevo cambia la huella del extractor de todas las leyes estatales
 (incluye `estatales/*.py`): la siguiente vigilancia completa las reconstruye
