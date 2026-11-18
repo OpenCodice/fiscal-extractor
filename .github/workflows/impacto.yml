@@ -39,18 +39,28 @@ jobs:
       - run: pip install -q -r requirements.txt
 
       - name: Caché de los PDF publicados
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: /tmp/pdfs-corpus
-          key: pdfs-corpus-${{ github.run_id }}
+          key: pdfs-corpus-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: pdfs-corpus-
 
       - name: Reconstruir todo lo publicado con este extractor
         id: corpus
+        env:
+          EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
         run: |
           set +e
           python scripts/impacto_corpus.py --trabajo /tmp/impacto --cache /tmp/pdfs-corpus
           echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Guardar la caché de los PDF publicados
+        # En cuanto se descargaron: lo que falle después no obliga a bajarlos otra vez.
+        if: always() && steps.corpus.outcome != 'skipped'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/pdfs-corpus
+          key: pdfs-corpus-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Agente — confirmar las correcciones contra el PDF
         if: steps.corpus.outputs.rc == '1' && env.TIENE_CLAUDE == 'true'
@@ -90,8 +100,18 @@ jobs:
           PY
             [ -f /tmp/impacto.md ] && cat /tmp/impacto.md
           } >> "$GITHUB_STEP_SUMMARY"
+          # 0: nada cambia; 1: hay cambios y el registro dice si quedaron
+          # confirmados; 2: regresiones o correcciones ya rechazadas. Cualquier
+          # otra cosa es que la medición no terminó: no dice nada, y falla.
           rc="${{ steps.corpus.outputs.rc }}"
-          if [ "$rc" = 2 ] || { [ "$rc" = 1 ] && [ "${{ steps.registro.outputs.ok }}" != true ]; }; then
-            echo "::error::Hay correcciones que no quedaron confirmadas como mejora: las vigilancias no las publican."
-            exit 1
-          fi
+          case "$rc" in
+            0) ;;
+            1) if [ "${{ steps.registro.outputs.ok }}" != true ]; then
+                 echo "::error::Hay correcciones que no quedaron confirmadas como mejora: las vigilancias no las publican."
+                 exit 1
+               fi ;;
+            2) echo "::error::Hay correcciones que no quedaron confirmadas como mejora: las vigilancias no las publican."
+               exit 1 ;;
+            *) echo "::error::No se pudo medir el impacto (código '$rc'): este cambio del extractor quedó sin medir."
+               exit 1 ;;
+          esac
