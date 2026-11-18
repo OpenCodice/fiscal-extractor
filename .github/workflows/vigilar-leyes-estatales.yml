@@ -706,13 +706,13 @@ jobs:
         if: steps.publicar.outputs.reparado == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash "$GITHUB_WORKSPACE/scripts/lanzar_vigilancia_estatal.sh"
+        run: bash "/tmp/extractor/scripts/lanzar_vigilancia_estatal.sh"
       - name: Dar de alta las leyes que pasaron a LEYES
         if: steps.promover.outputs.promovidas != '' && steps.publicar.outputs.reparado != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           ESTADOS: ${{ steps.promover.outputs.estados }}
-        run: bash "$GITHUB_WORKSPACE/scripts/lanzar_vigilancia_estatal.sh" "$ESTADOS"
+        run: bash "/tmp/extractor/scripts/lanzar_vigilancia_estatal.sh" "$ESTADOS"
       - name: Guardar el trabajo de la reparación
         if: always() && steps.objetivo.outputs.hay == 'true'
         uses: actions/upload-artifact@v4
