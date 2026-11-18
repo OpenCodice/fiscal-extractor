@@ -71,7 +71,7 @@ ORDINALES_ESTATAL = (ORDINALES + "|Quitus|Quintos|Sextus|Sexties|S[ée]ptimus|Oc
 ARTICULO_ESTATAL_RE = re.compile(
     r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|\(SIC\)(?=\s+\d+\s+[A-ZÁÉÍÓÚÑ]+\s*\.-)|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
-    r"(?:(?:-(?=[A-ZÑ])|\s(?=[A-Z][.\-])|(?<=\d)(?=[A-Z]\.))([A-ZÑ])(?![A-Za-zñ]))?"  # letra "-A", " A." (118 A.) o "132G."; "142-Ñ"
+    r"(?:(?:-(?=[A-ZÑ])|\s(?=[A-ZÑ][.\-])|(?<=\d)(?=[A-Z]\.))([A-ZÑ])(?![A-Za-zñ]))?"  # letra "-A", " A." (118 A.) o "132G."; "142-Ñ"
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
     rf"(?:[\s.\-]+(?i:({ORDINALES_ESTATAL}))"         # ordinal
     r"(?:(?:[\s\-]+|\.\s?|(?=\d))(\d+|(?i:uno|dos|tres))(?:\s+([A-Z])(?=[.\-]|\s*$))?"  # numeral ("Bis 1", "Bis. 3", "Ter2", "Bis Uno") y letra ("Bis 35 A.-")
@@ -206,6 +206,9 @@ def _es_encabezado(s: str) -> bool:
 NOTA_SCJN_RE = re.compile(
     r"^(?:Denominaci[oó]n|Cap[ií]tulo|T[ií]tulo|Secci[oó]n)\s+"
     r"(?:declarad[oa]\s+inv[aá]lid[oa]|que\s+[“\"]recupera)")
+
+
+MARCA_DEROGADO_RE = re.compile(r"\(?\s*(?:Se\s+deroga|Derogad[oa])\s*\)?\.?", re.IGNORECASE)
 
 
 def _es_nota_de_bloque(s: str) -> bool:
@@ -1347,6 +1350,8 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 (re.fullmatch(r"[IVXLCDM]+", stripped)
                  and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))
                 or (nombre_suelto(stripped) and not stripped.endswith(",")
+                    # 'Derogado' tras la última fracción es texto del artículo.
+                    and not (estatal and MARCA_DEROGADO_RE.fullmatch(stripped))
                     and (epigrafe_max is None or es_rotulo_corto(stripped, epigrafe_max))
                     and (anterior.endswith((".", ";", ":")) or es_nota_bloque(anterior))
                     and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))):
@@ -1395,6 +1400,14 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 previas_bloque.clear()
                 continue
 
+        if estatal and actual is not None and not en_bloque and not ART.match(stripped):
+            # '20 A. El procedimiento…': el PDF omite la palabra 'Artículo' en la
+            # variante con letra del artículo en curso.
+            sm = re.match(r"(\d+) ([A-ZÑ])\.\s+\S", stripped)
+            if (sm and int(sm.group(1)) == actual.numero and not actual.letra
+                    and not actual.ordinal and not actual.guion_num
+                    and (actual.numero, sm.group(2), "", "", "", "") not in abiertos):
+                stripped = line = "Artículo " + stripped
         am = ART.match(stripped)
         if am:
             numero = int(am.group(1).replace(",", ""))
