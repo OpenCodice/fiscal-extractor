@@ -293,3 +293,30 @@ def test_solo_metadata_es_metadatos(entorno):
     idx.write_text(json.dumps({**d, "etiqueta": "Cor"}))
     titulos = _correr(e)
     assert [t for t, _ in titulos][0] == "Metadatos de COR: articulos.json"
+
+
+def test_copiar_doc_no_esconde_un_cambio_del_mismo_tamano(tmp_path):
+    """Una corrección del mismo tamaño ('lectrua' → 'lectura') copiada con la
+    fecha de su origen, igual en segundos a la del índice, no la veía `git
+    status`: con un inodo reutilizado y el mismo ctime (Linux), git confía en
+    tamaño y fecha. checkStat=minimal y trustctime=false reproducen ese caso en
+    cualquier sistema."""
+    import os
+    import time
+    repo = tmp_path / "repo"
+    _init(repo)
+    _git(repo, "config", "core.checkStat", "minimal")
+    _git(repo, "config", "core.trustctime", "false")
+    f = repo / "sep" / "001.md"
+    f.parent.mkdir()
+    f.write_text("Una lectrua.\n")
+    mtime = f.stat().st_mtime_ns
+    time.sleep(1.05)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "x")
+    origen = tmp_path / "origen" / "sep"
+    origen.mkdir(parents=True)
+    (origen / "001.md").write_text("Una lectura.\n")
+    os.utime(origen / "001.md", ns=(mtime, mtime))
+    cpd._copiar_doc(tmp_path / "origen", repo, "sep")
+    assert cpd.cambios(str(repo), "sep") == ["sep/001.md"]

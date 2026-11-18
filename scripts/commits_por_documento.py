@@ -111,11 +111,16 @@ def _articulos(raiz: Path, doc: str) -> dict[str, bytes]:
 
 
 def _copiar_doc(origen: Path, destino: Path, doc: str) -> None:
+    """Copia las carpetas del documento con fecha de modificación nueva: con la
+    del origen (copy2, lo que hace copytree), un archivo del mismo tamaño que el
+    del índice y con su misma fecha en segundos (una errata corregida,
+    'lectrua' → 'lectura') queda invisible para `git status`, que confía en
+    tamaño y fecha, y la corrección no se publicaría."""
     for rel in tr.carpetas(doc):
         if (destino / rel).exists():
             shutil.rmtree(destino / rel)
         if (origen / rel).exists():
-            shutil.copytree(origen / rel, destino / rel)
+            shutil.copytree(origen / rel, destino / rel, copy_function=shutil.copy)
 
 
 def obtener_pdf(ctx: dict, extractor_dir: str, destino: Path) -> str | None:

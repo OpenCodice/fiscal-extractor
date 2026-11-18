@@ -99,7 +99,8 @@ def _copiar_doc(origen: Path, destino: Path, clave: str) -> None:
         if (destino / rel).exists():
             shutil.rmtree(destino / rel)
         if (origen / rel).exists():
-            shutil.copytree(origen / rel, destino / rel)
+            # Fecha nueva, no la del origen: ver commits_por_documento._copiar_doc.
+            shutil.copytree(origen / rel, destino / rel, copy_function=shutil.copy)
 
 
 def _cmd_extraer(a) -> int:
