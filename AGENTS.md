@@ -367,9 +367,9 @@ supervisor (`OpenCodice/supervisor`):
   vez (`reintento=true`) y, si el reintento falla, deja un issue. Un job que
   agota su `timeout-minutes` termina `cancelled` sin que la corrida se haya
   cancelado, y cuenta como falla.
-- Tiempos: la suma de los `timeout-minutes` de los pasos de un job cabe en el
-  del job (máximo 355), para que se acabe el tiempo de un paso (una falla que
-  los pasos siguientes ven) y no el del job. Al subir uno, baja otro.
+- Tiempos: cada job tiene `timeout-minutes` (máximo 355) y ningún paso uno
+  mayor que el de su job. Los pasos de agente son secuenciales y casi nunca
+  agotan todos su límite, así que su suma puede pasar del tiempo del job.
 - Las cachés que cuestan trabajo pagado (veredictos de la revisión, medición
   de FUERA, PDF de lo publicado) se restauran con `actions/cache/restore` y
   se guardan con `actions/cache/save` e `if: always()` justo después del paso

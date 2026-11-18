@@ -197,8 +197,7 @@ jobs:
 
       - name: Agente — reparar el extractor (solo si la auditoría falló)
         if: steps.integrar.outputs.fallas == 'true' && env.TIENE_CLAUDE == 'true'
-        # Los cuatro agentes de este job, juntos, caben en el tiempo del job.
-        timeout-minutes: 75
+        timeout-minutes: 150
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: bash /tmp/extractor/scripts/agente/correr-federal.sh
@@ -232,7 +231,7 @@ jobs:
 
       - name: Agente — confirmar el impacto del arreglo en el corpus
         if: steps.compuertas.outputs.arreglo == 'impacto'
-        timeout-minutes: 60
+        timeout-minutes: 180
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           IMPACTO: /tmp/agente/impacto-arreglo
@@ -258,7 +257,7 @@ jobs:
         # agente la revisa entera contra su PDF, por bloques.
         id: revision
         if: env.TIENE_CLAUDE == 'true'
-        timeout-minutes: 110
+        timeout-minutes: 150
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: bash /tmp/extractor/scripts/agente/revision-federal.sh revisar
@@ -348,7 +347,7 @@ jobs:
 
       - name: Agente — confirmar las correcciones
         if: steps.correcciones.outputs.pendientes == 'true' && env.TIENE_CLAUDE == 'true'
-        timeout-minutes: 60
+        timeout-minutes: 150
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           IMPACTO: /tmp/agente/impacto-vigilancia
@@ -596,7 +595,7 @@ jobs:
           key: pdfs-corpus-${{ github.run_id }}-${{ github.run_attempt }}-reparar
       - name: Agente — reparar el extractor
         if: steps.preparar.outputs.hay == 'true'
-        timeout-minutes: 130
+        timeout-minutes: 150
         continue-on-error: true
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -648,7 +647,7 @@ jobs:
           echo "estado=$(cat "$AGENTE_DIR/reparacion/estado.txt" 2>/dev/null || echo descartado)" >> "$GITHUB_OUTPUT"
       - name: Agente — confirmar el impacto del arreglo en lo publicado
         if: steps.compuertas.outputs.estado == 'impacto'
-        timeout-minutes: 100
+        timeout-minutes: 120
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           IMPACTO: /tmp/agente/reparacion/impacto

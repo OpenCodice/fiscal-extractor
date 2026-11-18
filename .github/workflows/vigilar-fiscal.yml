@@ -128,7 +128,7 @@ jobs:
 
       - name: Agente — confirmar el impacto del arreglo en el corpus
         if: steps.compuertas.outputs.arreglo == 'impacto'
-        timeout-minutes: 90
+        timeout-minutes: 180
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           IMPACTO: /tmp/agente/impacto-arreglo
@@ -244,7 +244,7 @@ jobs:
 
       - name: Agente — confirmar las correcciones
         if: steps.correcciones.outputs.pendientes == 'true' && env.TIENE_CLAUDE == 'true'
-        timeout-minutes: 90
+        timeout-minutes: 120
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           IMPACTO: /tmp/agente/impacto-vigilancia

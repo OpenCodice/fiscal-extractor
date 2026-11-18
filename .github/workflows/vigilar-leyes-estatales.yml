@@ -248,10 +248,9 @@ jobs:
         # Una ley nueva no se publica solo con las compuertas deterministas: el
         # agente la revisa entera contra su PDF, por bloques, varias a la vez.
         if: env.TIENE_CLAUDE == 'true'
-        # Con el del agente juez de abajo, cabe en el tiempo del job. Si se
-        # acaba, lo revisado se conserva en la caché y las altas a medias se
-        # aplazan (paso siguiente): la corrida sigue.
-        timeout-minutes: 210
+        # Si se acaba el tiempo, lo revisado se conserva en la caché y las altas
+        # a medias se aplazan (paso siguiente): la corrida sigue.
+        timeout-minutes: 300
         continue-on-error: true
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -373,7 +372,7 @@ jobs:
 
       - name: Agente — confirmar las correcciones
         if: steps.correcciones.outputs.pendientes == 'true' && env.TIENE_CLAUDE == 'true'
-        timeout-minutes: 100
+        timeout-minutes: 120
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           IMPACTO: /tmp/agente/impacto-vigilancia
@@ -589,7 +588,7 @@ jobs:
         # entrar al objetivo de la reparación (mismo tope por ley y PDF); las
         # limpias pasan a LEYES al final de este job.
         id: fuera
-        timeout-minutes: 45
+        timeout-minutes: 90
         continue-on-error: true
         env:
           EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
@@ -689,7 +688,7 @@ jobs:
           key: pdfs-corpus-${{ github.run_id }}-${{ github.run_attempt }}-reparar
       - name: Agente — reparar el extractor
         if: steps.preparar.outputs.hay == 'true'
-        timeout-minutes: 120
+        timeout-minutes: 150
         continue-on-error: true
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -741,7 +740,7 @@ jobs:
           echo "estado=$(cat "$AGENTE_DIR/reparacion/estado.txt" 2>/dev/null || echo descartado)" >> "$GITHUB_OUTPUT"
       - name: Agente — confirmar el impacto del arreglo en lo publicado
         if: steps.compuertas.outputs.estado == 'impacto'
-        timeout-minutes: 90
+        timeout-minutes: 120
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           IMPACTO: /tmp/agente/reparacion/impacto

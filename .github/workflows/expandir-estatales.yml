@@ -163,7 +163,7 @@ jobs:
         # objetivo; su registro es la referencia del cerco.
         id: fuera
         if: steps.cadena.outputs.libre == 'true' && inputs.redeclarar != '' && env.TIENE_CLAUDE == 'true'
-        timeout-minutes: 20
+        timeout-minutes: 30
         env:
           EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
         run: |
@@ -217,7 +217,7 @@ jobs:
         # para compararlo después con el impacto que tenga con él.
         id: pdfs
         if: steps.elegir.outputs.hay == 'true'
-        timeout-minutes: 45
+        timeout-minutes: 60
         env:
           EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
         run: |
@@ -266,7 +266,7 @@ jobs:
 
       - name: Agente — escribir el módulo del estado
         if: steps.elegir.outputs.hay == 'true' && inputs.simular == ''
-        timeout-minutes: 140
+        timeout-minutes: 160
         continue-on-error: true
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -407,7 +407,7 @@ jobs:
         # que cambia sin el módulo.
         id: impacto
         if: steps.construir.outcome == 'success' || steps.descargadas.outcome == 'success'
-        timeout-minutes: 90
+        timeout-minutes: 120
         env:
           PARTIDA: ${{ steps.elegir.outputs.partida }}
         run: bash /tmp/extractor/scripts/agente/expandir.sh impacto /tmp/limpio
