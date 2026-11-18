@@ -74,7 +74,7 @@ ARTICULO_ESTATAL_RE = re.compile(
     r"(?:(?:-(?=[A-ZÑ])|\s(?=[A-ZÑ][.\-])|(?<=\d)(?=[A-Z]\.))([A-ZÑ])(?![A-Za-zñ]))?"  # letra "-A", " A." (118 A.) o "132G."; "142-Ñ"
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
     rf"(?:[\s.\-]+(?i:({ORDINALES_ESTATAL}))"         # ordinal
-    r"(?:(?:[\s\-]+|\.\s?|(?=\d))(\d+|(?i:uno|dos|tres))(?:\s+([A-Z])(?=[.\-]|\s*$))?"  # numeral ("Bis 1", "Bis. 3", "Ter2", "Bis Uno") y letra ("Bis 35 A.-")
+    r"(?:(?:[\s\-]+|\.\s?|(?=\d))(\d+|(?i:uno|dos|tres)|I{1,3}(?=\s*[.\-]))(?:\s+([A-Z])(?=[.\-]|\s*$))?"  # numeral ("Bis 1", "Bis. 3", "Ter2", "Bis Uno") y letra ("Bis 35 A.-")
     r"|-([A-Z])(?=[.\-]|\s))?)?"                    # letra pegada al ordinal: "221 BIS-A.-"
     r"(?:\s*\.?\s?[-–]?\.?(?:\s|$|(?=\())|\.-(?=\S)"   # separador final ("29 BIS. - ", "137-.", "209 TER. – " o ".-" pegado)
     r"|\.(?=[A-ZÁÉÍÓÚÑ](?:[a-záéíóúñ]|\s))"            # o el punto pegado: "127.Se deroga.", "36.A través"
@@ -1363,6 +1363,8 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     and not (estatal and MARCA_DEROGADO_RE.fullmatch(stripped))
                     and (epigrafe_max is None or es_rotulo_corto(stripped, epigrafe_max))
                     and (anterior.endswith((".", ";", ":")) or es_nota_bloque(anterior))
+                    # La segunda línea de una nota envuelta ('DE 2024)') no es un rótulo.
+                    and not (estatal and es_nota_bloque(anterior) and _nota_abierta(anterior))
                     and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))):
             fijar("epigrafe", stripped)
             entra_bloque()
