@@ -135,7 +135,10 @@ FUERA = [
      "un encabezado ('Capítulo ll Bis', con letras ele en vez de números romanos) no se reconoce y queda pegado al final del artículo 76"),
     (
     _nl("Código Civil para el Estado de Nuevo León", "CC NL",
-            "CODIGO%20CIVIL%20PARA%20EL%20ESTADO%20DE%20NUEVO%20LEON%20", _CODIGOS),
+            "CODIGO%20CIVIL%20PARA%20EL%20ESTADO%20DE%20NUEVO%20LEON%20", _CODIGOS,
+            # Subtítulo del Título Cuarto con numeral romano: entre dos artículos
+            # parece una fracción sin extraer.
+            titulos_encabezado=("I.- EFECTOS DE LAS OBLIGACIONES ENTRE LAS PARTES",)),
      "el PDF numera sus artículos como 'Art. 22.-' y el extractor solo reconoce 'Artículo'"),
 ]
 

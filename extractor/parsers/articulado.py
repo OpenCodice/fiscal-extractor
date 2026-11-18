@@ -74,7 +74,7 @@ ARTICULO_ESTATAL_RE = re.compile(
     r"(?:(?:-(?=[A-ZÑ])|\s(?=[A-ZÑ][.\-])|(?<=\d)(?=[A-Z]\.))([A-ZÑ])(?![A-Za-zñ]))?"  # letra "-A", " A." (118 A.) o "132G."; "142-Ñ"
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
     rf"(?:[\s.\-]+(?i:({ORDINALES_ESTATAL}))"         # ordinal
-    r"(?:(?:[\s\-]+|\.\s?|(?=\d))(\d+|(?i:uno|dos|tres)|I{1,3}(?=\s*[.\-]))(?:\s+([A-Z])(?=[.\-]|\s*$))?"  # numeral ("Bis 1", "Bis. 3", "Ter2", "Bis Uno") y letra ("Bis 35 A.-")
+    r"(?:(?:[\s\-]+|\.\s?|(?=\d))(\d+|(?i:uno|dos|tres)|[IVX]{1,4}(?=\s*[.\-]))(?:\s+([A-Z])(?=[.\-]|\s*$))?"  # numeral ("Bis 1", "Bis. 3", "Ter2", "Bis Uno") y letra ("Bis 35 A.-")
     r"|-([A-Z])(?=[.\-]|\s))?)?"                    # letra pegada al ordinal: "221 BIS-A.-"
     r"(?:\s*\.?\s?[-–]?\.?(?:\s|$|(?=\())|\.-(?=\S)"   # separador final ("29 BIS. - ", "137-.", "209 TER. – " o ".-" pegado)
     r"|\.(?=[A-ZÁÉÍÓÚÑ](?:[a-záéíóúñ]|\s))"            # o el punto pegado: "127.Se deroga.", "36.A través"
@@ -102,7 +102,7 @@ TITULO_RE = re.compile(r"^T[IÍ]TULO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]
                        rf"|^T[íi]tulo\s+{_NUMERAL_TC}{_BIS_TC}\s*$")
 _ORDINAL_MAY = (r"PRIMER[OA]|SEGUND[OA]|TERCER[OA]|CUART[OA]|QUINT[OA]|SEXT[OA]|"
                  r"S[EÉ]PTIM[OA]|OCTAV[OA]|NOVEN[OA]|D[EÉ]CIM[OA]")
-CAPITULO_RE = re.compile(rf"^CAP[IÍ]TULO\s+([IVXLCDM]+|[ÚU]NICO|{_ORDINAL_MAY})\b.*$"
+CAPITULO_RE = re.compile(rf"^CAP[IÍ]T[UI]LO\s+([IVXLCDM]+|[ÚU]NICO|{_ORDINAL_MAY})\b.*$"
                          rf"|^Cap[íi]tulo\s+(?:{_NUMERAL_TC}|[ÚU]nico){_BIS_TC}\s*$")
 # Libro: nivel sobre el Título en los códigos (Código Penal, Código Civil).
 LIBRO_RE = re.compile(r"^LIBRO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]+)?\s*$"
@@ -450,6 +450,8 @@ def limpiar_paginas(paginas: list[str], doc: Documento, formulas: bool = False) 
     if doc.medio:
         paginas = [unicodedata.normalize("NFC", t) for t in paginas]
     limpias = (_quitar_encabezados(_quitar_marca_girada(t), fuera, prefijos) for t in paginas)
+    if doc.medio and doc.notas_previas:
+        limpias = (_rotulo_abreviado_completo(t) for t in limpias)
     if doc.notas_en_linea:
         limpias = _notas_aparte(list(limpias), re.compile(doc.notas_en_linea))
     if not formulas:
@@ -462,6 +464,18 @@ def limpiar_paginas(paginas: list[str], doc: Documento, formulas: bool = False) 
         lineas += partes
         pagina_de += [n] * len(partes)
     return sustituir_formulas("\n".join(lineas), pagina_de)
+
+
+# 'Art. 54.- Para la inscripción…' o 'Art. 134. La cancelación…' (Código Civil
+# de Nuevo León): el rótulo abreviado. Se lee como 'Artículo 54.-', igual que el
+# encabezado '# Artículo 54.' de su unidad: así la nota previa y el rótulo de la
+# propia unidad que le sigue se reconocen como tales (verificar.cobertura).
+_ROTULO_ABREVIADO_RE = re.compile(
+    r"(?m)^Art(?=\.\s*\d+(?:\s+[A-Za-z]+(?:\s+[IVX]+)?)?\.-?(?:\s|$))\.?")
+
+
+def _rotulo_abreviado_completo(texto: str) -> str:
+    return _ROTULO_ABREVIADO_RE.sub("Artículo", texto)
 
 
 def _notas_aparte(paginas: list[str], nota: re.Pattern) -> list[str]:

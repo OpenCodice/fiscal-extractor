@@ -38,8 +38,10 @@ def _qro(nombre: str, sigla: str, ruta: str, **kw) -> object:
 
 LEYES = [
     _qro("Código Civil del Estado de Querétaro", "CC Qro", "Codigos/COD-ID-02.pdf"),
+    # 'Capítulo Quinto / I. De la administración': el subtítulo con numeral romano
+    # sería, entre dos artículos, indistinguible de una fracción sin extraer.
     _qro("Código de Procedimientos Civiles del Estado de Querétaro", "CPC Qro",
-         "Codigos/COD-ID-04.pdf"),
+         "Codigos/COD-ID-04.pdf", titulos_encabezado=("I. De la administración",)),
     _qro("Código Fiscal del Estado de Querétaro", "CF Qro", "Codigos/COD-ID-05.pdf"),
     _qro("Código Urbano del Estado de Querétaro", "CU Qro", "Codigos/COD-ID-06.pdf"),
     _qro("Código Penal para el Estado de Querétaro", "CP Qro", "Codigos/COD-ID-07.pdf"),
