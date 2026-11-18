@@ -79,6 +79,10 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
         first = lines[0]
         m = rotulo.match(first)
         lines[0] = first[m.end():] if m else first
+        if m and cortes is not None and first[:1] in "\"“" and lines[0].strip():
+            # Ley estatal que cita el artículo entre comillas ('“Artículo 23. …”'):
+            # la de apertura es texto del PDF, y la de cierre queda al final.
+            lines[0] = first[0] + lines[0].lstrip()
 
     blocks: list[str] = []
     buf: list[str] = []
@@ -132,6 +136,8 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             blocks.append(f"_{note}_")
             i = j
             continue
+        if cortes and buf and re.match(r"\*N\. de E\.", s):
+            flush_buf()                 # la nota del editor es su propio párrafo
         corte = cortes.get((anterior, originales[i])) if cortes and buf else None
         if _is_struct_marker(s):
             sigue = corte is False and not SENTENCE_END_RE.search(buf[-1])

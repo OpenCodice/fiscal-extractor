@@ -1077,6 +1077,83 @@ def _notas_antes(lineas: list[str], notas_previas: re.Pattern | None) -> list[st
     return _notas_al_final(u, notas_previas)
 
 
+_EPIGRAFE_MARGINAL_MAX = 100
+_EPIGRAFE_ENVUELTO_DESDE = 72        # largo de renglón desde el que el rótulo envuelve
+
+
+def _epigrafes_marginales(lineas: list[str], ART: re.Pattern,
+                          notas: re.Pattern | None) -> tuple[list[str], dict[int, str]]:
+    """Ley estatal cuyo PDF pone en el renglón del rótulo el epígrafe marginal
+    del artículo ('Artículo 1. Sujetos obligados', y el texto en el renglón
+    siguiente; el epígrafe puede envolver a un segundo renglón). Solo si casi
+    todos sus rótulos son así (la ley entera, no un artículo suelto). Devuelve
+    las líneas con el rótulo solo y, por índice de la línea nueva, su epígrafe,
+    que va al contexto de la unidad y no a su cuerpo."""
+    def candidato(ln: str):
+        m = ART.match(ln.strip())
+        if not m:
+            return None
+        resto = ln.strip()[m.end():].strip()
+        if (resto and resto[0].isupper() and len(resto) <= _EPIGRAFE_MARGINAL_MAX
+                and resto[-1] not in ".;:,)"):
+            return m, resto
+        return m, None
+
+    todos = [candidato(ln) for ln in lineas]
+
+    def sigue_mayuscula(i: int) -> bool:
+        sig = next((x.strip() for x in lineas[i + 1:i + 3] if x.strip()), "")
+        return sig[:1].isupper() or sig[:1] == "("
+
+    # Solo cuentan los rótulos cortos: un primer renglón de texto que envuelve
+    # llega al margen, y el que cierra sin puntuación es lo normal en cualquier ley.
+    rotulos = [i for i, c in enumerate(todos) if c]
+    marginales = [i for i in rotulos if todos[i][1] and len(lineas[i].strip()) < _EPIGRAFE_ENVUELTO_DESDE
+                  and sigue_mayuscula(i)]
+    if len(rotulos) < 10 or len(marginales) < 0.6 * len(rotulos):
+        return lineas, {}
+    salida: list[str] = []
+    epigrafes: dict[int, str] = {}
+    i = 0
+    while i < len(lineas):
+        c = todos[i]
+        if not (c and c[1]):
+            salida.append(lineas[i])
+            i += 1
+            continue
+        m, resto = c
+        ln = lineas[i].strip()
+        epi, j = resto, i + 1
+        k = i + 1
+        while k < len(lineas) and not lineas[k].strip():
+            k += 1
+        sig = lineas[k].strip() if k < len(lineas) else ""
+        # El epígrafe envuelve a un segundo renglón corto y sin puntuación
+        # interior (el rótulo llega casi al margen).
+        if (len(ln) >= _EPIGRAFE_ENVUELTO_DESDE and sig and len(sig) <= 50
+                and not re.search(r"[,:;]", sig) and not ART.match(sig)
+                and not re.match(r"(?:[IVXLCDM]+|[a-zñ]|\d+)[.)]\s", sig)
+                and not (notas is not None and notas.match(sig))):
+            epi, j = f"{resto} {sig}", k + 1
+        elif not (sig[:1].isupper() or sig[:1] == "("):
+            # Sin segundo renglón de epígrafe y con texto que sigue en minúscula:
+            # el rótulo es el primer renglón de un texto que envuelve.
+            salida.append(lineas[i])
+            i += 1
+            continue
+        epigrafes[len(salida)] = epi
+        previo = next((x.strip() for x in reversed(salida) if x.strip()), "")
+        salida.append(lineas[i].strip()[:m.end()])
+        i = j
+        # La misma nota de reforma antes del rótulo y tras el epígrafe es una sola
+        # (la de antes pasa a ser la primera línea del artículo): el epígrafe,
+        # que va al contexto, no deja texto entre las dos copias.
+        if (notas is not None and i < len(lineas) and previo and lineas[i].strip() == previo
+                and notas.match(previo)):
+            i += 1
+    return salida, epigrafes
+
+
 def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 notas: re.Pattern | None = None,
                 notas_previas: re.Pattern | None = None,
@@ -1120,6 +1197,9 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
         texto = re.sub(rf"(?m)^(.*\S[.;:])[ \t]+(T[ÍI]TULO\s+(?:{_ORDINAL_MAY}))[ \t]*$",
                        r"\1\n\2", texto)
     lineas = texto.splitlines()
+    marginales: dict[int, str] = {}
+    if estatal:
+        lineas, marginales = _epigrafes_marginales(lineas, ART, notas)
     ultima = _ultima_aparicion(lineas, ART) if huecos else {}
 
     def nombre_suelto(s: str, continuacion: bool = False) -> bool:
@@ -1470,6 +1550,8 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     seccion=jer["seccion"], epigrafe=jer["epigrafe"],
                 )
                 actual.cuerpo = line + "\n"
+                if i in marginales:
+                    actual.epigrafe = marginales[i]
                 if previas:
                     # Encabezado, las notas (cada una su párrafo) y el texto que
                     # seguía al encabezado en su renglón: el orden del PDF.
