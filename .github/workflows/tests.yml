@@ -20,7 +20,9 @@ jobs:
         with:
           python-version: '3.12'
 
-      - run: pip install -r requirements.txt
+      # PyYAML solo lo usan las pruebas que leen los workflows
+      # (tests/test_infra_*.py); el extractor no depende de él.
+      - run: pip install -r requirements.txt pyyaml
 
       - run: python -m pytest -q
 
