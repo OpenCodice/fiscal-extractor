@@ -107,7 +107,9 @@ unidad está mal, se corrige aquí.
   reparación autónoma).
 - `.github/workflows/impacto.yml` — en cada push a main que toca `extractor/`
   (un commit a mano incluido) mide su impacto en todo lo publicado y confirma
-  las correcciones con el agente.
+  las correcciones con el agente. Falla si quedó algo sin confirmar o si la
+  medición no terminó (cualquier código de `impacto_corpus.py` que no sea 0 o
+  1).
 
 ## Comandos
 
@@ -341,6 +343,48 @@ no se reintenta cuando cambia el extractor: solo con otro PDF, con el que los
 intentos empiezan de cero. En las leyes estatales la huella del extractor
 incluye además `estatales/*.py` y `disposicion.py`.
 
+## Encadenamiento y salud de las corridas
+
+Las cuatro corridas encadenadas (`vigilar-fiscal`, `vigilar-federal`,
+`vigilar-leyes-estatales`, `expandir-estatales`) cumplen el contrato del
+supervisor (`OpenCodice/supervisor`):
+
+- Input `origen` (quién la lanzó; cada `gh workflow run` de un workflow pasa
+  `-f origen=<job>`) y `run-name` con todos los inputs como `clave=[valor]`:
+  la API no devuelve los inputs de un dispatch, el título de la corrida sí.
+- Último job `estado`, cuyo nombre dice si quedó otra tanda:
+  `estado pendiente=[true]` cuando `cerrar` terminó bien y su salida
+  `continuar` es `true` (federal y leyes estatales); `false` en las demás.
+- `continuar` (la salida de `cerrar` y el job) es «queda trabajo y esta
+  corrida avanzó»: abrió un PR o, sin PR, dejó veredictos nuevos de una
+  revisión que no cupo (leyes estatales) o el agente reparó el extractor
+  (federal). Con PR, el job espera su fusión; sin PR, lanza sin esperar. Sin
+  avance no se relanza: otra corrida repetiría lo mismo.
+- Una fuente caída pone en rojo el job `fuentes`, no `cerrar`: la corrida
+  queda fallida y `salud` la reintenta, pero `continuar` y `reparar` corren.
+- `web` avisa a constitucion-web en cuanto termina `revisar`. `salud` va al
+  final y mira todos los jobs, también `reparar` y `continuar`: reintenta una
+  vez (`reintento=true`) y, si el reintento falla, deja un issue. Un job que
+  agota su `timeout-minutes` termina `cancelled` sin que la corrida se haya
+  cancelado, y cuenta como falla.
+- Tiempos: la suma de los `timeout-minutes` de los pasos de un job cabe en el
+  del job (máximo 355), para que se acabe el tiempo de un paso (una falla que
+  los pasos siguientes ven) y no el del job. Al subir uno, baja otro.
+- Las cachés que cuestan trabajo pagado (veredictos de la revisión, medición
+  de FUERA, PDF de lo publicado) se restauran con `actions/cache/restore` y
+  se guardan con `actions/cache/save` e `if: always()` justo después del paso
+  que las llena, no al terminar el job.
+- En `reparar`, los pasos que lanzan la vigilancia tras publicar un arreglo o
+  promover leyes llevan `!cancelled()`: lo que ya está en main se reintenta
+  aunque otro paso del job haya fallado.
+- `scripts/lanzar_ronda_expansion.sh` lanza `expandir-estatales.yml` desde
+  la propia ronda (egress, `codigo`): si ya hay una ronda en espera no lanza
+  otra, porque la cancelaría y una ronda no abarca a otra (el estado sigue
+  `pendiente` y una redeclaración la vuelve a pedir `reparar`).
+- `tests.yml` (job `infra`) corre `actionlint` (con `.github/actionlint.yaml`)
+  y el lint de workflows del supervisor; `tests/test_infra_*.py` ejecuta los
+  lanzadores con un `gh` falso.
+
 ## Leyes estatales
 
 Las leyes de cada estado distintas de su constitución (códigos civiles y
@@ -382,8 +426,9 @@ fase (2026-11-17):
 - **Relanzar la vigilancia:** todo lo que la lanza (la cadena, `reparar`, la
   ronda) usa `scripts/lanzar_vigilancia_estatal.sh`. GitHub deja una sola
   corrida en espera por grupo de concurrency y la nueva cancela a la que
-  esperaba; si ya hay una en espera, el script lanza la vigilancia completa en
-  lugar de solo los `estados` pedidos, para no perder lo que esa iba a hacer.
+  esperaba; si ya hay una en espera (o no se puede mirar la cola), el script
+  lanza la vigilancia completa en lugar de solo los `estados` pedidos, para no
+  perder lo que esa iba a hacer.
 - **Vigilancia:** `vigilar-leyes-estatales.yml`, el flujo federal
   (`extractor estatal planear|extraer|integrar|cerrar`, mismos pasos que
   `federal …`) por tandas (`--lote`, 8 altas por corrida). Las altas pasan la
