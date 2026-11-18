@@ -38,6 +38,7 @@ for _pem in sorted((Path(__file__).resolve().parent.parent / "certs").glob("*.pe
     _SSL_GOB.load_verify_locations(cafile=str(_pem))
 
 _HREF_PDF = re.compile(r'href="([^"]+\.pdf)"', re.IGNORECASE)
+_HREF_PDF_CONSULTA = re.compile(r'href="([^"]+\.pdf(?:\?[^"]*)?)"', re.IGNORECASE)
 _FECHA_NOMBRE = re.compile(r"(\d{2})(\d{2})(\d{4})\.pdf$", re.IGNORECASE)
 _ANCLA = re.compile(r"""<a\s[^>]*?href=["']([^"']+)["'][^>]*>(.*?)</a>""",
                     re.IGNORECASE | re.DOTALL)
@@ -139,7 +140,8 @@ def url_vigente(doc, leer=_leer_indice) -> str:
     via = getattr(doc, "via", None)
     html = leer(doc.indice, via) if via else leer(doc.indice)
     patron = re.compile(doc.patron, re.IGNORECASE)
-    candidatos = [unescape(h) for h in _HREF_PDF.findall(html) if patron.search(unescape(h))]
+    href = _HREF_PDF_CONSULTA if getattr(doc, "consulta", False) else _HREF_PDF
+    candidatos = [unescape(h) for h in href.findall(html) if patron.search(unescape(h))]
     if not candidatos:
         raise LookupError(
             f"{doc.clave}: ningún PDF coincide con {doc.patron!r} en {doc.indice} "

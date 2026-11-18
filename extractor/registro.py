@@ -67,6 +67,10 @@ class Documento:
     # No. 75, 31-X-22)', Querétaro): cada una pasa a su propio renglón, donde
     # `notas` la reconoce.
     notas_en_linea: str | None = None
+    # Los href del índice llevan consulta tras '.pdf' ('….pdf?fecha=…', Nuevo
+    # León): también cuentan como PDF. Opcional para no cambiar qué enlaces ve
+    # el resto del corpus.
+    consulta: bool = False
 
 
 def _ley(clave, etiqueta, sigla, archivo, encabezado="", *, parser="articulado",
@@ -233,6 +237,8 @@ def a_dict(doc: Documento) -> dict:
         d["orden"] = doc.orden
     if doc.huecos:
         d["huecos"] = True
+    if doc.consulta:
+        d["consulta"] = True
     return d
 
 
@@ -247,6 +253,7 @@ def de_dict(d: dict) -> Documento:
         huecos=bool(d.get("huecos")), notas=d.get("notas"),
         notas_previas=d.get("notas_previas"),
         via=d.get("via"), notas_en_linea=d.get("notas_en_linea"),
+        consulta=bool(d.get("consulta")),
     )
 
 

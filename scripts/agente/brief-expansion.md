@@ -59,6 +59,8 @@ sus opciones), los tres módulos que ya existen (`jalisco.py`, `cdmx.py`,
    - lo mejor es `indice` (la página que la enlaza) + `patron` (regex del
      href) + `orden` (`unico` si el índice enlaza un solo PDF que casa;
      `ddmmaa`/`ddmmaaaa` si el nombre lleva la fecha y gana la más reciente);
+     si los href llevan consulta tras `.pdf` (`….pdf?fecha`), añade
+     `consulta=True`;
    - si el PDF tiene una ruta fija que no cambia con las reformas, `url=`.
    Comprueba que `url_vigente` resuelve exactamente el PDF que quieres.
    La clave sale sola del nombre oficial (`clave_de`); usa `clave=` solo si el

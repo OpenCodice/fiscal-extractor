@@ -68,3 +68,18 @@ def test_texto_enlace_no_casa_anclas_parciales():
     with pytest.raises(LookupError, match="risat"):
         url_vigente(POR_CLAVE["risat"],
                     leer=lambda _u: "<a href='/x'>RIANAM</a><a href='/y'>RISAT viejo</a>")
+
+
+def test_consulta_acepta_href_con_parametros_tras_pdf():
+    from extractor.estatales import ley
+    html = ('<a href="/leyes/pdf/CODIGO%20CIVIL.pdf?2026-10-01">CC</a>'
+            '<a href="/leyes/pdf/OTRA.pdf?2026-01-01">otra</a>')
+    doc = ley("nuevo-leon", "Código Civil para el Estado de Nuevo León", "CCNL",
+              medio="P.O.", indice="https://www.hcnl.gob.mx/leyes/", patron=r"CODIGO%20CIVIL",
+              consulta=True)
+    assert url_vigente(doc, leer=lambda _u: html) == \
+        "https://www.hcnl.gob.mx/leyes/pdf/CODIGO%20CIVIL.pdf?2026-10-01"
+    sin = ley("nuevo-leon", "Código Civil para el Estado de Nuevo León", "CCNL",
+              medio="P.O.", indice="https://www.hcnl.gob.mx/leyes/", patron=r"CODIGO%20CIVIL")
+    with pytest.raises(LookupError):
+        url_vigente(sin, leer=lambda _u: html)
