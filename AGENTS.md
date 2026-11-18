@@ -41,10 +41,10 @@ unidad está mal, se corrige aquí.
 - `.github/workflows/vigilar-fiscal.yml` y `vigilar-federal.yml` — la vigilancia
   de `fiscal-mexicano` y `leyes-federales`. Viven aquí, no en los repos de
   datos, para que el historial de esos repos solo tenga cambios de texto legal.
-  Las lanza cada lunes el Worker `scheduler` (constitucion-extractor/scheduler/)
-  y abren en el repo de datos un PR con un commit por documento
-  (`scripts/commits_por_documento.py`), que su job `revisar` valida y fusiona
-  con rebase.
+  Las lanza cada lunes el supervisor (`OpenCodice/supervisor`; ver
+  «Encadenamiento y salud de las corridas») y abren en el repo de datos un PR
+  con un commit por documento (`scripts/commits_por_documento.py`), que su job
+  `revisar` valida y fusiona con rebase.
 - `.github/workflows/revisar-pr.yml` (reutilizable) y `scripts/validar_pr.sh` —
   el gate de los PR de los repos de datos, que así no necesitan workflows
   propios. Cada vigilancia lo llama tras abrir su PR (y se puede lanzar a mano
@@ -309,8 +309,9 @@ de `cerrar` y con su propio tiempo:
    juzga `impacto.sh`; `reparar.sh publicar` solo sube el arreglo a main si
    todo quedó confirmado como mejora, y anota el intento como `publicado` o
    `descartado` con su motivo.
-5. Con un arreglo publicado, el job lanza otra vigilancia: la huella del
-   extractor cambió, así que `planear` reintenta las leyes excluidas
+5. Con un arreglo publicado, el job pide otra vigilancia (salida
+   `pedir_vigilancia`, que lanza el supervisor): la huella del extractor
+   cambió, así que `planear` reintenta las leyes excluidas
    (`reintento`) y manda a revisar otra vez lo publicado con
    `revision_pendiente` (`plan["revisar"]`). Sus bloques sin cambios reusan sus
    veredictos; solo se paga lo que cambió.
@@ -329,9 +330,9 @@ de main, o reconstruidas por las compuertas con el arreglo recién publicado—
 pasan solas a `LEYES`: un paso determinista (`reparar.sh promover`, que corre
 `reparacion.py promover` en un clon limpio de main) agrega al final de su
 módulo un bloque `_A_LEYES` que las mueve, sin tocar lo demás, con `pytest`
-en verde, y lanza la vigilancia de su estado, que las da de alta tras su
-revisión completa (para `planear` son un `reintento`). Una ley que ningún
-arreglo puede sumar (el Código de Procedimientos Civiles de la CDMX, que
+en verde, y el job pide la vigilancia de su estado (`pedir_altas`), que las da
+de alta tras su revisión completa (para `planear` son un `reintento`). Una ley
+que ningún arreglo puede sumar (el Código de Procedimientos Civiles de la CDMX, que
 repite su numeración) va además en `FUERA_POR_DISENO` de su módulo y la
 reparación no la toca. La medición de FUERA se comprueba por sha256 después
 del agente: si cambió, no se promueve nada con ella.
@@ -345,28 +346,61 @@ incluye además `estatales/*.py` y `disposicion.py`.
 
 ## Encadenamiento y salud de las corridas
 
-Las cuatro corridas encadenadas (`vigilar-fiscal`, `vigilar-federal`,
-`vigilar-leyes-estatales`, `expandir-estatales`) cumplen el contrato del
-supervisor (`OpenCodice/supervisor`):
+**Ningún workflow lanza a otro ni a sí mismo.** Cada corrida hace una unidad de
+trabajo, declara qué tiene que correr después y termina; el único que hace
+`workflow_dispatch` es el supervisor (`OpenCodice/supervisor`, cada 15
+minutos), que también lleva los horarios (`cadenas.toml`), los reintentos y el
+despliegue de la web. Las cuatro corridas encadenadas (`vigilar-fiscal`,
+`vigilar-federal`, `vigilar-leyes-estatales`, `expandir-estatales`) cumplen su
+contrato:
 
-- Input `origen` (quién la lanzó; cada `gh workflow run` de un workflow pasa
-  `-f origen=<job>`) y `run-name` con todos los inputs como `clave=[valor]`:
-  la API no devuelve los inputs de un dispatch, el título de la corrida sí.
-- Último job `estado`, cuyo nombre dice si quedó otra tanda:
-  `estado pendiente=[true]` cuando `cerrar` terminó bien y su salida
-  `continuar` es `true` (federal y leyes estatales); `false` en las demás.
-- `continuar` (la salida de `cerrar` y el job) es «queda trabajo y esta
-  corrida avanzó»: abrió un PR o, sin PR, dejó veredictos nuevos de una
-  revisión que no cupo (leyes estatales) o el agente reparó el extractor
-  (federal). Con PR, el job espera su fusión; sin PR, lanza sin esperar. Sin
-  avance no se relanza: otra corrida repetiría lo mismo.
+- Input `origen` (el supervisor lanza con `origen=supervisor`; vacío = a mano)
+  y `run-name` con todos los inputs como `clave=[valor]`: la API no devuelve
+  los inputs de un dispatch, el título de la corrida sí.
+- **Peticiones.** Un paso que necesita que corra algo después escribe en su
+  salida `pedir` una petición en JSON, `{"workflow": "<archivo.yml>",
+  "inputs": {…}}` (valores siempre cadenas, sin `origen`), y su job la expone
+  como salida `pedir_<algo>`. Significa «después de esta corrida tiene que
+  empezar una de ese workflow que abarque esos inputs»: el supervisor la da
+  por atendida con cualquier corrida posterior que la abarque (una vigilancia
+  completa abarca una de `estados=jalisco`), así que pedir de más no duplica
+  trabajo, y él se encarga de no perder nada en la cola de cada grupo de
+  concurrency. Si el valor sale de una variable, se construye con `jq -cn
+  --arg`. Las que hay:
+
+  | Workflow, job | Salida | Pide | Cuándo |
+  |---|---|---|---|
+  | `vigilar-federal`, `reparar` | `pedir_vigilancia` | `vigilar-federal.yml` | publicó un arreglo del extractor |
+  | `vigilar-leyes-estatales`, `reparar` | `pedir_vigilancia` | `vigilar-leyes-estatales.yml` (completa) | publicó un arreglo del extractor |
+  | | `pedir_altas` | `vigilar-leyes-estatales.yml` `estados=<promovidos>` | pasó leyes de `FUERA` a `LEYES` y no pidió la completa |
+  | | `pedir_redeclaracion` | `expandir-estatales.yml` `redeclarar=<estado>` | leyes de `FUERA` que no se descargan por algo del extractor |
+  | `expandir-estatales`, `ronda` | `pedir_altas` | `vigilar-leyes-estatales.yml` `estados=<con altas pendientes>` | quedan leyes declaradas sin alta |
+  | | `pedir_vigilancia` | `vigilar-leyes-estatales.yml` `estados=<estado>` | publicó el módulo (o la redeclaración) |
+  | | `pedir_ronda` | `expandir-estatales.yml` `estado=<estado>` | agregó su dominio a egress-mx |
+  | `expandir-estatales`, `codigo` | `pedir_ronda` | `expandir-estatales.yml` `estado=<estado>` o `redeclarar=<estado>` | publicó la opción que faltaba |
+
+- Último job `estado`, que depende de todos los demás y corre siempre. Su
+  nombre dice si quedó otra tanda con los mismos inputs
+  (`estado pendiente=[true]`), y sube el artefacto `cadena` (`cadena.json`:
+  el resultado y las salidas de cada job, `toJSON(needs)`), de donde el
+  supervisor lee las peticiones. Una corrida sin job `estado` no terminó.
+- `pendiente=[true]` en federal y leyes estatales: `cerrar` terminó bien y su
+  salida `continuar` es `true`, es decir, «queda trabajo y esta corrida
+  avanzó»: abrió un PR o, sin PR, dejó veredictos nuevos de una revisión que
+  no cupo (leyes estatales) o el agente reparó el extractor (federal). Sin
+  avance no se declara: otra corrida repetiría lo mismo. La tanda siguiente
+  no necesita esperar la fusión del PR: `revisar` es parte de la corrida y
+  `planear` espera al PR anterior. En la ronda de expansión, `pendiente` es
+  «la cadena anterior seguía en curso» (ver «Ronda de expansión»); en
+  `vigilar-fiscal`, siempre `false`.
 - Una fuente caída pone en rojo el job `fuentes`, no `cerrar`: la corrida
-  queda fallida y `salud` la reintenta, pero `continuar` y `reparar` corren.
-- `web` avisa a constitucion-web en cuanto termina `revisar`. `salud` va al
-  final y mira todos los jobs, también `reparar` y `continuar`: reintenta una
-  vez (`reintento=true`) y, si el reintento falla, deja un issue. Un job que
-  agota su `timeout-minutes` termina `cancelled` sin que la corrida se haya
-  cancelado, y cuenta como falla.
+  queda fallida y el supervisor la reintenta, pero `pendiente` y `reparar` no
+  dependen de la ley que no respondió.
+- Las fallas son del supervisor: reintenta con esperas y deja un issue por
+  huella en su repo. Un job que agota su `timeout-minutes` termina
+  `cancelled` sin que la corrida se haya cancelado, y cuenta como falla. La
+  web tampoco se avisa desde aquí: el supervisor lanza su despliegue cuando
+  los datos cambian.
 - Tiempos: cada job tiene `timeout-minutes` (máximo 355) y ningún paso uno
   mayor que el de su job. Los pasos de agente son secuenciales y casi nunca
   agotan todos su límite, así que su suma puede pasar del tiempo del job.
@@ -374,16 +408,19 @@ supervisor (`OpenCodice/supervisor`):
   de FUERA, PDF de lo publicado) se restauran con `actions/cache/restore` y
   se guardan con `actions/cache/save` e `if: always()` justo después del paso
   que las llena, no al terminar el job.
-- En `reparar`, los pasos que lanzan la vigilancia tras publicar un arreglo o
+- En `reparar`, los pasos que piden la vigilancia tras publicar un arreglo o
   promover leyes llevan `!cancelled()`: lo que ya está en main se reintenta
-  aunque otro paso del job haya fallado.
-- `scripts/lanzar_ronda_expansion.sh` lanza `expandir-estatales.yml` desde
-  la propia ronda (egress, `codigo`): si ya hay una ronda en espera no lanza
-  otra, porque la cancelaría y una ronda no abarca a otra (el estado sigue
-  `pendiente` y una redeclaración la vuelve a pedir `reparar`).
+  aunque otro paso del job haya fallado. Si el job agota su tiempo y la
+  petición se pierde, el supervisor reintenta igual al ver el extractor nuevo.
+- Ningún job tiene `actions: write`; el que consulta corridas (`ronda`, para
+  saber si la cadena terminó) tiene `actions: read`.
 - `tests.yml` (job `infra`) corre `actionlint` (con `.github/actionlint.yaml`)
-  y el lint de workflows del supervisor; `tests/test_infra_*.py` ejecuta los
-  lanzadores con un `gh` falso.
+  y el lint de workflows del supervisor. `tests/test_infra_sin_lanzamientos.py`
+  falla si reaparece un lanzamiento en `.github/` o `scripts/` (`gh workflow
+  run`, `gh run rerun`, un `dispatches` de la API) y comprueba, leyendo los
+  YAML, que cada salida `pedir*` sale de un paso que la escribe, que su JSON
+  es válido y nombra un workflow y unos inputs que existen, y que `estado`
+  depende de todos los jobs y sube `cadena`.
 
 ## Leyes estatales
 
@@ -423,12 +460,6 @@ fase (2026-11-17):
   `fuentes.json` de leyes-estatales guarda lo publicado (incluida/excluida y por
   qué, PDF, extractor), solo con los campos que identifican a la ley: cómo leer
   su PDF vive en el código y `registro.cargar` lo toma de ahí.
-- **Relanzar la vigilancia:** todo lo que la lanza (la cadena, `reparar`, la
-  ronda) usa `scripts/lanzar_vigilancia_estatal.sh`. GitHub deja una sola
-  corrida en espera por grupo de concurrency y la nueva cancela a la que
-  esperaba; si ya hay una en espera (o no se puede mirar la cola), el script
-  lanza la vigilancia completa en lugar de solo los `estados` pedidos, para no
-  perder lo que esa iba a hacer.
 - **Vigilancia:** `vigilar-leyes-estatales.yml`, el flujo federal
   (`extractor estatal planear|extraer|integrar|cerrar`, mismos pasos que
   `federal …`) por tandas (`--lote`, 8 altas por corrida). Las altas pasan la
@@ -477,7 +508,7 @@ de `FUERA` las retoma la reparación autónoma.
 
 Suma un estado al corpus de leyes estatales por semana, sin que nadie trabaje
 en una computadora: `expandir-estatales.yml` (cada miércoles, lanzada por el
-Worker `scheduler`; a mano con `gh workflow run expandir-estatales.yml [-f
+supervisor; a mano con `gh workflow run expandir-estatales.yml [-f
 estado=<slug>]`). La parte determinista vive en `scripts/expansion.py`.
 
 - **La lista:** `extractor/estatales/pendientes.json`, los estados sin módulo
@@ -489,10 +520,21 @@ estado=<slug>]`). La parte determinista vive en `scripts/expansion.py`.
   la huella del extractor, y `impacto.yml` la ignora).
 - **Solo cuando la cadena anterior terminó:** ninguna `vigilar-leyes-estatales`
   en curso o en cola, ningún PR suyo abierto y ninguna ley declarada sin alta
-  cuyo PDF responda (`expansion.py listo`). Si quedan altas (una tanda que no
-  continuó), la ronda relanza la vigilancia de esos estados y no empieza otro.
-  Un estado por ronda. El input `sin_esperar` (solo a mano, para probar) se
-  salta esta condición.
+  cuyo PDF responda (`expansion.py listo`). Un estado por ronda. El input
+  `sin_esperar` (solo a mano, para probar) se salta esta condición.
+  - Si la cadena sigue en curso, la corrida no empieza nada y **queda
+    pendiente**: el paso «¿Terminó la cadena anterior?» espera ahí mismo a que
+    termine (pregunta cada 5 minutos, hasta 300) y la corrida acaba en verde
+    con `estado pendiente=[true]`; el supervisor lanza otra ronda con los
+    mismos inputs, que ya la encuentra libre (o vuelve a esperar). La espera
+    va dentro de la corrida para que no haya un ciclo: el supervisor relanza
+    lo pendiente en minutos y la cadena puede tardar un día, así que sin ella
+    serían decenas de rondas vacías; con ella, a lo más unas cinco al día.
+    Mientras espera ocupa el grupo `expandir-estatales`, y una redeclaración
+    pedida hace cola detrás.
+  - Si la cadena terminó pero quedan altas (una tanda que no continuó), la
+    ronda pide la vigilancia de esos estados (`pedir_altas`) y no empieza
+    otro: el estado nuevo espera a la ronda de la semana siguiente.
 - **Elegir y contar el intento** (`expansion.py elegir`): el primer `pendiente`
   bajo el tope (o el del input `estado`), primero los que nunca se agotaron.
   Un `egress` cuyo dominio ya aparece en la lista de egress-mx
@@ -534,8 +576,9 @@ estado=<slug>]`). La parte determinista vive en `scripts/expansion.py`.
   es error de la ronda, no de la ley: no se publica nada.
 - **Publicar** (`expandir.sh publicar`, desde un clon limpio de main): copia
   solo el módulo y sus pruebas, anota el estado `publicado` y sube un commit
-  «Leyes estatales: <Estado> (ronda de expansión)». Después lanza
-  `vigilar-leyes-estatales.yml -f estados=<estado>`: su cadena da de alta por
+  «Leyes estatales: <Estado> (ronda de expansión)». Después pide
+  `vigilar-leyes-estatales.yml` con `estados=<estado>` (`pedir_vigilancia`):
+  su cadena da de alta por
   tandas tras la revisión completa, y `reparar` arregla lo que falle.
 - **Falla cerrada:** cualquier otro final (sin veredicto, una compuerta, un
   error) anota el intento como fallido con su motivo, y el estado se reintenta
@@ -560,10 +603,11 @@ estado=<slug>]`). La parte determinista vive en `scripts/expansion.py`.
   oficial (el de la constitución del estado, su `pista`, o uno de la lista).
   Lo demás no se agrega solo y el intento cuenta como fallido (el Worker,
   además, solo acepta de ese archivo dominios `.mx`). Agregado, el intento no
-  cuenta, el estado vuelve a `pendiente` y la ronda se relanza para él cuando
-  la lista nueva ya se ve en raw.githubusercontent.com.
+  cuenta, el estado vuelve a `pendiente` y se pide otra ronda para él
+  (`pedir_ronda`) cuando la lista nueva ya se ve en raw.githubusercontent.com
+  (`expandir.sh egress` la espera antes de volver).
 - **Ensayo** (solo a mano): `-f ensayo=true` hace todo sin subir nada (ni el
-  intento, ni el módulo, ni un arreglo, ni egress-mx) ni relanzar nada;
+  intento, ni el módulo, ni un arreglo, ni egress-mx) ni pedir otra corrida;
   `-f simular=codigo|egress -f simular_texto=…` sustituye al agente de la ronda
   por ese veredicto (implica ensayo), para probar el job `codigo` o el paso de
   egress sin publicar nada falso.
@@ -605,7 +649,7 @@ con la misma forma que `reparar`:
    limpio de main y lo sube en un commit «Leyes estatales: <opción> (ronda de
    expansión)» con el estado de vuelta en `pendiente` y su intento devuelto
    (el que pidió el código no cuenta: el agente hizo bien en pedirlo), y el
-   job relanza la ronda para ese estado. Decidido así, y no reintentar dentro
+   job pide otra ronda para ese estado (`pedir_ronda`). Decidido así, y no reintentar dentro
    del mismo job, para que el reintento tenga su propio tiempo y pase por todo
    lo de una ronda normal. Si no, anota el descarte con su motivo y el intento
    sí cuenta. Al llegar a main, `impacto.yml` lo mide otra vez como cualquier
@@ -618,10 +662,9 @@ la arregla `reparar` (no hay PDF que reparar). Si la causa está en el
 extractor (`reparacion.causa_fuente`: un href que `http.client` rechaza, como
 el espacio de `….pdf?2026-03- 9` en Nuevo León; un patrón que ya no casa; un
 400 del servidor) y no en la red (caído, lento, un 404, una página de error),
-el job `reparar` de `vigilar-leyes-estatales.yml`, tras medir FUERA, lanza
-`expandir-estatales.yml -f redeclarar=<estado>` (`expansion.py
-redeclarar-pendiente`; un estado por corrida y no si ya hay una ronda en curso
-o en cola). Es la ronda de expansión sobre el módulo que ya existe:
+el job `reparar` de `vigilar-leyes-estatales.yml`, tras medir FUERA, pide
+`expandir-estatales.yml` con `redeclarar=<estado>` (`pedir_redeclaracion`;
+`expansion.py redeclarar-pendiente` elige un estado por corrida). Es la ronda de expansión sobre el módulo que ya existe:
 
 1. Con el extractor de main y `EGRESS_MX_TOKEN`, antes del agente:
    `reparacion.py fuera --estado E --solo-fuente` vuelve a intentar la
@@ -635,8 +678,8 @@ o en cola). Es la ronda de expansión sobre el módulo que ya existe:
 2. El agente (`brief-redeclaracion.md`) solo puede agregar opciones de `ley()`
    a esas entradas de FUERA, sin pasarlas a `LEYES` (la promoción es de
    `reparar.sh promover`). Si falta la opción, entrega `codigo` y el mismo job
-   `codigo` de «Arreglo de código» la agrega; al publicarla relanza la
-   redeclaración (`-f redeclarar=`), con el intento devuelto.
+   `codigo` de «Arreglo de código» la agrega; al publicarla pide otra vez la
+   redeclaración (`redeclarar=`), con el intento devuelto.
 3. Cerco: solo cambia el módulo. Compuertas: `pytest`, `expansion.py
    registro` y `redeclaracion-cerco`: `MEDIO`, cada entrada de `LEYES` (y su
    orden), las claves de `FUERA` y de `FUERA_POR_DISENO` y las entradas de
@@ -648,7 +691,7 @@ o en cola). Es la ronda de expansión sobre el módulo que ya existe:
 4. `expandir.sh publicar` aplica el cambio del agente al módulo de main como
    parche (main pudo cambiar el módulo: un bloque `_A_LEYES`), corre `pytest`
    otra vez y sube «Leyes estatales: <Estado>, opciones nuevas para leyes en
-   FUERA»; después lanza la vigilancia del estado, cuyo `reparar` las descarga,
+   FUERA»; después pide la vigilancia del estado, cuyo `reparar` las descarga,
    construye y audita: limpias pasan a `LEYES`, con defectos entran al
    `objetivo` de la reparación.
 
