@@ -131,3 +131,15 @@ FUERA = [
             "CODIGO%20CIVIL%20PARA%20EL%20ESTADO%20DE%20NUEVO%20LEON%20", _CODIGOS),
      "el PDF numera sus artículos como 'Art. 22.-' y el extractor solo reconoce 'Artículo'"),
 ]
+
+# Reparación autónoma (scripts/reparacion.py promover, 2026-11-18): estas leyes
+# de FUERA ya quedan con build y auditar limpios sobre su PDF; la vigilancia
+# las da de alta tras su revisión completa.
+_A_LEYES = {
+    "nuevo-leon/codigo-penal",
+    "nuevo-leon/ley-de-hacienda",
+    "nuevo-leon/ley-de-transparencia-y-acceso-a-la-informacion-publica",
+    "nuevo-leon/ley-organica-del-poder-judicial",
+}
+LEYES = list(LEYES) + [d for d, _ in FUERA if d.clave in _A_LEYES]
+FUERA = [(d, m) for d, m in FUERA if d.clave not in _A_LEYES]
