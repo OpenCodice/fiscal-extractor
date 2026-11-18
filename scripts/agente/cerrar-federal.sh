@@ -145,7 +145,18 @@ publicar() {
   export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
   git commit -q -m "Reparación automática (leyes federales): ${titulo:-ajuste del extractor a un formato de PDF}"
   destino="${EXTRACTOR_PUSH_URL:-https://x-access-token:${EXTRACTOR_TOKEN:-}@github.com/${EXTRACTOR_SLUG:-}.git}"
-  if git pull -q --rebase "$destino" main && git push -q "$destino" HEAD:main; then
+  # main recibe pushes de otras corridas: si avanzó entre el rebase y el push,
+  # se rebasa otra vez.
+  subido=false
+  for vuelta in 1 2 3; do
+    if git pull -q --rebase "$destino" main && git push -q "$destino" HEAD:main; then
+      subido=true
+      break
+    fi
+    git rebase --abort 2>/dev/null || true
+    [ "$vuelta" = 3 ] || sleep $((vuelta * 5))
+  done
+  if [ "$subido" = true ]; then
     # shellcheck disable=SC2086
     python - "$TRABAJO" "$titulo" "$(git rev-parse HEAD)" $reparados <<'PY'
 import json, sys

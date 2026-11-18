@@ -257,8 +257,19 @@ print(" ".join(t.split())[:120])' "$REP/veredicto.json")"
       -m "Leyes con hallazgos que cambian: $(cat "$REP/cambian.txt")"
     git diff "$partida" HEAD > "$REP/arreglo.patch"
     destino="${EXTRACTOR_PUSH_URL:-https://x-access-token:${EXTRACTOR_TOKEN:-}@github.com/${EXTRACTOR_SLUG:-}.git}"
-    if git -c core.hooksPath=/dev/null pull -q --rebase "$destino" main \
-        && git -c core.hooksPath=/dev/null push -q "$destino" HEAD:main; then
+    # main recibe pushes de otras corridas: si avanzó entre el rebase y el push,
+    # se rebasa otra vez.
+    subido=false
+    for vuelta in 1 2 3; do
+      if git -c core.hooksPath=/dev/null pull -q --rebase "$destino" main \
+          && git -c core.hooksPath=/dev/null push -q "$destino" HEAD:main; then
+        subido=true
+        break
+      fi
+      git rebase --abort 2>/dev/null || true
+      [ "$vuelta" = 3 ] || sleep $((vuelta * 5))
+    done
+    if [ "$subido" = true ]; then
       echo "reparado=true" >> "${GITHUB_OUTPUT:-/dev/null}"
       python3 - "$REP" "$titulo" "$(git rev-parse HEAD)" <<'PY'
 import json, sys

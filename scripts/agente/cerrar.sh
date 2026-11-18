@@ -148,7 +148,18 @@ publicar_arreglo() {
   export GIT_AUTHOR_NAME="${GITHUB_ACTOR:-opencodice-ci}" GIT_COMMITTER_NAME="${GITHUB_ACTOR:-opencodice-ci}"
   export GIT_AUTHOR_EMAIL="${GITHUB_ACTOR_ID:-0}+${GITHUB_ACTOR:-opencodice-ci}@users.noreply.github.com"
   export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
-  if git pull -q --rebase "$destino" main && git push -q "$destino" HEAD:main; then
+  # main recibe pushes de otras corridas: si avanzó entre el rebase y el push,
+  # se rebasa otra vez.
+  subido=false
+  for vuelta in 1 2 3; do
+    if git pull -q --rebase "$destino" main && git push -q "$destino" HEAD:main; then
+      subido=true
+      break
+    fi
+    git rebase --abort 2>/dev/null || true
+    [ "$vuelta" = 3 ] || sleep $((vuelta * 5))
+  done
+  if [ "$subido" = true ]; then
     estado_arreglo publicado
   else
     git rebase --abort 2>/dev/null || true
