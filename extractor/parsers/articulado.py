@@ -69,7 +69,7 @@ ARTICULO_RE = re.compile(
 ORDINALES_ESTATAL = (ORDINALES + "|Quitus|Quintos|Sextus|Sexties|S[ée]ptimus|Octavus|"
                      "Undecies|Duodecies|Terdecies|Quaterdecies|Cuarter")
 ARTICULO_ESTATAL_RE = re.compile(
-    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
+    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|\(SIC\)(?=\s+\d+\s+[A-ZÁÉÍÓÚÑ]+\s*\.-)|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
     r"(?:(?:-(?=[A-ZÑ])|\s(?=[A-Z][.\-])|(?<=\d)(?=[A-Z]\.))([A-ZÑ])(?![A-Za-zñ]))?"  # letra "-A", " A." (118 A.) o "132G."; "142-Ñ"
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
@@ -463,11 +463,26 @@ def limpiar_paginas(paginas: list[str], doc: Documento, formulas: bool = False) 
 
 def _notas_aparte(paginas: list[str], nota: re.Pattern) -> list[str]:
     """Cada nota a renglón seguido en su propio renglón, sin el salto que la
-    partía. Una nota partida por el salto de página se queda como está."""
+    partía. Una nota que cruza el salto de página (arranca en los últimos renglones
+    de una y sigue en los primeros de la siguiente) se junta en la primera."""
     salida = []
-    for texto in paginas:
+    recorte = 0   # lo que la nota partida de la página anterior se llevó de esta
+    for i, texto in enumerate(paginas):
+        texto = texto[recorte:].removeprefix("\n") if recorte else texto
+        recorte = 0
+        # Una nota entre paréntesis que arranca al final de la página y sigue en
+        # los primeros renglones de la siguiente se busca sobre ambas.
+        sigue = "\n".join(paginas[i + 1].split("\n")[:3]) if i + 1 < len(paginas) else ""
         partes, previo = [], 0
-        for m in nota.finditer(texto):
+        for m in nota.finditer(texto + "\n" + sigue if sigue else texto):
+            if m.start() >= len(texto):
+                break
+            if m.end() > len(texto):
+                # La nota cruza el salto de página: queda completa en esta y la
+                # siguiente pierde su resto (si la unión no es una nota entera
+                # que cierra en esos renglones, no se toca).
+                recorte = m.end() - len(texto) - 1
+                texto = texto + "\n" + sigue[:recorte]
             antes = texto[previo:m.start()].rstrip(" \t")
             # '…o de particulares;' / 'y (Ref. …)': la conjunción que cierra la
             # fracción viene en el renglón de la nota; es del texto anterior.
@@ -516,6 +531,7 @@ _INTERLINEADO_PARRAFO = 1.5    # × el interlineado: espacio entre párrafos
 # como siempre, por el texto.
 _CIERRA_RE = re.compile(r"(?:[.:;)]|[;,]\s+[yoeu])$")
 _ACABA_EN_PARTICULA_RE = re.compile(r"\b(?:de|del|la|las|el|los|lo|al|en|con|por|para|un|una|su|sus|que)$")
+_ACABA_EN_CONJUNCION_RE = re.compile(r"\b[ou]$")
 _FRACCION_ROMANA_RE = re.compile(r"^[IVX]{1,5}\.\s+[A-ZÁÉÍÓÚÑ]")
 _INCISO_MAYUSCULA_RE = re.compile(r"^[A-Z]\)\s+\S")
 _ABRE_PARRAFO_RE = re.compile(r"^(?:[^a-záéíóúüñ]|[a-zñ]{1,4}[.)]\s)")   # o un inciso: 'd. ', 'ii) '
@@ -628,6 +644,14 @@ def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str,
                 if (_ACABA_EN_PARTICULA_RE.search(ra["texto"])
                         and not _CIERRA_RE.search(ra["texto"])
                         and not _FRACCION_ROMANA_RE.match(rb["texto"])):
+                    return False
+                # Igual con la conjunción 'o'/'u' ('…unidades privativas o' /
+                # 'que pertenezcan…'), si lo que sigue abre en minúscula.
+                if (_ACABA_EN_CONJUNCION_RE.search(ra["texto"])
+                        and not _CIERRA_RE.search(ra["texto"])
+                        and len(ra["texto"].split()) >= 3
+                        and re.match(r"[a-záéíóúüñ]", rb["texto"])
+                        and not re.match(r"[a-zñ]{1,4}[.)]\s", rb["texto"])):
                     return False
                 return True
             if salto <= 0 or salto > _INTERLINEADO_NORMAL * paso:
