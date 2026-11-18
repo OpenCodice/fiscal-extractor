@@ -1,4 +1,5 @@
 name: Vigilar leyes federales
+run-name: "vigilar-federal reintento=[${{ inputs.reintento }}] docs=[${{ inputs.docs }}] lote=[${{ inputs.lote }}] origen=[${{ inputs.origen }}]"
 
 # Compara el índice de leyes vigentes de la Cámara de Diputados y las cabeceras
 # de cada PDF contra fuentes.json, y reprocesa solo lo que cambió: leyes nuevas,
@@ -30,6 +31,10 @@ on:
         description: 'Máximo de leyes nuevas en esta corrida (vacío = sin límite)'
         required: false
         default: '40'
+      origen:
+        description: 'Quién lanzó la corrida (scheduler, supervisor, continuar, reparar, ronda, salud); vacío = a mano'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -141,10 +146,13 @@ jobs:
     needs: [planear, extraer]
     if: ${{ !cancelled() && needs.planear.outputs.hay == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 355
     outputs:
       pr: ${{ steps.pr.outputs.pull-request-number }}
-      continuar: ${{ (needs.planear.outputs.pendientes != '0' || steps.cierre.outputs.reparado == 'true' || steps.cierre.outputs.aplazadas == 'true') && 'true' || 'false' }}
+      # Queda trabajo y esta corrida avanzó (publica algo o el agente reparó el
+      # extractor): si no avanzó, otra corrida repetiría lo mismo.
+      continuar: ${{ (needs.planear.outputs.pendientes != '0' || steps.cierre.outputs.reparado == 'true' || steps.cierre.outputs.aplazadas == 'true') && (steps.pr.outputs.pull-request-number != '' || steps.cierre.outputs.reparado == 'true') && 'true' || 'false' }}
+      fuentes_fallidas: ${{ steps.cierre.outputs.fuentes_fallidas }}
     permissions:
       contents: write
       pull-requests: write
@@ -189,7 +197,8 @@ jobs:
 
       - name: Agente — reparar el extractor (solo si la auditoría falló)
         if: steps.integrar.outputs.fallas == 'true' && env.TIENE_CLAUDE == 'true'
-        timeout-minutes: 150
+        # Los cuatro agentes de este job, juntos, caben en el tiempo del job.
+        timeout-minutes: 75
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: bash /tmp/extractor/scripts/agente/correr-federal.sh
@@ -198,10 +207,10 @@ jobs:
         # Medir el impacto de un arreglo reconstruye todo lo publicado desde su
         # PDF exacto (scripts/impacto_corpus.py); los ya descargados se guardan.
         if: steps.integrar.outputs.fallas == 'true' && env.TIENE_CLAUDE == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: /tmp/pdfs-corpus
-          key: pdfs-corpus-${{ github.run_id }}
+          key: pdfs-corpus-${{ github.run_id }}-${{ github.run_attempt }}-cerrar
           restore-keys: pdfs-corpus-
 
       - name: Compuertas del arreglo
@@ -213,9 +222,17 @@ jobs:
           bash /tmp/extractor/scripts/agente/cerrar-federal.sh compuertas
           echo "arreglo=$(cat "$AGENTE_DIR/arreglo-estado.txt" 2>/dev/null || echo ninguno)" >> "$GITHUB_OUTPUT"
 
+      - name: Guardar la caché de los PDF publicados
+        # En cuanto se descargaron: lo que falle después no obliga a bajarlos otra vez.
+        if: always() && steps.compuertas.outcome != 'skipped'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/pdfs-corpus
+          key: pdfs-corpus-${{ github.run_id }}-${{ github.run_attempt }}-cerrar
+
       - name: Agente — confirmar el impacto del arreglo en el corpus
         if: steps.compuertas.outputs.arreglo == 'impacto'
-        timeout-minutes: 180
+        timeout-minutes: 60
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           IMPACTO: /tmp/agente/impacto-arreglo
@@ -241,7 +258,7 @@ jobs:
         # agente la revisa entera contra su PDF, por bloques.
         id: revision
         if: env.TIENE_CLAUDE == 'true'
-        timeout-minutes: 150
+        timeout-minutes: 110
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: bash /tmp/extractor/scripts/agente/revision-federal.sh revisar
@@ -331,7 +348,7 @@ jobs:
 
       - name: Agente — confirmar las correcciones
         if: steps.correcciones.outputs.pendientes == 'true' && env.TIENE_CLAUDE == 'true'
-        timeout-minutes: 150
+        timeout-minutes: 60
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           IMPACTO: /tmp/agente/impacto-vigilancia
@@ -412,8 +429,16 @@ jobs:
         run: |
           { echo "## Versión anterior conservada"; cat /tmp/agente/pr.md; } >> "$GITHUB_STEP_SUMMARY"
 
+  fuentes:
+    # Una fuente caída deja la corrida en rojo (y `salud` la reintenta), pero
+    # desde un job aparte: `cerrar` termina bien y lo demás de la corrida
+    # (`continuar`, `reparar`) no depende de la ley que no respondió.
+    needs: cerrar
+    if: ${{ !cancelled() && needs.cerrar.outputs.fuentes_fallidas == 'true' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
       - name: Alertar fuentes fallidas
-        if: steps.cierre.outputs.fuentes_fallidas == 'true'
         run: |
           echo "::error::Alguna fuente no se pudo descargar. Revisa el paso de extracción."
           exit 1
@@ -435,8 +460,9 @@ jobs:
   continuar:
     # Quedan leyes por dar de alta, o el agente reparó el extractor y hay que
     # reconstruir con él: en cuanto `revisar` fusione este PR, otra corrida.
+    # Sin PR (el arreglo no cambió nada publicable todavía), sin esperar.
     needs: cerrar
-    if: needs.cerrar.outputs.continuar == 'true' && needs.cerrar.outputs.pr != ''
+    if: needs.cerrar.outputs.continuar == 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -446,15 +472,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ needs.cerrar.outputs.pr }}
         run: |
-          for i in $(seq 1 90); do
-            estado=$(gh pr view "$PR" -R OpenCodice/leyes-federales --json state -q .state)
+          lanzar() { gh workflow run vigilar-federal.yml -R "$GITHUB_REPOSITORY" --ref main -f origen=continuar; }
+          if [ -z "$PR" ]; then
+            lanzar
+            echo "Sin PR que esperar: siguiente corrida lanzada."; exit 0
+          fi
+          leido=false
+          for _ in $(seq 1 90); do
+            # Una consulta que falla no corta la cadena: se vuelve a preguntar.
+            if estado=$(gh pr view "$PR" -R OpenCodice/leyes-federales --json state -q .state); then leido=true; else estado=""; fi
             case "$estado" in
-              MERGED) gh workflow run vigilar-federal.yml -R "$GITHUB_REPOSITORY" --ref main
+              MERGED) lanzar
                       echo "Siguiente corrida lanzada."; exit 0 ;;
               CLOSED) echo "El PR se cerró sin fusionar; no se continúa."; exit 0 ;;
             esac
             sleep 30
           done
+          if [ "$leido" != true ]; then
+            echo "::error::No se pudo consultar el PR #$PR en 45 minutos."; exit 1
+          fi
           echo "::warning::El PR #$PR no se fusionó en 45 minutos; la siguiente vigilancia semanal lo retoma."
 
   reparar:
@@ -534,15 +570,16 @@ jobs:
           echo "objetivo=$(sha256sum "$AGENTE_DIR/reparacion/objetivo.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Caché de los PDF publicados
         if: steps.preparar.outputs.hay == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: /tmp/pdfs-corpus
-          key: pdfs-corpus-${{ github.run_id }}
+          key: pdfs-corpus-${{ github.run_id }}-${{ github.run_attempt }}-reparar
           restore-keys: pdfs-corpus-
       - name: Preparar la medición del agente
         # Los PDF de todo lo publicado y los clones de los repos de datos, para
         # que el agente mida él mismo el impacto de su arreglo antes de
         # entregarlo. Las compuertas lo miden después por su cuenta.
+        id: medicion
         if: steps.preparar.outputs.hay == 'true'
         timeout-minutes: 30
         continue-on-error: true
@@ -550,9 +587,16 @@ jobs:
           cd /tmp/extractor
           { git -C "$OUT" rev-parse HEAD; git -C "$OUT" status --porcelain; } > /tmp/datos-antes
           bash scripts/agente/reparar.sh medicion
+      - name: Guardar la caché de los PDF publicados
+        # Antes del agente: lo que falle después no obliga a descargarlos otra vez.
+        if: always() && steps.medicion.outcome != 'skipped'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/pdfs-corpus
+          key: pdfs-corpus-${{ github.run_id }}-${{ github.run_attempt }}-reparar
       - name: Agente — reparar el extractor
         if: steps.preparar.outputs.hay == 'true'
-        timeout-minutes: 150
+        timeout-minutes: 130
         continue-on-error: true
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -604,7 +648,7 @@ jobs:
           echo "estado=$(cat "$AGENTE_DIR/reparacion/estado.txt" 2>/dev/null || echo descartado)" >> "$GITHUB_OUTPUT"
       - name: Agente — confirmar el impacto del arreglo en lo publicado
         if: steps.compuertas.outputs.estado == 'impacto'
-        timeout-minutes: 120
+        timeout-minutes: 100
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           IMPACTO: /tmp/agente/reparacion/impacto
@@ -617,11 +661,12 @@ jobs:
           EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
         run: bash /tmp/extractor/scripts/agente/reparar.sh publicar
       - name: Reintentar las leyes con el extractor reparado
-        # La corrida nueva espera a que termine esta (concurrency).
-        if: steps.publicar.outputs.reparado == 'true'
+        # La corrida nueva espera a que termine esta (concurrency). El arreglo
+        # ya está en main aunque otro paso haya fallado: se lanza igual.
+        if: ${{ !cancelled() && steps.publicar.outputs.reparado == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run vigilar-federal.yml -R "$GITHUB_REPOSITORY" --ref main
+        run: gh workflow run vigilar-federal.yml -R "$GITHUB_REPOSITORY" --ref main -f origen=reparar
       - name: Guardar el trabajo de la reparación
         if: always() && steps.objetivo.outputs.hay == 'true'
         uses: actions/upload-artifact@v4
@@ -640,43 +685,19 @@ jobs:
             /tmp/agente/reparacion/medicion/medicion.md
           retention-days: 30
 
-  salud:
+  web:
     needs: [planear, extraer, cerrar, revisar]
     if: always()
     runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      issues: write
-    env:
-      GH_TOKEN: ${{ github.token }}
+    permissions: {}
     steps:
-      - name: Reintentar una vez si falló
-        # Casi todas las fallas son de red o de la fuente oficial: se reintenta
-        # solo, una vez. Si el reintento también falla, la siguiente vigilancia
-        # semanal lo vuelve a intentar.
-        if: (needs.planear.result == 'failure' || needs.cerrar.result == 'failure' || needs.revisar.result == 'failure') && inputs.reintento != true
-        run: gh workflow run vigilar-federal.yml -R "$GITHUB_REPOSITORY" --ref main -f reintento=true
-
-      - name: Dejar constancia si también falló el reintento
-        if: (needs.planear.result == 'failure' || needs.cerrar.result == 'failure' || needs.revisar.result == 'failure') && inputs.reintento == true
-        run: |
-          titulo="🚨 Falló: ${{ github.workflow }}"
-          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          n=$(gh issue list -R "$GITHUB_REPOSITORY" --state open \
-                --search "in:title \"$titulo\"" --json number -q '.[0].number')
-          if [ -n "$n" ]; then
-            gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "Volvió a fallar tras reintentar: $url"
-          else
-            gh issue create -R "$GITHUB_REPOSITORY" --title "$titulo" \
-              --body "Falló dos veces seguidas; la vigilancia de la próxima semana lo reintenta: $url"
-          fi
-
       - name: Avisar a la web
+        if: always()
         # constitucion.app genera /estado, /leyes y la bitácora de los repos de datos
         # y de estas corridas, así que se redespliega en cuanto termina una
         # vigilancia, haya fallado o no. Después de `revisar` (y, por si acaso,
         # de que no quede un PR abierto), para que la web ya incluya lo fusionado.
-        if: always()
+        # No espera a `reparar`, que tarda horas y no cambia los datos.
         env:
           GH_TOKEN: ${{ secrets.PR_TOKEN }}
           DATOS: OpenCodice/leyes-federales
@@ -693,3 +714,48 @@ jobs:
           # No falla la vigilancia: sus datos ya están publicados; solo la web se
           # queda atrás hasta el siguiente aviso o push.
           echo "::warning::No se pudo avisar a constitucion-web tras tres intentos."
+
+  salud:
+    # Al final de todo, para ver también a `reparar` y `continuar`. Su
+    # relanzamiento no pierde tiempo por eso: la corrida nueva esperaría de
+    # todos modos a que termine esta (concurrency).
+    needs: [planear, extraer, cerrar, fuentes, revisar, continuar, reparar]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Reintentar una vez si falló
+        # Casi todas las fallas son de red o de la fuente oficial: se reintenta
+        # solo, una vez. Si el reintento también falla, la siguiente vigilancia
+        # semanal lo vuelve a intentar. Un job que agota su tiempo termina
+        # `cancelled` sin que la corrida se haya cancelado: también es una falla.
+        if: ${{ !cancelled() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && inputs.reintento != true }}
+        run: gh workflow run vigilar-federal.yml -R "$GITHUB_REPOSITORY" --ref main -f reintento=true -f origen=salud
+
+      - name: Dejar constancia si también falló el reintento
+        if: ${{ !cancelled() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && inputs.reintento == true }}
+        run: |
+          titulo="🚨 Falló: ${{ github.workflow }}"
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          n=$(gh issue list -R "$GITHUB_REPOSITORY" --state open \
+                --search "in:title \"$titulo\"" --json number -q '.[0].number')
+          if [ -n "$n" ]; then
+            gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "Volvió a fallar tras reintentar: $url"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$titulo" \
+              --body "Falló dos veces seguidas; la vigilancia de la próxima semana lo reintenta: $url"
+          fi
+
+  estado:
+    # El supervisor (OpenCodice/supervisor) lee el nombre de este job para saber si quedó trabajo pendiente.
+    name: "estado pendiente=[${{ needs.cerrar.result == 'success' && needs.cerrar.outputs.continuar == 'true' && 'true' || 'false' }}]"
+    needs: [planear, extraer, cerrar, fuentes, revisar, continuar, reparar, web, salud]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - run: 'true'
