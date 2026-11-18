@@ -13,7 +13,9 @@
       "situacion": "pendiente",
       "intentos": 1,
       "pista": "La constitución del estado se descarga de https://www.hcnl.gob.mx/trabajo_legislativo/leyes/pdf/CONSTITUCION%20POLITICA%20DEL%20ESTADO%20LIBRE%20Y%20SOBERANO%20DE%20NUEVO%20LEON.pdf.",
-      "ultimo_intento": "2026-11-18"
+      "ultimo_intento": "2026-11-18",
+      "motivo": "sin fuente: El Congreso de NL sí publica PDF con texto, pero todos sus enlaces llevan '?fecha' tras .pdf, y url_vigente (_HREF_PDF) solo reconoce href que terminan en .pdf, así que no se puede declarar ley con indice+patron (que test_estatal.py exige) sin cambiar fuentes.py.",
+      "corrida": "https://github.com/OpenCodice/fiscal-extractor/actions/runs/44220927661"
     },
     {
       "estado": "yucatan",
