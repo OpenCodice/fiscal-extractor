@@ -51,6 +51,9 @@ def _note_is_complete(note: str) -> bool:
     return bool(NOTE_COMPLETE_RE.search(note.strip()))
 
 
+TARIFA_FINAL_RE = re.compile(r"[A-ZÁÉÍÓÚÑ][^.;:,]{0,60}\$\s?\d[\d.,]*$")
+
+
 def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = None,
                    rotulo: re.Pattern = ARTICULO_RE,
                    cortes: dict[tuple[str, str], bool] | None = None) -> str:
@@ -162,4 +165,11 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
         i += 1
 
     flush_buf()
+    # Ley estatal: un renglón de tarifa que cierra el artículo ('Unidad Fiscal
+    # hasta 1000 c c $ 3.50', sin punto) tras el párrafo que lo anuncia con ':'
+    # sigue en ese párrafo; suelto parecería el encabezado del artículo siguiente.
+    if (cortes and len(blocks) >= 2 and blocks[-2].endswith(":")
+            and not blocks[-2].startswith("_")
+            and TARIFA_FINAL_RE.match(blocks[-1])):
+        blocks[-2:] = [f"{blocks[-2]} {blocks[-1]}"]
     return "\n\n".join(b for b in blocks if b).strip()

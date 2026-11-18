@@ -1590,6 +1590,10 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     seccion=jer["seccion"], epigrafe=jer["epigrafe"],
                 )
                 actual.cuerpo = line + "\n"
+                # Rótulo estatal con ordinal y sin la 'o' ('ARTÍCULO 5 BIS').
+                actual.sin_o = bool(
+                    estatal and ordinal and numero <= 9
+                    and not re.match(r"\s*(?:/[oº°]|[oº°])", line[am.end(1):]))
                 if i in marginales:
                     actual.epigrafe = marginales[i]
                 if previas:

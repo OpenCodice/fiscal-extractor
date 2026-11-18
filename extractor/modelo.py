@@ -66,6 +66,9 @@ class Unidad:
     # según su geometría (ver `articulado.cortes_geometricos`). Lo comparten
     # todas las unidades del documento; no es parte del texto.
     cortes: dict[tuple[str, str], bool] | None = field(default=None, repr=False, compare=False)
+    # Leyes estatales: el PDF rotula 'ARTÍCULO 5 BIS' (sin la 'o' del ordinal);
+    # la etiqueta lo respeta para que el rótulo sea el del PDF.
+    sin_o: bool = field(default=False, repr=False, compare=False)
 
     @property
     def contexto(self) -> str:
@@ -99,7 +102,7 @@ class Unidad:
     @property
     def etiqueta(self) -> str:
         """Cita oficial: 'Artículo 4o.-A', 'Artículo 17-H Bis', 'Artículo 137 Bis 1'."""
-        if self.numero <= 9:
+        if self.numero <= 9 and not (self.sin_o and self.ordinal):
             core = f"{self.numero}o"
         else:
             core = f"{self.numero}"
