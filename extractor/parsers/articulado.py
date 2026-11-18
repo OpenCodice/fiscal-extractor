@@ -1320,6 +1320,15 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     and nombre_suelto(stripped[:-1]) and siguiente_abre(i)):
                 pendiente = (nivel, encabezado, [stripped])
                 continue
+            # Estatal: 'Capítulo IV' / 'De la financiación y del fomento.' — el
+            # nombre en caja normal que cierra con punto, de un renglón y con el
+            # artículo justo debajo.
+            if (estatal and not estricto and not partes and stripped.endswith(".")
+                    and not stripped.endswith("..") and es_rotulo_corto(stripped)
+                    and _es_nombre_encabezado(stripped[:-1], False, True)
+                    and not es_nota_bloque(stripped) and siguiente_abre(i)):
+                pendiente = (nivel, encabezado, [stripped])
+                continue
             pendiente = None
             nombre = " ".join(partes)
             # 'TÍTULO IV. DE LAS PERSONAS FÍSICAS'; sin nombre: solo número.
