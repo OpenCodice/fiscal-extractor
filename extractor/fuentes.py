@@ -140,11 +140,16 @@ def url_vigente(doc, leer=_leer_indice) -> str:
     via = getattr(doc, "via", None)
     html = leer(doc.indice, via) if via else leer(doc.indice)
     patron = re.compile(doc.patron, re.IGNORECASE)
-    href = _HREF_PDF_CONSULTA if getattr(doc, "consulta", False) else _HREF_PDF
+    sin_consulta = getattr(doc, "sin_consulta", False)
+    href = (_HREF_PDF_CONSULTA if getattr(doc, "consulta", False) or sin_consulta
+            else _HREF_PDF)
     candidatos = [unescape(h) for h in href.findall(html) if patron.search(unescape(h))]
     if not candidatos:
         raise LookupError(
             f"{doc.clave}: ningún PDF coincide con {doc.patron!r} en {doc.indice} "
             "(¿cambió la estructura de la página?)"
         )
-    return _codificar(urljoin(doc.indice, _elegir(doc, candidatos)))
+    elegido = urljoin(doc.indice, _elegir(doc, candidatos))
+    if sin_consulta:
+        elegido = urlsplit(elegido)._replace(query="", fragment="").geturl()
+    return _codificar(elegido)

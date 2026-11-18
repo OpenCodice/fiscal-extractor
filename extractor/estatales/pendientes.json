@@ -19,7 +19,7 @@
       "leyes": 14,
       "redeclaracion": {
         "firma": "41a09ab53904bab5",
-        "intentos": 1,
+        "intentos": 0,
         "intentos_codigo": 1,
         "ultimo_intento": "2026-11-18",
         "leyes": [
@@ -30,7 +30,7 @@
           "nuevo-leon/ley-organica-de-la-administracion-publica"
         ],
         "falta": "La página índice https://www.hcnl.gob.mx/trabajo_legislativo/leyes/ enlaza estas 5 leyes con href como '…/LEY%20DE%20GOBIERNO%20MUNICIPAL%20DEL%20ESTADO%20DE%20NUEVO%20LEON.pdf?2025-11- 7' (espacio literal en la consulta, un cache-buster). Con consulta=True url_vigente los encuentra (_HREF_PDF_CONSU",
-        "motivo": "necesita código en el extractor: La página índice https://www.hcnl.gob.mx/trabajo_legislativo/leyes/ enlaza estas 5 leyes con href como '…/LEY%20DE%20GOBIERNO%20MUNICIPAL%20DEL%20ESTADO%20DE%20NUEVO%20LEON.pdf?2025-11- 7' (espacio literal en la consulta, un cache-buster). Con consulta=True url_vigente los encuentra (_HREF_PDF_CONSU",
+        "motivo": "el extractor ya tiene lo que faltaba (Leyes estatales: opción sin_consulta para href con consulta inválida tras .pdf (Nuevo León)): se reintenta",
         "corrida": "https://github.com/OpenCodice/fiscal-extractor/actions/runs/44237546890"
       }
     },

@@ -71,6 +71,10 @@ class Documento:
     # León): también cuentan como PDF. Opcional para no cambiar qué enlaces ve
     # el resto del corpus.
     consulta: bool = False
+    # Además de `consulta`: la consulta del href es solo un cache-buster y a
+    # veces trae un espacio ('….pdf?2026-03- 9') que la descarga rechaza; se
+    # descarta y queda la URL del PDF sin ella.
+    sin_consulta: bool = False
 
 
 def _ley(clave, etiqueta, sigla, archivo, encabezado="", *, parser="articulado",
@@ -239,6 +243,8 @@ def a_dict(doc: Documento) -> dict:
         d["huecos"] = True
     if doc.consulta:
         d["consulta"] = True
+    if doc.sin_consulta:
+        d["sin_consulta"] = True
     return d
 
 
@@ -253,7 +259,7 @@ def de_dict(d: dict) -> Documento:
         huecos=bool(d.get("huecos")), notas=d.get("notas"),
         notas_previas=d.get("notas_previas"),
         via=d.get("via"), notas_en_linea=d.get("notas_en_linea"),
-        consulta=bool(d.get("consulta")),
+        consulta=bool(d.get("consulta")), sin_consulta=bool(d.get("sin_consulta")),
     )
 
 
