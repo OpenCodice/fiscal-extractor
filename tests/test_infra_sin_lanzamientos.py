@@ -130,3 +130,19 @@ def test_estado_cierra_la_corrida_y_sube_la_cadena(nombre):
     assert "${{" not in datos["run"] and "cadena.json" in datos["run"]
     assert subir["uses"].startswith("actions/upload-artifact@")
     assert subir["with"]["name"] == "cadena" and subir["with"]["path"] == "cadena.json"
+
+
+@pytest.mark.parametrize("nombre", ("vigilar-fiscal.yml", "expandir-estatales.yml"))
+def test_sin_tandas_no_hay_pendiente(nombre):
+    """Cuándo lanzar la ronda lo decide el supervisor: la corrida no espera ni
+    se declara pendiente."""
+    assert _workflow(nombre)["jobs"]["estado"]["name"] == "estado pendiente=[false]"
+
+
+@pytest.mark.parametrize("nombre", ENCADENADOS)
+def test_el_titulo_lleva_todos_los_inputs_y_solo_esos(nombre):
+    w = _workflow(nombre)
+    declarados = list(w[True]["workflow_dispatch"]["inputs"])
+    assert re.findall(r"(\w+)=\[\$\{\{ inputs\.(\w+) \}\}\]", w["run-name"]) == [(i, i) for i in declarados]
+    texto = (WORKFLOWS / nombre).read_text(encoding="utf-8")
+    assert set(re.findall(r"inputs\.(\w+)", texto)) <= set(declarados)

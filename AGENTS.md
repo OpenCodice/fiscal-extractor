@@ -390,9 +390,8 @@ contrato:
   no cupo (leyes estatales) o el agente reparó el extractor (federal). Sin
   avance no se declara: otra corrida repetiría lo mismo. La tanda siguiente
   no necesita esperar la fusión del PR: `revisar` es parte de la corrida y
-  `planear` espera al PR anterior. En la ronda de expansión, `pendiente` es
-  «la cadena anterior seguía en curso» (ver «Ronda de expansión»); en
-  `vigilar-fiscal`, siempre `false`.
+  `planear` espera al PR anterior. En `vigilar-fiscal` y en la ronda de
+  expansión, siempre `false`.
 - Una fuente caída pone en rojo el job `fuentes`, no `cerrar`: la corrida
   queda fallida y el supervisor la reintenta, pero `pendiente` y `reparar` no
   dependen de la ley que no respondió.
@@ -522,16 +521,12 @@ estado=<slug>]`). La parte determinista vive en `scripts/expansion.py`.
   en curso o en cola, ningún PR suyo abierto y ninguna ley declarada sin alta
   cuyo PDF responda (`expansion.py listo`). Un estado por ronda. El input
   `sin_esperar` (solo a mano, para probar) se salta esta condición.
-  - Si la cadena sigue en curso, la corrida no empieza nada y **queda
-    pendiente**: el paso «¿Terminó la cadena anterior?» espera ahí mismo a que
-    termine (pregunta cada 5 minutos, hasta 300) y la corrida acaba en verde
-    con `estado pendiente=[true]`; el supervisor lanza otra ronda con los
-    mismos inputs, que ya la encuentra libre (o vuelve a esperar). La espera
-    va dentro de la corrida para que no haya un ciclo: el supervisor relanza
-    lo pendiente en minutos y la cadena puede tardar un día, así que sin ella
-    serían decenas de rondas vacías; con ella, a lo más unas cinco al día.
-    Mientras espera ocupa el grupo `expandir-estatales`, y una redeclaración
-    pedida hace cola detrás.
+  - Cuándo lanzar la ronda lo decide el supervisor (`espera_libre` en su
+    `cadenas.toml`): no la lanza por horario mientras la cadena siga ocupada,
+    y la lanza en el primer tic en que quede libre. El paso «¿Terminó la
+    cadena anterior?» es la salvaguarda: si aun así la encuentra ocupada, la
+    corrida no empieza un estado y termina en verde, sin esperar ni declarar
+    nada pendiente. Una consulta que falla hace fallar el paso.
   - Si la cadena terminó pero quedan altas (una tanda que no continuó), la
     ronda pide la vigilancia de esos estados (`pedir_altas`) y no empieza
     otro: el estado nuevo espera a la ronda de la semana siguiente.

@@ -18,9 +18,8 @@ run-name: "expandir-estatales estado=[${{ inputs.estado }}] sin_esperar=[${{ inp
 # Un estado por ronda, y solo cuando la cadena anterior terminó: ninguna
 # vigilar-leyes-estatales en curso ni PR suyo abierto, ni leyes declaradas sin
 # alta todavía (en ese caso pide la vigilancia de esos estados y el estado
-# nuevo espera a la siguiente ronda). Si la cadena sigue en curso, la corrida
-# la espera sin empezar nada y termina con `estado pendiente=[true]`: el
-# supervisor lanza la ronda otra vez. Falla cerrado: un error deja todo sin
+# nuevo espera a la siguiente ronda). El supervisor no la lanza por horario
+# mientras la cadena siga ocupada: la lanza en cuanto queda libre. Falla cerrado: un error deja todo sin
 # publicar y el estado se reintenta en la ronda siguiente, hasta el tope de
 # intentos de la lista.
 #
@@ -104,8 +103,6 @@ jobs:
       codigo: ${{ steps.anotar.outputs.codigo }}
       estado: ${{ steps.elegir.outputs.estado }}
       nombre: ${{ steps.elegir.outputs.nombre }}
-      # La cadena anterior seguía en curso: esta corrida no empezó nada.
-      pendiente: ${{ steps.cadena.outputs.libre == 'false' && 'true' || 'false' }}
       pedir_altas: ${{ steps.retomar.outputs.pedir }}
       pedir_vigilancia: ${{ steps.vigilancia.outputs.pedir }}
       pedir_ronda: ${{ steps.anotar.outputs.pedir }}
@@ -115,52 +112,29 @@ jobs:
           python-version: '3.12'
 
       - name: ¿Terminó la cadena anterior?
-        # Si sigue en curso, esta corrida no empieza un estado: espera aquí a
-        # que termine (o a agotar la espera) y acaba con `pendiente`, para que
-        # el supervisor lance otra ronda, que la encontrará libre. Esperar
-        # dentro de la corrida, y no declarar `pendiente` de inmediato, es lo
-        # que evita un ciclo: el supervisor relanza en minutos lo pendiente, y
-        # la cadena puede tardar un día.
+        # Salvaguarda: el supervisor no lanza la ronda por horario mientras la
+        # cadena siga ocupada. Si aun así lo está (una ronda a mano, una
+        # vigilancia que empezó a la vez), esta corrida no empieza un estado.
         id: cadena
-        timeout-minutes: 310
         env:
           GH_TOKEN: ${{ github.token }}
-          SIN_ESPERAR: ${{ inputs.sin_esperar }}
-          ESPERA_MIN: '300'
         run: |
-          en_curso() {
-            corriendo=$(gh run list -R "$GITHUB_REPOSITORY" -w vigilar-leyes-estatales.yml -L 20 \
-                          --json status -q '[.[] | select(.status != "completed")] | length') || return 2
-            abiertos=$(gh pr list -R "$DATOS" --head "$RAMA" --state open --json number -q length) || return 2
-            echo "Vigilancias en curso: $corriendo; PR abiertos: $abiertos"
-            [ "$corriendo" != 0 ] || [ "$abiertos" != 0 ]
-          }
+          corriendo=$(gh run list -R "$GITHUB_REPOSITORY" -w vigilar-leyes-estatales.yml -L 20 \
+                        --json status -q '[.[] | select(.status != "completed")] | length')
+          abiertos=$(gh pr list -R "$DATOS" --head "$RAMA" --state open --json number -q length)
+          echo "Vigilancias en curso: $corriendo; PR abiertos: $abiertos"
           if [ "$REDECLARAR" = true ]; then
             echo "Redeclaración de $REDECLARAR_ESTADO: no suma un estado, no espera a la cadena." | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "libre=true" >> "$GITHUB_OUTPUT"; exit 0
-          elif [ "$SIN_ESPERAR" = true ]; then
+            echo "libre=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ inputs.sin_esperar }}" = true ]; then
             echo "Prueba manual (sin_esperar): no se espera a la cadena anterior." | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "libre=true" >> "$GITHUB_OUTPUT"; exit 0
+            echo "libre=true" >> "$GITHUB_OUTPUT"
+          elif [ "$corriendo" != 0 ] || [ "$abiertos" != 0 ]; then
+            echo "La cadena anterior sigue en curso: esta ronda no empieza un estado nuevo." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "libre=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "libre=true" >> "$GITHUB_OUTPUT"
           fi
-          en_curso && rc=0 || rc=$?
-          if [ "$rc" = 1 ]; then
-            echo "libre=true" >> "$GITHUB_OUTPUT"; exit 0
-          elif [ "$rc" != 0 ]; then
-            echo "::error::No se pudo consultar si la cadena anterior terminó."; exit 1
-          fi
-          echo "libre=false" >> "$GITHUB_OUTPUT"
-          echo "La cadena anterior sigue en curso: esta ronda no empieza un estado nuevo; queda pendiente." | tee -a "$GITHUB_STEP_SUMMARY"
-          limite=$(( $(date +%s) + ESPERA_MIN * 60 ))
-          while [ "$(date +%s)" -lt "$limite" ]; do
-            sleep 300
-            # Una consulta que falla no corta la espera: se vuelve a preguntar.
-            en_curso && rc=0 || rc=$?
-            if [ "$rc" = 1 ]; then
-              echo "La cadena anterior terminó: la ronda siguiente empieza el estado." | tee -a "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-          done
-          echo "La cadena anterior sigue en curso tras $ESPERA_MIN minutos: la ronda siguiente vuelve a esperar." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Clonar extractor y leyes-estatales
         if: steps.cadena.outputs.libre == 'true'
@@ -721,10 +695,10 @@ jobs:
 
   estado:
     # El supervisor (OpenCodice/supervisor) lee el nombre de este job para
-    # saber si quedó trabajo pendiente (la cadena anterior seguía en curso y la
-    # ronda no empezó), y el artefacto `cadena` (el resultado y las salidas de
-    # cada job) para atender lo que pidieron (salidas `pedir*`).
-    name: "estado pendiente=[${{ needs.ronda.result == 'success' && needs.ronda.outputs.pendiente == 'true' && 'true' || 'false' }}]"
+    # saber si quedó otra tanda (una ronda nunca deja una), y el artefacto
+    # `cadena` (el resultado y las salidas de cada job) para atender lo que
+    # pidieron (salidas `pedir*`).
+    name: "estado pendiente=[false]"
     needs: [ronda, codigo]
     if: ${{ always() }}
     runs-on: ubuntu-latest
