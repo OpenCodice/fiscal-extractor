@@ -69,16 +69,17 @@ ARTICULO_RE = re.compile(
 ORDINALES_ESTATAL = (ORDINALES + "|Quitus|Quintos|Sextus|Sexties|S[ée]ptimus|Octavus|"
                      "Undecies|Duodecies|Terdecies|Quaterdecies|Cuarter")
 ARTICULO_ESTATAL_RE = re.compile(
-    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|\(SIC\)(?=\s+\d+\s+[A-ZÁÉÍÓÚÑ]+\s*\.-)|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
+    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|\(SIC\)(?=\s+\d+\s+[A-ZÁÉÍÓÚÑ]+\s*\.-)|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$)|\.\s*\d+\s+\((?:DEROGAD|Derogad)|\.\s*\d+\.-\s?\(\s?(?:DEROGAD|Derogad))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
     r"(?:(?:-(?=[A-ZÑ])|\s(?=[A-ZÑ][.\-])|(?<=\d)(?=[A-Z]\.))([A-ZÑ])(?![A-Za-zñ]))?"  # letra "-A", " A." (118 A.) o "132G."; "142-Ñ"
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
     rf"(?:[\s.\-]+(?i:({ORDINALES_ESTATAL}))"         # ordinal
-    r"(?:(?:[\s\-]+|\.\s?|(?=\d))(\d+|(?i:uno|dos|tres)|[IVX]{1,4}(?=\s*[.\-]))(?:\s+([A-Z])(?=[.\-]|\s*$))?"  # numeral ("Bis 1", "Bis. 3", "Ter2", "Bis Uno") y letra ("Bis 35 A.-")
+    r"(?:(?:[\s\-]+|\.\s?|(?=\d))(\d+|(?i:uno|dos|tres)|[IVX]{1,4}(?=\s*[.\-]|,\s+\((?:DEROGAD|Derogad)))(?:\s+([A-Z])(?=[.\-]|\s*$))?"  # numeral ("Bis 1", "Bis. 3", "Ter2", "Bis Uno") y letra ("Bis 35 A.-")
     r"|-([A-Z])(?=[.\-]|\s))?)?"                    # letra pegada al ordinal: "221 BIS-A.-"
     r"(?:\s*\.?\s?[-–]?\.?(?:\s|$|(?=\())|\.-(?=\S)"   # separador final ("29 BIS. - ", "137-.", "209 TER. – " o ".-" pegado)
     r"|\.(?=[A-ZÁÉÍÓÚÑ](?:[a-záéíóúñ]|\s))"            # o el punto pegado: "127.Se deroga.", "36.A través"
-    r"|:(?=\s))"                                     # o dos puntos: "Artículo 276 Quater: Comete"
+    r"|:(?=\s)"                                      # o dos puntos: "Artículo 276 Quater: Comete"
+    r"|,\s+(?=\((?:DEROGAD|Derogad)))"                 # o coma y nota: "ARTICULO 208 BIS, (DEROGADO, P.O. …)"
 )
 
 # Encabezados de Título / Capítulo / Sección. En los PDF de la Cámara van en
@@ -1119,11 +1120,19 @@ def _epigrafes_marginales(lineas: list[str], ART: re.Pattern,
         sig = next((x.strip() for x in lineas[i + 1:i + 3] if x.strip()), "")
         return sig[:1].isupper() or sig[:1] == "("
 
+    def texto_en_mayusculas(i: int) -> bool:
+        """El renglón del rótulo y el siguiente van ambos en MAYÚSCULAS: es un
+        texto escrito todo en mayúsculas (Código Penal de Nuevo León) cuyo primer
+        renglón no cierra con puntuación, no un epígrafe seguido de su texto."""
+        resto = lineas[i].strip()[todos[i][0].end():].strip()
+        sig = next((x.strip() for x in lineas[i + 1:i + 3] if x.strip()), "")
+        return resto.isupper() and sig.isupper() and not (notas is not None and notas.match(sig))
+
     # Solo cuentan los rótulos cortos: un primer renglón de texto que envuelve
     # llega al margen, y el que cierra sin puntuación es lo normal en cualquier ley.
     rotulos = [i for i, c in enumerate(todos) if c]
     marginales = [i for i in rotulos if todos[i][1] and len(lineas[i].strip()) < _EPIGRAFE_ENVUELTO_DESDE
-                  and sigue_mayuscula(i)]
+                  and sigue_mayuscula(i) and not texto_en_mayusculas(i)]
     if len(rotulos) < 10 or len(marginales) < 0.6 * len(rotulos):
         return lineas, {}
     salida: list[str] = []
@@ -1131,7 +1140,7 @@ def _epigrafes_marginales(lineas: list[str], ART: re.Pattern,
     i = 0
     while i < len(lineas):
         c = todos[i]
-        if not (c and c[1]):
+        if not (c and c[1]) or texto_en_mayusculas(i):
             salida.append(lineas[i])
             i += 1
             continue
@@ -1348,6 +1357,12 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 return False
         return False
 
+    def nota_y_articulo(i: int) -> bool:
+        """¿Tras el renglón `i` van una o más notas de reforma y luego un artículo?"""
+        j = next((j for j in range(i + 1, len(lineas)) if lineas[j].strip()), None)
+        return (j is not None and es_nota_bloque(lineas[j].strip())
+                and desemboca_en_articulo(i, max_lineas=3, solo_estructura=True))
+
     def nivel_de(s: str) -> str | None:
         if estatal and re.fullmatch(r"(?:T[íi]tulo|Cap[íi]tulo|Secci[óo]n|Libro)\s.*[^.]\.", s):
             s = s[:-1]                  # 'Título Séptimo Bis.' (Código Electoral de Jalisco)
@@ -1379,6 +1394,14 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             # Title-case (normateca SAT) → nombre Title-case, hasta dos líneas
             # (los nombres largos envuelven: 'De las Facultades previstas en…').
             estricto = encabezado.isupper()
+            # La nota que anota la denominación del encabezado y va entre su
+            # número y su nombre ('CAPITULO CUARTO' / '(REFORMADA SU DENOMINACION,
+            # P.O. …)' / 'Del Impuesto ….') es de la estructura, no del artículo.
+            if (estatal and not partes and es_nota_bloque(stripped)
+                    and "DENOMINACI" in stripped.upper()
+                    and stripped.count("(") == stripped.count(")")
+                    and desemboca_en_articulo(i, 4)):
+                continue
             # Un nombre en MAYÚSCULAS bajo un encabezado en Title-case ('Sección XVI'
             # / 'MÁQUINAS Y APARATOS…') puede envolver en tres renglones.
             en_mayusculas = bool(partes) and all(
@@ -1417,11 +1440,14 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             # Estatal: 'Capítulo IV' / 'De la financiación y del fomento.' — el
             # nombre en caja normal que cierra con punto, de un renglón y con el
             # artículo justo debajo.
-            if (estatal and not estricto and not partes and stripped.endswith(".")
+            # El artículo puede ir tras una nota de reforma ('(ADICIONADO, P.O. …)'),
+            # y el nombre envolver a un segundo renglón.
+            if (estatal and len(partes) <= 1 and stripped.endswith(".")
                     and not stripped.endswith("..") and es_rotulo_corto(stripped)
                     and _es_nombre_encabezado(stripped[:-1], False, True)
-                    and not es_nota_bloque(stripped) and siguiente_abre(i)):
-                pendiente = (nivel, encabezado, [stripped])
+                    and not stripped.isupper() and not es_nota_bloque(stripped)
+                    and ((not estricto and siguiente_abre(i)) or nota_y_articulo(i))):
+                pendiente = (nivel, encabezado, [*partes, stripped])
                 continue
             pendiente = None
             nombre = " ".join(partes)
