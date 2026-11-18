@@ -104,7 +104,9 @@ TITULO_RE = re.compile(r"^T[IÍ]TULO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]
 _ORDINAL_MAY = (r"PRIMER[OA]|SEGUND[OA]|TERCER[OA]|CUART[OA]|QUINT[OA]|SEXT[OA]|"
                  r"S[EÉ]PTIM[OA]|OCTAV[OA]|NOVEN[OA]|D[EÉ]CIM[OA]")
 CAPITULO_RE = re.compile(rf"^CAP[IÍ]T[UI]LO\s+([IVXLCDM]+|[ÚU]NICO|{_ORDINAL_MAY})\b.*$"
-                         rf"|^Cap[íi]tulo\s+(?:{_NUMERAL_TC}|[ÚU]nico){_BIS_TC}\s*$")
+                         rf"|^Cap[íi]tulo\s+(?:{_NUMERAL_TC}|l{{1,3}}|[ÚU]nico){_BIS_TC}\s*$")
+# Errata señalada por el propio PDF: 'Artículo 326 (sic).-' (el 236).
+_SIC_RE = re.compile(r"^Art[íi]culo\s+(\d+)\s*\(sic\)\s*[.\-–]*", re.IGNORECASE)
 # Libro: nivel sobre el Título en los códigos (Código Penal, Código Civil).
 LIBRO_RE = re.compile(r"^LIBRO\s+[A-ZÁÉÍÓÚÑ]+(?:\s+[A-ZÁÉÍÓÚÑ]+)?\s*$"
                       rf"|^Libro\s+{_NUMERAL_TC}\s*$")
@@ -1593,6 +1595,20 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     and not actual.ordinal and not actual.guion_num
                     and (actual.numero, sm.group(2), "", "", "", "") not in abiertos):
                 stripped = line = "Artículo " + stripped
+        if estatal and actual is not None and not en_bloque:
+            # 'Artículo 326 (sic).-' donde toca el 236: el PDF corrige él mismo la
+            # errata con '(sic)'. Es el artículo esperado si el siguiente rótulo
+            # del PDF es el que le sigue.
+            sm = _SIC_RE.match(stripped)
+            if sm and int(sm.group(1)) != esperado:
+                sigue = [int(m2.group(1).replace(",", "")) for ln in lineas[i + 1:i + 40]
+                         if (m2 := ART.match(ln.strip())) and not m2.group(2)
+                         and not m2.group(3) and not m2.group(4)]
+                ok = bool(sigue) and sigue[0] == esperado + 1
+            else:
+                ok = False
+            if ok:
+                stripped = line = f"Artículo {esperado}.-{stripped[sm.end():]}"
         am = ART.match(stripped)
         if am:
             numero = int(am.group(1).replace(",", ""))
@@ -1647,7 +1663,10 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 # Rótulo estatal con ordinal y sin la 'o' ('ARTÍCULO 5 BIS').
                 actual.sin_o = bool(
                     estatal and ordinal and numero <= 9
-                    and not re.match(r"\s*(?:/[oº°]|[oº°])", line[am.end(1):]))
+                    and (not re.match(r"\s*(?:/[oº°]|[oº°])", line[am.end(1):])
+                         # Con la nota de reforma antes del rótulo ('6° Bis'), la
+                         # auditoría compara el rótulo sin ordinal.
+                         or bool(previas)))
                 if i in marginales:
                     actual.epigrafe = marginales[i]
                 if previas:
