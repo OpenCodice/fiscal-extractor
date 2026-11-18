@@ -22,3 +22,40 @@ jobs:
       - run: pip install -r requirements.txt
 
       - run: python -m pytest -q
+
+  infra:
+    # Los workflows y sus scripts de orquestación: un error aquí no lo ve
+    # pytest y solo aparecería en una corrida real, a medias.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12 /tmp
+          /tmp/actionlint -color
+
+      - name: Sintaxis de los scripts
+        run: |
+          for f in scripts/*.sh scripts/agente/*.sh; do bash -n "$f"; done
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Lint del supervisor
+        # Las reglas de la organización para los workflows encadenados viven
+        # en OpenCodice/supervisor. Mientras ese repo no exista, se omite.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          codigo=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+                     https://api.github.com/repos/OpenCodice/supervisor)
+          if [ "$codigo" = 404 ]; then
+            echo "::warning::OpenCodice/supervisor todavía no existe: se omite su lint de workflows."
+            exit 0
+          fi
+          git clone -q --depth 1 https://github.com/OpenCodice/supervisor.git /tmp/supervisor
+          python /tmp/supervisor/supervisor/lint_workflows.py .

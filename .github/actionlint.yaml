@@ -1,0 +1,12 @@
+# Lo que actionlint (job `infra` de tests.yml) no debe contar como hallazgo.
+paths:
+  .github/workflows/**/*.yml:
+    ignore:
+      # Notas de estilo de shellcheck (nivel info) en scripts que parten
+      # palabras a propósito.
+      - 'shellcheck reported issue in this script: SC2086:info:.+'
+      - 'shellcheck reported issue in this script: SC2015:info:.+'
+  .github/workflows/expandir-estatales.yml:
+    ignore:
+      # La opción vacía del input `simular` es válida para GitHub: «sin simular».
+      - 'string should not be empty'
