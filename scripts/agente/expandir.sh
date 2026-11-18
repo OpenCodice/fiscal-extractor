@@ -215,7 +215,8 @@ publicar_redeclaracion() {
   git -C "$EXTRACTOR" diff -- "$mod" > "$TRABAJO/redeclaracion.patch"
   [ -s "$TRABAJO/redeclaracion.patch" ] || { echo "::error::Sin cambios en el módulo."; return 1; }
   git -C "$dir" apply --3way "$TRABAJO/redeclaracion.patch" || return 1
-  (cd "$dir" && python -m pytest -q -x > "$TRABAJO/pytest-publicar.log" 2>&1) \
+  # Las pruebas son código de main: corren sin el token con el que se publica.
+  (cd "$dir" && env -u EXTRACTOR_TOKEN -u EGRESS_MX_TOKEN python -m pytest -q -x > "$TRABAJO/pytest-publicar.log" 2>&1) \
     || { tail -n 30 "$TRABAJO/pytest-publicar.log"; echo "::error::Con main, las pruebas no pasan."; return 1; }
   python3 -I -S "$dir/scripts/expansion.py" anotar --estado "$ESTADO" --resultado publicado \
     --redeclaracion --corrida "${CORRIDA:-}" || return 1
