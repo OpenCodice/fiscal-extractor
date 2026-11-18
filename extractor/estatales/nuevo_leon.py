@@ -150,3 +150,16 @@ _A_LEYES = {
 }
 LEYES = list(LEYES) + [d for d, _ in FUERA if d.clave in _A_LEYES]
 FUERA = [(d, m) for d, m in FUERA if d.clave not in _A_LEYES]
+
+# Reparación autónoma (scripts/reparacion.py promover, 2026-11-18): estas leyes
+# de FUERA ya quedan con build y auditar limpios sobre su PDF; la vigilancia
+# las da de alta tras su revisión completa.
+_A_LEYES = {
+    "nuevo-leon/ley-de-asentamientos-humanos-ordenamiento-territorial-y-desarrollo-urbano",
+    "nuevo-leon/ley-de-gobierno-municipal",
+    "nuevo-leon/ley-de-justicia-administrativa-para-el-estado-y-municipios",
+    "nuevo-leon/ley-de-responsabilidades-administrativas",
+    "nuevo-leon/ley-organica-de-la-administracion-publica",
+}
+LEYES = list(LEYES) + [d for d, _ in FUERA if d.clave in _A_LEYES]
+FUERA = [(d, m) for d, m in FUERA if d.clave not in _A_LEYES]
