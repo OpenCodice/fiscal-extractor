@@ -16,7 +16,20 @@
       "ultimo_intento": "2026-11-18",
       "corrida": "https://github.com/OpenCodice/fiscal-extractor/actions/runs/44227018042",
       "fecha": "2026-11-18",
-      "leyes": 14
+      "leyes": 14,
+      "redeclaracion": {
+        "firma": "41a09ab53904bab5",
+        "intentos": 1,
+        "intentos_codigo": 0,
+        "ultimo_intento": "2026-11-18",
+        "leyes": [
+          "nuevo-leon/ley-de-asentamientos-humanos-ordenamiento-territorial-y-desarrollo-urbano",
+          "nuevo-leon/ley-de-gobierno-municipal",
+          "nuevo-leon/ley-de-justicia-administrativa-para-el-estado-y-municipios",
+          "nuevo-leon/ley-de-responsabilidades-administrativas",
+          "nuevo-leon/ley-organica-de-la-administracion-publica"
+        ]
+      }
     },
     {
       "estado": "yucatan",
