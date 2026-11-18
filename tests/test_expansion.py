@@ -1,5 +1,6 @@
 """La parte determinista de la ronda de expansión (scripts/expansion.py)."""
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -19,8 +20,11 @@ def test_la_lista_cubre_los_estados_sin_modulo():
     nombres = [e["estado"] for e in lista["estados"]]
     assert len(nombres) == len(set(nombres))
     assert set(nombres) <= set(ENTIDADES)
+    # Durante la ronda, el módulo del estado que se está sumando ya existe
+    # aunque su situación aún no sea «publicado».
+    en_curso = os.environ.get("EXPANSION_ESTADO")
     for e in lista["estados"]:
-        if e["situacion"] != "publicado":
+        if e["situacion"] != "publicado" and e["estado"] != en_curso:
             assert not expansion.modulo_de(e["estado"]).exists(), e["estado"]
     con_modulo = {s for s in ENTIDADES if expansion.modulo_de(s).exists()}
     assert set(ENTIDADES) == set(nombres) | con_modulo

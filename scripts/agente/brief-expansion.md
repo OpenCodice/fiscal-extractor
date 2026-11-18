@@ -84,7 +84,7 @@ sus opciones), los tres módulos que ya existen (`jalisco.py`, `cdmx.py`,
    (cómo cita su periódico oficial) casi siempre piden su propia expresión,
    como en Querétaro. Lo que no logres dejar limpio con esas opciones va a
    `FUERA` con su motivo: no puedes cambiar el parser.
-6. Escribe las pruebas y corre `python -m pytest -q`: debe pasar entero.
+6. Escribe las pruebas y corre `EXPANSION_ESTADO=__ESTADO__ python -m pytest -q`: debe pasar entero.
 
 Termina antes de las __LIMITE__: a esa hora el paso se corta y tu trabajo se
 pierde. Si se te acaba el tiempo, entrega las leyes que ya quedaron limpias y

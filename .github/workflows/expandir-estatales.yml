@@ -219,7 +219,7 @@ jobs:
           ls tests/test_estatal_${MODULO}*.py > /dev/null 2>&1 \
             && grep -qE '^def test_' tests/test_estatal_${MODULO}*.py \
             || { echo "::error::No hay pruebas nuevas."; exit 1; }
-          python -m pytest -q > "$TRABAJO/pytest.log" 2>&1 || { tail -n 40 "$TRABAJO/pytest.log"; exit 1; }
+          EXPANSION_ESTADO="$ESTADO" python -m pytest -q > "$TRABAJO/pytest.log" 2>&1 || { tail -n 40 "$TRABAJO/pytest.log"; exit 1; }
           tail -n 1 "$TRABAJO/pytest.log"
           python scripts/expansion.py registro --estado "$ESTADO" --salida "$TRABAJO/registro.json"
 
@@ -254,7 +254,7 @@ jobs:
           limpias=$(grep '^limpias=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)
           [ "${limpias:-0}" -gt 0 ] || { echo "::error::Ninguna ley quedó limpia."; exit 1; }
           python scripts/expansion.py registro --estado "$ESTADO" --salida "$TRABAJO/registro-final.json"
-          python -m pytest -q > "$TRABAJO/pytest.log" 2>&1 || { tail -n 40 "$TRABAJO/pytest.log"; exit 1; }
+          EXPANSION_ESTADO="$ESTADO" python -m pytest -q > "$TRABAJO/pytest.log" 2>&1 || { tail -n 40 "$TRABAJO/pytest.log"; exit 1; }
 
       - name: Compuertas — nada de lo publicado cambia
         # Reconstruye todo lo publicado (fiscal, federal y estatal) con el

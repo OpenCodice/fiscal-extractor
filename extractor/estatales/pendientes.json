@@ -11,11 +11,11 @@
     {
       "estado": "nuevo-leon",
       "situacion": "pendiente",
-      "intentos": 2,
+      "intentos": 1,
       "pista": "La constitución del estado se descarga de https://www.hcnl.gob.mx/trabajo_legislativo/leyes/pdf/CONSTITUCION%20POLITICA%20DEL%20ESTADO%20LIBRE%20Y%20SOBERANO%20DE%20NUEVO%20LEON.pdf.",
       "ultimo_intento": "2026-11-18",
       "corrida": "https://github.com/OpenCodice/fiscal-extractor/actions/runs/44225414866",
-      "motivo": "no pasó las compuertas (cerco=success/true forma=failure construir=skipped impacto=skipped publicar=skipped)"
+      "motivo": "el intento de la corrida 44225414866 no cuenta: falló una prueba de la propia ronda (test_la_lista_cubre_los_estados_sin_modulo), no el módulo; el anterior: sin fuente por href con '?fecha' (resuelto con consulta=True)"
     },
     {
       "estado": "yucatan",
