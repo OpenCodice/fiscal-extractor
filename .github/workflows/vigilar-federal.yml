@@ -1,5 +1,5 @@
 name: Vigilar leyes federales
-run-name: "vigilar-federal reintento=[${{ inputs.reintento }}] docs=[${{ inputs.docs }}] lote=[${{ inputs.lote }}] origen=[${{ inputs.origen }}]"
+run-name: "vigilar-federal docs=[${{ inputs.docs }}] lote=[${{ inputs.lote }}] origen=[${{ inputs.origen }}]"
 
 # Compara el índice de leyes vigentes de la Cámara de Diputados y las cabeceras
 # de cada PDF contra fuentes.json, y reprocesa solo lo que cambió: leyes nuevas,
@@ -20,10 +20,6 @@ run-name: "vigilar-federal reintento=[${{ inputs.reintento }}] docs=[${{ inputs.
 on:
   workflow_dispatch:
     inputs:
-      reintento:
-        description: 'Sin efecto: los reintentos son del supervisor'
-        type: boolean
-        default: false
       docs:
         description: 'Solo estas claves, separadas por espacio (vacío = todo lo que cambió)'
         required: false

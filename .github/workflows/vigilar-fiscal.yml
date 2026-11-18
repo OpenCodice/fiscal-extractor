@@ -1,5 +1,5 @@
 name: Vigilar corpus fiscal
-run-name: "vigilar-fiscal reintento=[${{ inputs.reintento }}] origen=[${{ inputs.origen }}]"
+run-name: "vigilar-fiscal origen=[${{ inputs.origen }}]"
 
 # Vigila las fuentes oficiales del corpus fiscal (Cámara de Diputados para leyes,
 # códigos y reglamentos; SAT para la RMF y los criterios) y abre un PR cuando el
@@ -19,10 +19,6 @@ run-name: "vigilar-fiscal reintento=[${{ inputs.reintento }}] origen=[${{ inputs
 on:
   workflow_dispatch:
     inputs:
-      reintento:
-        description: 'Sin efecto: los reintentos son del supervisor'
-        type: boolean
-        default: false
       origen:
         description: 'Quién lanzó la corrida (supervisor); vacío = a mano'
         required: false

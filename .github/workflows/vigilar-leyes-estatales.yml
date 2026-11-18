@@ -1,5 +1,5 @@
 name: Vigilar leyes estatales
-run-name: "vigilar-leyes-estatales reintento=[${{ inputs.reintento }}] docs=[${{ inputs.docs }}] estados=[${{ inputs.estados }}] lote=[${{ inputs.lote }}] revisar=[${{ inputs.revisar }}] origen=[${{ inputs.origen }}]"
+run-name: "vigilar-leyes-estatales docs=[${{ inputs.docs }}] estados=[${{ inputs.estados }}] lote=[${{ inputs.lote }}] revisar=[${{ inputs.revisar }}] origen=[${{ inputs.origen }}]"
 
 # Las leyes de cada estado además de su constitución (códigos, leyes orgánicas…),
 # declaradas en extractor/estatales/ y publicadas en leyes-estatales, junto a la
@@ -25,10 +25,6 @@ run-name: "vigilar-leyes-estatales reintento=[${{ inputs.reintento }}] docs=[${{
 on:
   workflow_dispatch:
     inputs:
-      reintento:
-        description: 'Sin efecto: los reintentos son del supervisor'
-        type: boolean
-        default: false
       docs:
         description: 'Solo estas claves (estado/ley), separadas por espacio (vacío = todo lo que cambió)'
         required: false
