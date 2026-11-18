@@ -390,12 +390,14 @@ codigo_publicar() {
   [ "$est" = listo ] || [ -s "$CODIGO/descarte.txt" ] || echo "las compuertas no terminaron" > "$CODIGO/descarte.txt"
   echo "publicado=false" >> "${GITHUB_OUTPUT:-/dev/null}"
   titulo="$(python3 -c '
-import json, sys
+import json, re, sys
 try:
     t = str(json.load(open(sys.argv[1], encoding="utf-8")).get("titulo_commit") or "")
 except Exception:
     t = ""
-print(" ".join(t.split())[:120])' "$CODIGO/veredicto.json")"
+# El título del commit ya lleva el prefijo, y el agente a veces lo repite.
+t = re.sub(r"^\s*leyes estatales\s*:\s*", "", " ".join(t.split()), flags=re.IGNORECASE)
+print(t[:120])' "$CODIGO/veredicto.json")"
   if [ "$est" = listo ]; then
     dir="$(limpio codigo)" || return 1
     if git -C "$dir" apply --3way "$CODIGO/arreglo.patch" \
