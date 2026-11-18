@@ -12,6 +12,7 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 
@@ -27,6 +28,7 @@ jobs:
     # Los workflows y sus scripts de orquestación: un error aquí no lo ve
     # pytest y solo aparecería en una corrida real, a medias.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:

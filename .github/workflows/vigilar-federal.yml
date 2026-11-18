@@ -50,6 +50,7 @@ env:
 jobs:
   planear:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     outputs:
       hay: ${{ steps.plan.outputs.hay }}
       shards: ${{ steps.plan.outputs.shards }}
@@ -435,6 +436,7 @@ jobs:
     needs: cerrar
     if: ${{ !cancelled() && needs.cerrar.outputs.fuentes_fallidas == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions: {}
     steps:
       - name: Alertar fuentes fallidas
@@ -463,6 +465,7 @@ jobs:
     needs: cerrar
     if: needs.cerrar.outputs.continuar == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       actions: write
     steps:
@@ -688,6 +691,7 @@ jobs:
     needs: [planear, extraer, cerrar, revisar]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions: {}
     steps:
       - name: Avisar a la web
@@ -721,6 +725,7 @@ jobs:
     needs: [planear, extraer, cerrar, fuentes, revisar, continuar, reparar]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       actions: write
       issues: write
@@ -755,6 +760,7 @@ jobs:
     needs: [planear, extraer, cerrar, fuentes, revisar, continuar, reparar, web, salud]
     if: ${{ always() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions: {}
     steps:
       - run: 'true'

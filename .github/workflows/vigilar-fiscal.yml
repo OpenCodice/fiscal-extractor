@@ -355,6 +355,7 @@ jobs:
     needs: [vigilar, revisar]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       actions: write
       issues: write
@@ -412,6 +413,7 @@ jobs:
     needs: [vigilar, revisar, salud]
     if: ${{ always() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions: {}
     steps:
       - run: 'true'
