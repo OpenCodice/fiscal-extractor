@@ -24,6 +24,10 @@ on:
         description: 'Este estado (slug de pendientes.json) en vez del siguiente de la lista'
         required: false
         default: ''
+      sin_esperar:
+        description: 'Prueba manual: no esperar a que termine la cadena de vigilancias (ni a sus altas pendientes)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -62,7 +66,10 @@ jobs:
                         --json status -q '[.[] | select(.status != "completed")] | length')
           abiertos=$(gh pr list -R "$DATOS" --head "$RAMA" --state open --json number -q length)
           echo "Vigilancias en curso: $corriendo; PR abiertos: $abiertos"
-          if [ "$corriendo" != 0 ] || [ "$abiertos" != 0 ]; then
+          if [ "${{ inputs.sin_esperar }}" = true ]; then
+            echo "Prueba manual (sin_esperar): no se espera a la cadena anterior." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "libre=true" >> "$GITHUB_OUTPUT"
+          elif [ "$corriendo" != 0 ] || [ "$abiertos" != 0 ]; then
             echo "La cadena anterior sigue en curso: esta ronda no empieza un estado nuevo." | tee -a "$GITHUB_STEP_SUMMARY"
             echo "libre=false" >> "$GITHUB_OUTPUT"
           else
@@ -87,7 +94,7 @@ jobs:
       - name: Retomar la cadena
         # Quedan leyes declaradas sin alta (una tanda que no continuó): se
         # relanza su vigilancia y el estado nuevo espera a la siguiente ronda.
-        if: steps.altas.outputs.pendientes != '' && steps.altas.outputs.pendientes != '0'
+        if: steps.altas.outputs.pendientes != '' && steps.altas.outputs.pendientes != '0' && !inputs.sin_esperar
         env:
           GH_TOKEN: ${{ github.token }}
           ESTADOS: ${{ steps.altas.outputs.estados }}
@@ -97,7 +104,7 @@ jobs:
 
       - name: Elegir el estado y contar el intento
         id: elegir
-        if: steps.altas.outputs.pendientes == '0' && env.TIENE_CLAUDE == 'true'
+        if: (steps.altas.outputs.pendientes == '0' || (inputs.sin_esperar && steps.altas.outputs.pendientes != '')) && env.TIENE_CLAUDE == 'true'
         env:
           ESTADO_PEDIDO: ${{ inputs.estado }}
           EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}

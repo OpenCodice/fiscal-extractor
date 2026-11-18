@@ -415,7 +415,8 @@ estado=<slug>]`). La parte determinista vive en `scripts/expansion.py`.
   en curso o en cola, ningún PR suyo abierto y ninguna ley declarada sin alta
   cuyo PDF responda (`expansion.py listo`). Si quedan altas (una tanda que no
   continuó), la ronda relanza la vigilancia de esos estados y no empieza otro.
-  Un estado por ronda.
+  Un estado por ronda. El input `sin_esperar` (solo a mano, para probar) se
+  salta esta condición.
 - **Elegir y contar el intento** (`expansion.py elegir`): el primer `pendiente`
   bajo el tope (o el del input `estado`). Un `egress` cuyo dominio ya aparece
   en `PERMITIDOS` del Worker egress-mx (se lee de main de
