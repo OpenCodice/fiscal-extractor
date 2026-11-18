@@ -59,6 +59,11 @@ IMPORTE_SUELTO_RE = re.compile(r"\$?\s?\d[\d.,]*(?:\s+(?:cuotas?|veces))?")
 TARIFA_FINAL_RE = re.compile(r"[A-ZÁÉÍÓÚÑ][^.;:,]{0,60}\$\s?\d[\d.,]*$")
 
 
+def blocks_texto(blocks: list[str]) -> bool:
+    """¿Hay ya algún párrafo que no sea una nota (en cursiva)?"""
+    return any(not b.startswith("_") for b in blocks)
+
+
 def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = None,
                    rotulo: re.Pattern = ARTICULO_RE,
                    cortes: dict[tuple[str, str], bool] | None = None) -> str:
@@ -95,6 +100,10 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
     blocks: list[str] = []
     buf: list[str] = []
     anterior = ""            # renglón original (con rótulo) del último en `buf`
+    # Ley estatal con notas antes del texto: el rótulo queda solo en el primer
+    # renglón y el texto que compartía su renglón ('Artículo 149.- Los testigos…')
+    # viene después de las notas; los cortes lo conocen con el rótulo.
+    rotulo_solo = (first.strip() if lines and cortes and m and not lines[0].strip() else "")
 
     def flush_buf() -> None:
         if buf:
@@ -146,6 +155,9 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
         if cortes and buf and re.match(r"\*N\. de E\.", s):
             flush_buf()                 # la nota del editor es su propio párrafo
         corte = cortes.get((anterior, originales[i])) if cortes and buf else None
+        if (corte is None and cortes and buf and rotulo_solo and len(buf) == 1
+                and not blocks_texto(blocks)):
+            corte = cortes.get((f"{rotulo_solo} {anterior}", originales[i]))
         if _is_struct_marker(s):
             sigue = corte is False and not SENTENCE_END_RE.search(buf[-1])
         else:

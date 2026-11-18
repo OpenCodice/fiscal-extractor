@@ -571,6 +571,10 @@ _INCISO_MAYUSCULA_RE = re.compile(r"^[A-Z]\)\s+\S")
 _ABRE_PARRAFO_RE = re.compile(r"^(?:[^a-záéíóúüñ]|[a-zñ]{1,4}[.)]\s)")   # o un inciso: 'd. ', 'ii) '
 
 
+_ROTULO_EPIGRAFE_RE = re.compile(
+    r"^Art[íi]culo\s+\d+\.\s+[A-ZÁÉÍÓÚÑ][^.;:]{8,90}\.$")
+
+
 def _renglones_con_geometria(pdf) -> list[list[dict]]:
     """Por página, sus renglones con texto y posición, en el mismo orden y con
     el mismo texto que `extract_text`. Una página donde no coinciden queda sin
@@ -593,6 +597,14 @@ def _renglones_con_geometria(pdf) -> list[list[dict]]:
         (propio, veces), = m.most_common(1) or [(None, 0)]
         for r in renglones:
             r["margen"] = propio if veces >= _MIN_RENGLONES_MARGEN else general
+    # Documento justificado: casi todo renglón largo llega al margen.
+    largos = [r for renglones in paginas for r in renglones
+              if r["margen"] and r["x1"] > 0.6 * r["margen"]]
+    justificada = len(largos) >= _MIN_RENGLONES_MARGEN and sum(
+        r["x1"] >= r["margen"] - 1.5 for r in largos) >= 0.5 * len(largos)
+    for renglones in paginas:
+        for r in renglones:
+            r["justificada"] = justificada
     return paginas
 
 
@@ -692,6 +704,13 @@ def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str,
                 return None
         elif pb != pa + 1:
             return None
+        # Rótulo con su epígrafe de una oración ('Artículo 53. De las sanciones por
+        # faltas.') que cierra antes del margen en una página justificada: un
+        # renglón que sigue habría llegado al margen. La palabra siguiente solo
+        # parece no caber si el epígrafe queda a menos de una palabra del margen.
+        if (ra.get("justificada") and ra["margen"] and ra["x1"] < ra["margen"] - 3
+                and _ROTULO_EPIGRAFE_RE.match(ra["texto"]) and _ABRE_PARRAFO_RE.match(rb["texto"])):
+            return True
         sin_sitio = _sin_sitio(ra, rb)
         if sin_sitio is None:
             return None
@@ -1254,6 +1273,10 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
         # Glifos sueltos que el PDF deja en un renglón ('|', '.') y el título de
         # estructura que comparte renglón con el final del artículo ('…menor de
         # edad. TÍTULO SEPTIMO'): no son texto del artículo.
+        # Un '.' suelto tras un renglón que no cierra ('…irregularidades' / '.' /
+        # 'A).- Omisión…') es el punto final de ese renglón, que el PDF dejó caer.
+        texto = re.sub(r"(?m)^(\w.*[a-záéíóúüñ])[ \t]*\n[ \t]*\.[ \t]*\n(?=[A-Z]\)[.\-])",
+                       r"\1.\n", texto)
         texto = re.sub(r"(?m)^[ \t]*[|.][ \t]*\n", "", texto)
         texto = re.sub(rf"(?m)^(.*\S[.;:])[ \t]+(T[ÍI]TULO\s+(?:{_ORDINAL_MAY}))[ \t]*$",
                        r"\1\n\2", texto)
@@ -1646,6 +1669,14 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             clave = (numero, letra, guion_num, ordinal, ord_num, sub_letra)
             if es_variante and clave in abiertos:
                 es_variante = False
+            # Estatal: 'Artículo 48 de este código.' al inicio de renglón, sin el
+            # punto o guion del rótulo, cierra la cita del párrafo anterior
+            # ('…los requisitos que establece el' / 'Artículo 48 de este código.').
+            if (estatal and actual is not None and not en_bloque
+                    and not re.search(r"[.\-:]", stripped[am.end(1):am.end()])
+                    and re.match(r"(?:de|del)\s+(?:este|esta|la presente|el presente)\s+"
+                                 r"(?:c[óo]digo|ley|ordenamiento)\b", stripped[am.end():])):
+                es_siguiente = es_variante = False
             if es_siguiente or es_variante:
                 abiertos.add(clave)
                 en_bloque = nota_previa = False
