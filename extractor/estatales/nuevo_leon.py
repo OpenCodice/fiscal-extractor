@@ -68,7 +68,8 @@ LEYES = [
         titulos_encabezado=tuple(f"LEY DE SEGURIDAD PÚBLICA DEL ESTADO DE NUEVO LEÓN {n}"
                                  for n in range(1, 301))),
     _nl("Ley de Juicio Político del Estado de Nuevo León", "LJP NL",
-        "LEY%20DE%20JUICIO%20POLITICO%20DEL%20ESTADO%20DE%20NUEVO%20LEON"),
+        "LEY%20DE%20JUICIO%20POLITICO%20DEL%20ESTADO%20DE%20NUEVO%20LEON",
+        titulos_encabezado=_pie(473, "LXXV")),
     _nl("Ley de Fiscalización Superior del Estado de Nuevo León", "LFS NL",
         "LEY%20DE%20FISCALIZACION%20SUPERIOR%20DEL%20ESTADO%20DE%20NUEVO%20LEON"),
     _nl("Ley de Responsabilidad Patrimonial del Estado y Municipios de Nuevo León", "LRP NL",
