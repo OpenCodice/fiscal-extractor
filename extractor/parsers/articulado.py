@@ -482,7 +482,12 @@ _ROTULO_MAYUS_RE = re.compile(
 _ROTULO_GRAVE_RE = re.compile(r"(?m)^ARTÌCULO(?=\s)")
 
 
+# 'ARTÍCULO 79 BlS. - …': la 'I' de 'BIS' escrita como ele minúscula.
+_ROTULO_BIS_ELE_RE = re.compile(r"(?m)^((?:ART[ÍI]CULO|Art[íi]culo)\s+\d+\s+B)l(S\b)")
+
+
 def _rotulo_abreviado_completo(texto: str) -> str:
+    texto = _ROTULO_BIS_ELE_RE.sub(r"\g<1>I\2", texto)
     texto = _ROTULO_GRAVE_RE.sub("ARTÍCULO", texto)
     texto = _ROTULO_MAYUS_RE.sub("ARTÍCULO ", texto)
     return _ROTULO_ABREVIADO_RE.sub("Artículo", texto)

@@ -85,7 +85,8 @@ LEYES = [
         "LEY%20DEL%20REGISTRO%20CIVIL%20PARA%20EL%20ESTADO%20DE%20NUEVO%20LEON",
         titulos_encabezado=("Ley del Registro Civil para el Estado de Nuevo León",)),
     _nl("Ley de Justicia Cívica para el Estado de Nuevo León", "LJC NL",
-        "LEY%20DE%20JUSTICIA%20CIVICA%20PARA%20EL%20ESTADO%20DE%20NUEVO%20LEON"),
+        "LEY%20DE%20JUSTICIA%20CIVICA%20PARA%20EL%20ESTADO%20DE%20NUEVO%20LEON",
+        titulos_encabezado=_pie(267, "LXXVI")),
 ]
 
 # Lo que se consideró y no queda fiel con las opciones de `ley()` (el parser no se toca).

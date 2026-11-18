@@ -39,6 +39,10 @@ STRUCT_MARKER_RE = re.compile(r"^(?:[IVXLCDM]+\.|[a-z]\)|\d+\.|[A-Z]\.\s)")
 SENTENCE_END_RE = re.compile(r"[.:;]$")
 
 
+# Párrafo que solo dice que el texto fue derogado: 'DEROGADO. P.O. 20 DE MAYO DE 2022.'
+DEROGADO_SUELTO_RE = re.compile(r"DEROGAD[OA]\.\s+P\.\s?O\.\s+\d{1,2}\s+DE\s+[A-ZÁÉÍÓÚ]+\s+DE\s+\d{4}\.?")
+
+
 def _is_reform_note(line: str) -> bool:
     return bool(REFORM_NOTE_START_RE.match(line.strip()))
 
@@ -152,6 +156,11 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             if (not sigue and cortes and corte is None and buf and buf[-1].endswith(";")
                     and re.match(r"[a-záéíóúüñ]{2,}\s", s) and not re.match(r"[a-zñ]{1,4}[.)]\s", s)):
                 sigue = True
+        # Ley estatal: 'DEROGADO. P.O. 20 DE MAYO DE 2022.' es un párrafo propio
+        # aunque abra una página y la geometría lo dé por continuación.
+        if (sigue and cortes and buf and SENTENCE_END_RE.search(buf[-1])
+                and DEROGADO_SUELTO_RE.fullmatch(s)):
+            sigue = False
         # Ley estatal: el importe de una tarifa ('204.5 cuotas') que el PDF pasa al
         # renglón siguiente de los puntos guía ('…suplente………') es de esa fila.
         if (not sigue and cortes is not None and buf and IMPORTE_SUELTO_RE.fullmatch(s)
