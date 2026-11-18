@@ -8,29 +8,35 @@ run-name: "expandir-estatales estado=[${{ inputs.estado }}] sin_esperar=[${{ inp
 # determinista decide si entra (scripts/expansion.py): solo esos archivos,
 # pruebas en verde, build + auditar de cada ley sobre su PDF descargado desde un
 # clon limpio (lo que no quede limpio pasa a FUERA) y nada de lo publicado
-# cambia. Si entra, se publica en main y se lanza su vigilancia, que da de alta
+# cambia. Si entra, se publica en main y se pide su vigilancia, que da de alta
 # cada ley tras su revisión completa (vigilar-leyes-estatales.yml).
+#
+# Ningún paso lanza otra corrida: lo que tiene que correr después se pide en
+# una salida `pedir_*` del job y lo lanza el supervisor (OpenCodice/supervisor),
+# que también lanza esta ronda cada miércoles.
 #
 # Un estado por ronda, y solo cuando la cadena anterior terminó: ninguna
 # vigilar-leyes-estatales en curso ni PR suyo abierto, ni leyes declaradas sin
-# alta todavía (en ese caso relanza la vigilancia de esos estados y espera a la
-# siguiente ronda). Falla cerrado: un error deja todo sin publicar y el estado
-# se reintenta en la ronda siguiente, hasta el tope de intentos de la lista. La
-# lanza cada miércoles el Worker `scheduler` (constitucion-extractor/scheduler/).
+# alta todavía (en ese caso pide la vigilancia de esos estados y el estado
+# nuevo espera a la siguiente ronda). Si la cadena sigue en curso, la corrida
+# la espera sin empezar nada y termina con `estado pendiente=[true]`: el
+# supervisor lanza la ronda otra vez. Falla cerrado: un error deja todo sin
+# publicar y el estado se reintenta en la ronda siguiente, hasta el tope de
+# intentos de la lista.
 #
 # Lo que el agente no puede resolver con un módulo tampoco espera a nadie: si
 # el sitio rechaza IP extranjeras, un paso determinista agrega su dominio (si
 # es oficial) a la lista de egress-mx; si al extractor le falta una opción para
 # encontrar o descargar los PDF, el job `codigo` la agrega (otro agente, con
 # compuertas). En los dos casos el estado vuelve a la cola sin gastar el
-# intento y se relanza la ronda.
+# intento y se pide otra ronda para él.
 #
-# Con `redeclarar=<estado>` (lo lanza el job `reparar` de
+# Con `redeclarar=<estado>` (lo pide el job `reparar` de
 # vigilar-leyes-estatales.yml) la ronda es sobre un estado ya publicado: leyes
 # de su FUERA que no se pueden descargar por algo del extractor. El agente solo
 # agrega opciones a esas entradas del módulo (cerco por a_dict: LEYES y
 # FUERA_POR_DISENO idénticas); si falta la opción, el mismo job `codigo` la
-# agrega y la redeclaración se relanza. Con su propio tope por estado y falla
+# agrega y la redeclaración se pide otra vez. Con su propio tope por estado y falla
 # (registro `redeclaracion` de pendientes.json). No espera a la cadena: no
 # suma ningún estado.
 
@@ -46,7 +52,7 @@ on:
         type: boolean
         default: false
       ensayo:
-        description: 'Prueba manual: hace todo pero no sube nada (ni el intento, ni el módulo, ni el arreglo, ni egress-mx) ni relanza nada'
+        description: 'Prueba manual: hace todo pero no sube nada (ni el intento, ni el módulo, ni el arreglo, ni egress-mx) ni pide otra corrida'
         type: boolean
         default: false
       simular:
@@ -59,11 +65,11 @@ on:
         required: false
         default: ''
       redeclarar:
-        description: 'Estado ya publicado cuyas leyes de FUERA no se descargan por algo del extractor (lo lanza reparar)'
+        description: 'Estado ya publicado cuyas leyes de FUERA no se descargan por algo del extractor (lo pide reparar)'
         required: false
         default: ''
       origen:
-        description: 'Quién lanzó la corrida (scheduler, supervisor, continuar, reparar, ronda, salud); vacío = a mano'
+        description: 'Quién lanzó la corrida (supervisor); vacío = a mano'
         required: false
         default: ''
 
@@ -89,7 +95,8 @@ jobs:
     timeout-minutes: 355
     permissions:
       contents: read
-      actions: write
+      # `gh run list` de la vigilancia, para saber si la cadena terminó.
+      actions: read
     env:
       TIENE_CLAUDE: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
       ENSAYO: ${{ inputs.ensayo || inputs.simular != '' }}
@@ -97,39 +104,63 @@ jobs:
       codigo: ${{ steps.anotar.outputs.codigo }}
       estado: ${{ steps.elegir.outputs.estado }}
       nombre: ${{ steps.elegir.outputs.nombre }}
+      # La cadena anterior seguía en curso: esta corrida no empezó nada.
+      pendiente: ${{ steps.cadena.outputs.libre == 'false' && 'true' || 'false' }}
+      pedir_altas: ${{ steps.retomar.outputs.pedir }}
+      pedir_vigilancia: ${{ steps.vigilancia.outputs.pedir }}
+      pedir_ronda: ${{ steps.anotar.outputs.pedir }}
     steps:
-      - uses: actions/checkout@v5
-        with:
-          path: _lanzador
-          sparse-checkout: |
-            scripts/lanzar_vigilancia_estatal.sh
-            scripts/lanzar_ronda_expansion.sh
-          sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
       - name: ¿Terminó la cadena anterior?
+        # Si sigue en curso, esta corrida no empieza un estado: espera aquí a
+        # que termine (o a agotar la espera) y acaba con `pendiente`, para que
+        # el supervisor lance otra ronda, que la encontrará libre. Esperar
+        # dentro de la corrida, y no declarar `pendiente` de inmediato, es lo
+        # que evita un ciclo: el supervisor relanza en minutos lo pendiente, y
+        # la cadena puede tardar un día.
         id: cadena
+        timeout-minutes: 310
         env:
           GH_TOKEN: ${{ github.token }}
+          SIN_ESPERAR: ${{ inputs.sin_esperar }}
+          ESPERA_MIN: '300'
         run: |
-          corriendo=$(gh run list -R "$GITHUB_REPOSITORY" -w vigilar-leyes-estatales.yml -L 20 \
-                        --json status -q '[.[] | select(.status != "completed")] | length')
-          abiertos=$(gh pr list -R "$DATOS" --head "$RAMA" --state open --json number -q length)
-          echo "Vigilancias en curso: $corriendo; PR abiertos: $abiertos"
+          en_curso() {
+            corriendo=$(gh run list -R "$GITHUB_REPOSITORY" -w vigilar-leyes-estatales.yml -L 20 \
+                          --json status -q '[.[] | select(.status != "completed")] | length') || return 2
+            abiertos=$(gh pr list -R "$DATOS" --head "$RAMA" --state open --json number -q length) || return 2
+            echo "Vigilancias en curso: $corriendo; PR abiertos: $abiertos"
+            [ "$corriendo" != 0 ] || [ "$abiertos" != 0 ]
+          }
           if [ "$REDECLARAR" = true ]; then
             echo "Redeclaración de $REDECLARAR_ESTADO: no suma un estado, no espera a la cadena." | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "libre=true" >> "$GITHUB_OUTPUT"
-          elif [ "${{ inputs.sin_esperar }}" = true ]; then
+            echo "libre=true" >> "$GITHUB_OUTPUT"; exit 0
+          elif [ "$SIN_ESPERAR" = true ]; then
             echo "Prueba manual (sin_esperar): no se espera a la cadena anterior." | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "libre=true" >> "$GITHUB_OUTPUT"
-          elif [ "$corriendo" != 0 ] || [ "$abiertos" != 0 ]; then
-            echo "La cadena anterior sigue en curso: esta ronda no empieza un estado nuevo." | tee -a "$GITHUB_STEP_SUMMARY"
-            echo "libre=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "libre=true" >> "$GITHUB_OUTPUT"
+            echo "libre=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          en_curso && rc=0 || rc=$?
+          if [ "$rc" = 1 ]; then
+            echo "libre=true" >> "$GITHUB_OUTPUT"; exit 0
+          elif [ "$rc" != 0 ]; then
+            echo "::error::No se pudo consultar si la cadena anterior terminó."; exit 1
+          fi
+          echo "libre=false" >> "$GITHUB_OUTPUT"
+          echo "La cadena anterior sigue en curso: esta ronda no empieza un estado nuevo; queda pendiente." | tee -a "$GITHUB_STEP_SUMMARY"
+          limite=$(( $(date +%s) + ESPERA_MIN * 60 ))
+          while [ "$(date +%s)" -lt "$limite" ]; do
+            sleep 300
+            # Una consulta que falla no corta la espera: se vuelve a preguntar.
+            en_curso && rc=0 || rc=$?
+            if [ "$rc" = 1 ]; then
+              echo "La cadena anterior terminó: la ronda siguiente empieza el estado." | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          done
+          echo "La cadena anterior sigue en curso tras $ESPERA_MIN minutos: la ronda siguiente vuelve a esperar." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Clonar extractor y leyes-estatales
         if: steps.cadena.outputs.libre == 'true'
@@ -148,14 +179,14 @@ jobs:
 
       - name: Retomar la cadena
         # Quedan leyes declaradas sin alta (una tanda que no continuó): se
-        # relanza su vigilancia y el estado nuevo espera a la siguiente ronda.
+        # pide su vigilancia y el estado nuevo espera a la siguiente ronda.
+        id: retomar
         if: steps.altas.outputs.pendientes != '' && steps.altas.outputs.pendientes != '0' && !inputs.sin_esperar
         env:
-          GH_TOKEN: ${{ github.token }}
           ESTADOS: ${{ steps.altas.outputs.estados }}
         run: |
-          bash "$GITHUB_WORKSPACE/_lanzador/scripts/lanzar_vigilancia_estatal.sh" "$ESTADOS" -f origen=ronda
-          echo "Quedan altas pendientes en: $ESTADOS. Se relanzó su vigilancia; el estado nuevo espera a la siguiente ronda." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "pedir=$(jq -cn --arg e "$ESTADOS" '{workflow: "vigilar-leyes-estatales.yml", inputs: {estados: $e}}')" >> "$GITHUB_OUTPUT"
+          echo "Quedan altas pendientes en: $ESTADOS. Se pidió su vigilancia; el estado nuevo espera a la siguiente ronda." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Redeclaración — qué leyes de FUERA no se descargan y por qué
         # Con el extractor de main, antes del agente (con EGRESS_MX_TOKEN, que
@@ -428,20 +459,20 @@ jobs:
           bash /tmp/extractor/scripts/agente/expandir.sh publicar --leyes "$LIMPIAS" --fuera "${FUERA:-0}" --corrida "$CORRIDA"
           echo "sha=$(cat "$TRABAJO/publicado.txt")" >> "$GITHUB_OUTPUT"
 
-      - name: Lanzar la vigilancia del estado nuevo
+      - name: Pedir la vigilancia del estado nuevo
+        id: vigilancia
         if: steps.publicar.outcome == 'success' && env.ENSAYO != 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
           ESTADO: ${{ steps.elegir.outputs.estado }}
         run: |
-          bash "$GITHUB_WORKSPACE/_lanzador/scripts/lanzar_vigilancia_estatal.sh" "$ESTADO" -f origen=ronda
-          echo "Módulo de $ESTADO publicado (${{ steps.publicar.outputs.sha }}); vigilancia lanzada." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "pedir=$(jq -cn --arg e "$ESTADO" '{workflow: "vigilar-leyes-estatales.yml", inputs: {estados: $e}}')" >> "$GITHUB_OUTPUT"
+          echo "Módulo de $ESTADO publicado (${{ steps.publicar.outputs.sha }}); vigilancia pedida." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Anotar el resultado sin módulo
         # Egress: el sitio rechaza IP extranjeras y su dominio no está en el
         # Worker; solo se acepta si desde aquí de verdad no responde (dos
         # veces), y si el dominio es oficial se agrega solo a la lista del
-        # Worker y la ronda se relanza. Código: al extractor le falta una opción
+        # Worker y se pide otra ronda para el estado. Código: al extractor le falta una opción
         # para encontrar o descargar los PDF; la agrega el job `codigo`. Lo demás
         # (sin fuente, sin veredicto, una compuerta que falló) es un intento
         # fallido: el estado se reintenta hasta el tope.
@@ -450,7 +481,6 @@ jobs:
         env:
           EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
           EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
-          GH_TOKEN: ${{ github.token }}
           ESTADO: ${{ steps.elegir.outputs.estado }}
           NOMBRE: ${{ steps.elegir.outputs.nombre }}
           PISTA: ${{ steps.elegir.outputs.pista }}
@@ -479,11 +509,12 @@ jobs:
               if [ "$rc" = 0 ]; then
                 expandir anotar --resultado egress --agregado --dominio "$DOMINIO" --motivo "$MOTIVO" --corrida "$CORRIDA"
                 if [ "$ENSAYO" != true ]; then
-                  echo "$DOMINIO agregado a egress-mx." | tee -a "$GITHUB_STEP_SUMMARY"
-                  bash "$GITHUB_WORKSPACE/_lanzador/scripts/lanzar_ronda_expansion.sh" -f estado="$ESTADO" -f origen=ronda \
-                    | tee -a "$GITHUB_STEP_SUMMARY"
+                  # `expandir egress` ya esperó a que la lista nueva se vea
+                  # donde la lee el Worker: la ronda pedida puede empezar.
+                  echo "pedir=$(jq -cn --arg e "$ESTADO" '{workflow: "expandir-estatales.yml", inputs: {estado: $e}}')" >> "$GITHUB_OUTPUT"
+                  echo "$DOMINIO agregado a egress-mx; ronda pedida para $ESTADO." | tee -a "$GITHUB_STEP_SUMMARY"
                 else
-                  echo "Ensayo: $DOMINIO se agregaría a egress-mx y se relanzaría la ronda para $ESTADO." | tee -a "$GITHUB_STEP_SUMMARY"
+                  echo "Ensayo: $DOMINIO se agregaría a egress-mx y se pediría la ronda para $ESTADO." | tee -a "$GITHUB_STEP_SUMMARY"
                 fi
                 exit 0
               elif [ "$rc" = 3 ]; then
@@ -535,25 +566,21 @@ jobs:
     # declaración ni URL vigente de lo ya declarado distinta (sobre las mismas
     # páginas índice) e impacto nulo en lo publicado. El parser no: eso es de
     # `reparar`. Si entra, se publica en main, el estado vuelve a la cola sin
-    # gastar el intento y la ronda se relanza para él.
+    # gastar el intento y se pide otra ronda para él.
     needs: ronda
     if: ${{ always() && needs.ronda.outputs.codigo == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
     permissions:
       contents: read
-      actions: write
+    outputs:
+      pedir_ronda: ${{ steps.reintentar.outputs.pedir }}
     env:
       ENSAYO: ${{ inputs.ensayo || inputs.simular != '' }}
       ESTADO: ${{ needs.ronda.outputs.estado }}
       NOMBRE: ${{ needs.ronda.outputs.nombre }}
       FUENTES: /tmp/fuentes/leyes-estatales.json /tmp/fuentes/leyes-federales.json
     steps:
-      - uses: actions/checkout@v5
-        with:
-          path: _lanzador
-          sparse-checkout: scripts/lanzar_ronda_expansion.sh
-          sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -668,17 +695,13 @@ jobs:
         run: bash /tmp/limpio/scripts/agente/expandir.sh codigo-publicar
 
       - name: Reintentar el estado con el extractor nuevo
-        # La corrida nueva espera a que termine esta (concurrency).
+        # Pide otra ronda para el estado (o su redeclaración).
+        id: reintentar
         if: steps.publicar.outputs.publicado == 'true' && env.ENSAYO != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Arreglo publicado ($(cat "$TRABAJO/codigo/publicado.txt"))." | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ "$REDECLARAR" = true ]; then
-            bash "$GITHUB_WORKSPACE/_lanzador/scripts/lanzar_ronda_expansion.sh" -f redeclarar="$ESTADO" -f origen=codigo
-          else
-            bash "$GITHUB_WORKSPACE/_lanzador/scripts/lanzar_ronda_expansion.sh" -f estado="$ESTADO" -f origen=codigo
-          fi | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$REDECLARAR" = true ]; then clave=redeclarar; else clave=estado; fi
+          echo "pedir=$(jq -cn --arg k "$clave" --arg e "$ESTADO" '{workflow: "expandir-estatales.yml", inputs: {($k): $e}}')" >> "$GITHUB_OUTPUT"
+          echo "Arreglo publicado ($(cat "$TRABAJO/codigo/publicado.txt")); ronda pedida ($clave=$ESTADO)." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Guardar el trabajo del arreglo
         if: always()
@@ -697,12 +720,23 @@ jobs:
           retention-days: 30
 
   estado:
-    # El supervisor (OpenCodice/supervisor) lee el nombre de este job para saber si quedó trabajo pendiente.
-    name: "estado pendiente=[false]"
+    # El supervisor (OpenCodice/supervisor) lee el nombre de este job para
+    # saber si quedó trabajo pendiente (la cadena anterior seguía en curso y la
+    # ronda no empezó), y el artefacto `cadena` (el resultado y las salidas de
+    # cada job) para atender lo que pidieron (salidas `pedir*`).
+    name: "estado pendiente=[${{ needs.ronda.result == 'success' && needs.ronda.outputs.pendiente == 'true' && 'true' || 'false' }}]"
     needs: [ronda, codigo]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
     steps:
-      - run: 'true'
+      - name: Lo que declaró cada job
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: printf '%s' "$NEEDS" > cadena.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cadena
+          path: cadena.json
+          retention-days: 14

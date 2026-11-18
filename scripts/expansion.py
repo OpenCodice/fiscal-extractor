@@ -32,7 +32,7 @@ Subcomandos:
 Redeclaración (un estado ya publicado con leyes en FUERA que no se pueden
 descargar por algo del extractor, `reparacion.py fuera` con causa `codigo`):
 
-  redeclarar-pendiente --fuera J   el estado que toca redeclarar (lo lanza `reparar`)
+  redeclarar-pendiente --fuera J   el estado que toca redeclarar (lo pide `reparar`)
   elegir --redeclarar E --fuera J --objetivo O   cuenta su intento y deja sus leyes
   redeclaracion-cerco --antes R --despues R --objetivo O --salida R2
             el agente solo agregó opciones a esas leyes de FUERA

@@ -11,16 +11,17 @@ run-name: "vigilar-federal reintento=[${{ inputs.reintento }}] docs=[${{ inputs.
 # estaba), y queda anotado en fuentes.json.
 #
 # Vive en el extractor, no en el repo de datos, para que el historial de
-# leyes-federales solo tenga cambios de texto legal. Lo lanza cada lunes el Worker
-# `scheduler` (constitucion-extractor/scheduler/); el PR se abre en leyes-federales con
-# PR_TOKEN, un commit por documento, y el job `revisar` (revisar-pr.yml) lo
-# valida y lo fusiona con rebase para conservarlos.
+# leyes-federales solo tenga cambios de texto legal. Lo lanza cada lunes el
+# supervisor (OpenCodice/supervisor), que también lanza la tanda siguiente, lo
+# reintenta si falla y redespliega la web cuando los datos cambian; el PR se
+# abre en leyes-federales con PR_TOKEN, un commit por documento, y el job
+# `revisar` (revisar-pr.yml) lo valida y lo fusiona con rebase para conservarlos.
 
 on:
   workflow_dispatch:
     inputs:
       reintento:
-        description: 'Reintento automático tras una falla'
+        description: 'Sin efecto: los reintentos son del supervisor'
         type: boolean
         default: false
       docs:
@@ -32,7 +33,7 @@ on:
         required: false
         default: '40'
       origen:
-        description: 'Quién lanzó la corrida (scheduler, supervisor, continuar, reparar, ronda, salud); vacío = a mano'
+        description: 'Quién lanzó la corrida (supervisor); vacío = a mano'
         required: false
         default: ''
 
@@ -151,7 +152,8 @@ jobs:
     outputs:
       pr: ${{ steps.pr.outputs.pull-request-number }}
       # Queda trabajo y esta corrida avanzó (publica algo o el agente reparó el
-      # extractor): si no avanzó, otra corrida repetiría lo mismo.
+      # extractor): si no avanzó, otra corrida repetiría lo mismo. Es lo que
+      # el job `estado` declara como `pendiente`.
       continuar: ${{ (needs.planear.outputs.pendientes != '0' || steps.cierre.outputs.reparado == 'true' || steps.cierre.outputs.aplazadas == 'true') && (steps.pr.outputs.pull-request-number != '' || steps.cierre.outputs.reparado == 'true') && 'true' || 'false' }}
       fuentes_fallidas: ${{ steps.cierre.outputs.fuentes_fallidas }}
     permissions:
@@ -430,9 +432,9 @@ jobs:
           { echo "## Versión anterior conservada"; cat /tmp/agente/pr.md; } >> "$GITHUB_STEP_SUMMARY"
 
   fuentes:
-    # Una fuente caída deja la corrida en rojo (y `salud` la reintenta), pero
-    # desde un job aparte: `cerrar` termina bien y lo demás de la corrida
-    # (`continuar`, `reparar`) no depende de la ley que no respondió.
+    # Una fuente caída deja la corrida en rojo (el supervisor la reintenta),
+    # pero desde un job aparte: `cerrar` termina bien y lo demás de la corrida
+    # (la tanda siguiente, `reparar`) no depende de la ley que no respondió.
     needs: cerrar
     if: ${{ !cancelled() && needs.cerrar.outputs.fuentes_fallidas == 'true' }}
     runs-on: ubuntu-latest
@@ -458,43 +460,6 @@ jobs:
     secrets:
       PR_TOKEN: ${{ secrets.PR_TOKEN }}
 
-  continuar:
-    # Quedan leyes por dar de alta, o el agente reparó el extractor y hay que
-    # reconstruir con él: en cuanto `revisar` fusione este PR, otra corrida.
-    # Sin PR (el arreglo no cambió nada publicable todavía), sin esperar.
-    needs: cerrar
-    if: needs.cerrar.outputs.continuar == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    permissions:
-      actions: write
-    steps:
-      - name: Esperar la fusión y lanzar la siguiente corrida
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ needs.cerrar.outputs.pr }}
-        run: |
-          lanzar() { gh workflow run vigilar-federal.yml -R "$GITHUB_REPOSITORY" --ref main -f origen=continuar; }
-          if [ -z "$PR" ]; then
-            lanzar
-            echo "Sin PR que esperar: siguiente corrida lanzada."; exit 0
-          fi
-          leido=false
-          for _ in $(seq 1 90); do
-            # Una consulta que falla no corta la cadena: se vuelve a preguntar.
-            if estado=$(gh pr view "$PR" -R OpenCodice/leyes-federales --json state -q .state); then leido=true; else estado=""; fi
-            case "$estado" in
-              MERGED) lanzar
-                      echo "Siguiente corrida lanzada."; exit 0 ;;
-              CLOSED) echo "El PR se cerró sin fusionar; no se continúa."; exit 0 ;;
-            esac
-            sleep 30
-          done
-          if [ "$leido" != true ]; then
-            echo "::error::No se pudo consultar el PR #$PR en 45 minutos."; exit 1
-          fi
-          echo "::warning::El PR #$PR no se fusionó en 45 minutos; la siguiente vigilancia semanal lo retoma."
-
   reparar:
     # Repara el extractor a partir de los hallazgos de la revisión completa de
     # las altas (scripts/agente/reparar.sh); las fallas de la auditoría las
@@ -508,7 +473,8 @@ jobs:
     timeout-minutes: 340
     permissions:
       contents: read
-      actions: write
+    outputs:
+      pedir_vigilancia: ${{ steps.reintentar.outputs.pedir }}
     env:
       TIENE_CLAUDE: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
       OUT: ${{ github.workspace }}
@@ -663,12 +629,11 @@ jobs:
           EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
         run: bash /tmp/extractor/scripts/agente/reparar.sh publicar
       - name: Reintentar las leyes con el extractor reparado
-        # La corrida nueva espera a que termine esta (concurrency). El arreglo
-        # ya está en main aunque otro paso haya fallado: se lanza igual.
+        # Pide otra vigilancia. El arreglo ya está en main aunque otro paso
+        # haya fallado: se pide igual.
+        id: reintentar
         if: ${{ !cancelled() && steps.publicar.outputs.reparado == 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run vigilar-federal.yml -R "$GITHUB_REPOSITORY" --ref main -f origen=reparar
+        run: echo 'pedir={"workflow":"vigilar-federal.yml","inputs":{}}' >> "$GITHUB_OUTPUT"
       - name: Guardar el trabajo de la reparación
         if: always() && steps.objetivo.outputs.hay == 'true'
         uses: actions/upload-artifact@v4
@@ -687,80 +652,23 @@ jobs:
             /tmp/agente/reparacion/medicion/medicion.md
           retention-days: 30
 
-  web:
-    needs: [planear, extraer, cerrar, revisar]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions: {}
-    steps:
-      - name: Avisar a la web
-        if: always()
-        # constitucion.app genera /estado, /leyes y la bitácora de los repos de datos
-        # y de estas corridas, así que se redespliega en cuanto termina una
-        # vigilancia, haya fallado o no. Después de `revisar` (y, por si acaso,
-        # de que no quede un PR abierto), para que la web ya incluya lo fusionado.
-        # No espera a `reparar`, que tarda horas y no cambia los datos.
-        env:
-          GH_TOKEN: ${{ secrets.PR_TOKEN }}
-          DATOS: OpenCodice/leyes-federales
-        run: |
-          for _ in $(seq 1 30); do
-            abiertos=$(gh pr list -R "$DATOS" --state open --label automatico --json number -q 'length')
-            [ "$abiertos" = 0 ] && break
-            sleep 30
-          done
-          for intento in 1 2 3; do
-            gh api repos/OpenCodice/constitucion-web/dispatches -f event_type=datos-actualizados && exit 0
-            sleep $((intento * 30))
-          done
-          # No falla la vigilancia: sus datos ya están publicados; solo la web se
-          # queda atrás hasta el siguiente aviso o push.
-          echo "::warning::No se pudo avisar a constitucion-web tras tres intentos."
-
-  salud:
-    # Al final de todo, para ver también a `reparar` y `continuar`. Su
-    # relanzamiento no pierde tiempo por eso: la corrida nueva esperaría de
-    # todos modos a que termine esta (concurrency).
-    needs: [planear, extraer, cerrar, fuentes, revisar, continuar, reparar]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      actions: write
-      issues: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - name: Reintentar una vez si falló
-        # Casi todas las fallas son de red o de la fuente oficial: se reintenta
-        # solo, una vez. Si el reintento también falla, la siguiente vigilancia
-        # semanal lo vuelve a intentar. Un job que agota su tiempo termina
-        # `cancelled` sin que la corrida se haya cancelado: también es una falla.
-        if: ${{ !cancelled() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && inputs.reintento != true }}
-        run: gh workflow run vigilar-federal.yml -R "$GITHUB_REPOSITORY" --ref main -f reintento=true -f origen=salud
-
-      - name: Dejar constancia si también falló el reintento
-        if: ${{ !cancelled() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && inputs.reintento == true }}
-        run: |
-          titulo="🚨 Falló: ${{ github.workflow }}"
-          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          n=$(gh issue list -R "$GITHUB_REPOSITORY" --state open \
-                --search "in:title \"$titulo\"" --json number -q '.[0].number')
-          if [ -n "$n" ]; then
-            gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "Volvió a fallar tras reintentar: $url"
-          else
-            gh issue create -R "$GITHUB_REPOSITORY" --title "$titulo" \
-              --body "Falló dos veces seguidas; la vigilancia de la próxima semana lo reintenta: $url"
-          fi
-
   estado:
-    # El supervisor (OpenCodice/supervisor) lee el nombre de este job para saber si quedó trabajo pendiente.
+    # El supervisor (OpenCodice/supervisor) lee el nombre de este job para
+    # saber si quedó otra tanda, y el artefacto `cadena` (el resultado y las
+    # salidas de cada job) para atender lo que pidieron (salidas `pedir*`).
     name: "estado pendiente=[${{ needs.cerrar.result == 'success' && needs.cerrar.outputs.continuar == 'true' && 'true' || 'false' }}]"
-    needs: [planear, extraer, cerrar, fuentes, revisar, continuar, reparar, web, salud]
+    needs: [planear, extraer, cerrar, fuentes, revisar, reparar]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
     steps:
-      - run: 'true'
+      - name: Lo que declaró cada job
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: printf '%s' "$NEEDS" > cadena.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cadena
+          path: cadena.json
+          retention-days: 14
