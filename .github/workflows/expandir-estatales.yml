@@ -383,8 +383,10 @@ jobs:
                 expandir anotar --resultado egress --agregado --dominio "$DOMINIO" --motivo "$MOTIVO" --corrida "$CORRIDA"
                 if [ "$ENSAYO" != true ]; then
                   gh workflow run expandir-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f estado="$ESTADO"
+                  echo "$DOMINIO agregado a egress-mx; ronda relanzada para $ESTADO." | tee -a "$GITHUB_STEP_SUMMARY"
+                else
+                  echo "Ensayo: $DOMINIO se agregaría a egress-mx y se relanzaría la ronda para $ESTADO." | tee -a "$GITHUB_STEP_SUMMARY"
                 fi
-                echo "$DOMINIO agregado a egress-mx; ronda relanzada para $ESTADO." | tee -a "$GITHUB_STEP_SUMMARY"
                 exit 0
               elif [ "$rc" = 3 ]; then
                 MOTIVO="$DOMINIO rechaza IP extranjeras, pero no es un dominio oficial que egress-mx admita solo (.gob.mx, o .mx del mismo dominio que la constitución del estado)"

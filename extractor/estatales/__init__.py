@@ -8,7 +8,12 @@ guion bajo: `nuevo_leon.py` → `nuevo-leon`). Cada módulo define:
   estable dentro del estado, su nombre, su sigla y cómo encontrar su PDF
   vigente en el sitio oficial (página índice + patrón del enlace);
 - `FUERA` — leyes que se decidió no versionar todavía: `(ley(...), motivo)`,
-  con el motivo en lenguaje llano (lo muestra constitucion.app/leyes).
+  con el motivo en lenguaje llano (lo muestra constitucion.app/leyes). La
+  reparación autónoma intenta las que fallan la auditoría y pasa a `LEYES`
+  las que quedan limpias (`scripts/reparacion.py fuera` y `promover`);
+- `FUERA_POR_DISENO` (opcional) — las claves de `FUERA` que ningún arreglo del
+  extractor puede sumar (una numeración que se repite, sin PDF con texto): la
+  reparación no las toca.
 
 La constitución de cada estado no está aquí: la produce constitucion-extractor
 en `{estado}/constitucion/`. Lo que este registro produce vive junto a ella, en
@@ -97,3 +102,9 @@ def fuera() -> dict[str, tuple[Documento, str]]:
     se decidió dejar fuera (`FUERA` de cada módulo: una lista de
     `(ley(...), motivo)`)."""
     return {d.clave: (d, m) for _, mod in _modulos() for d, m in getattr(mod, "FUERA", [])}
+
+
+def fuera_por_diseno() -> set[str]:
+    """Claves de FUERA que se quedan fuera por diseño (`FUERA_POR_DISENO` de
+    cada módulo)."""
+    return {c for _, mod in _modulos() for c in getattr(mod, "FUERA_POR_DISENO", ())}

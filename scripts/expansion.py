@@ -247,6 +247,10 @@ def cmd_registro(a) -> int:
         for u in (d.url, d.indice):
             if u and not re.match(r"https?://[^/@\s]+/", u):
                 errores.append(f"{d.clave}: URL inválida {u!r}")
+    diseno = getattr(mod, "FUERA_POR_DISENO", set())
+    if not isinstance(diseno, (set, frozenset, tuple, list)) or \
+            not set(diseno) <= {d.clave for d, _ in fuera}:
+        errores.append("FUERA_POR_DISENO debe ser un conjunto de claves de FUERA")
     if len(leyes) > MAX_LEYES:
         errores.append(f"más de {MAX_LEYES} leyes")
     if errores:

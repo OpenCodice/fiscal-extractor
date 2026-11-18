@@ -32,7 +32,11 @@ sus opciones), los tres módulos que ya existen (`jalisco.py`, `cdmx.py`,
      consideraste y no puede quedar fiel: sin PDF (solo Word o HTML), PDF
      escaneado sin capa de texto, o una extracción que no logras dejar en cero
      problemas con las opciones de `ley()`. Puede ser una lista vacía, pero
-     debe existir.
+     debe existir. La reparación autónoma vuelve después sobre las que fallan
+     la auditoría y las suma sola cuando quedan limpias.
+   - `FUERA_POR_DISENO` (opcional): el conjunto de claves de `FUERA` que
+     ningún arreglo del extractor podría sumar (sin PDF, PDF escaneado, una
+     numeración que se repite): así la reparación no gasta intentos en ellas.
    - Un docstring como el de los otros módulos: quién publica, de dónde sale
      cada PDF, qué tiene de particular el formato.
 2. `__PRUEBA__`, un archivo NUEVO con pruebas sin red ni PDF: que cada clave

@@ -20,6 +20,15 @@ determinista del agente que lo hace (`scripts/agente/reparar.sh`):
   construir — reconstruye y audita las leyes elegidas con un extractor dado.
   comparar  — el arreglo frente al extractor de partida en esas leyes: ninguna
               unidad con problemas nueva y algún texto distinto.
+  fuera     — (leyes estatales) descarga, construye y audita las leyes que un
+              módulo deja en FUERA sin ser por diseño (`FUERA_POR_DISENO`): las
+              que fallan entran en `objetivo` (`--fuera`), con el mismo tope
+              por ley y PDF; las que ya quedan limpias, en `promover`.
+  promover  — pasa de FUERA a LEYES, en su módulo, las leyes que quedaron con
+              build y auditar limpios (con el extractor de main, o con el
+              arreglo que se acaba de publicar): un bloque al final del módulo,
+              sin tocar lo demás. Después las da de alta la vigilancia, con su
+              revisión completa, como a cualquier ley nueva.
 
 Uso:
   reparacion.py objetivo  --corpus estatal|federal --out REPO --trabajo T [--max-leyes N] [--con-auditoria]
@@ -27,6 +36,8 @@ Uso:
   reparacion.py registrar --trabajo T --resultado iniciado|publicado|descartado [--motivo M] [--extractor S]
   reparacion.py construir --trabajo T --extractor-dir E --pdfs DIR --out DIR
   reparacion.py comparar  --trabajo T --antes DIR --despues DIR
+  reparacion.py fuera     --trabajo T --pdfs DIR --salida J [--cache DIR] [--max N]
+  reparacion.py promover  --resultado J [--resultado J2 …] [--raiz EXTRACTOR]
 """
 from __future__ import annotations
 
@@ -175,7 +186,8 @@ def _corpus_docs(corpus: str, fuentes: dict) -> set[str]:
 
 
 def candidatos(corpus: str, out: Path, trabajo: Path, con_auditoria: bool,
-               registros: list[dict], altas: Path = ALTAS) -> list[dict]:
+               registros: list[dict], altas: Path = ALTAS,
+               fuera: dict | None = None) -> list[dict]:
     fuentes = _leer(out / "fuentes.json", {"documentos": []})
     declarados = _corpus_docs(corpus, fuentes)
     resultados = _leer(trabajo / "resultados.json", {}) or {}
@@ -217,6 +229,15 @@ def candidatos(corpus: str, out: Path, trabajo: Path, con_auditoria: bool,
         if hs:
             por_clave[clave] = {"clave": clave, "pdf_sha256": r["sha256"], "url": r.get("url"),
                                 "hallazgos": hs, "origen": "corrida"}
+    # Las que un módulo deja en FUERA y fallan la auditoría (`cmd_fuera`): la
+    # vigilancia nunca las intenta, así que solo aquí se reparan.
+    for clave, r in (fuera or {}).items():
+        if clave in por_clave or not r.get("sha256") or es_limpia(r):
+            continue
+        hs = de_auditoria(r)
+        if hs:
+            por_clave[clave] = {"clave": clave, "pdf_sha256": r["sha256"], "url": r.get("url"),
+                                "hallazgos": hs, "origen": "fuera"}
     res = []
     for c in sorted(por_clave):
         e = por_clave[c]
@@ -250,7 +271,8 @@ def elegir(cands: list[dict], max_leyes: int) -> tuple[str | None, list[dict]]:
 def cmd_objetivo(a) -> int:
     out, t = Path(a.out), Path(a.trabajo)
     registros = reparaciones.cargar(a.registro)
-    cands = candidatos(a.corpus, out, t, a.con_auditoria, registros)
+    fuera = (_leer(a.fuera) or {}) if a.fuera else {}
+    cands = candidatos(a.corpus, out, t, a.con_auditoria, registros, fuera=fuera)
     grupo, elegidas = elegir(cands, a.max_leyes)
     rep = t / "reparacion"
     rep.mkdir(parents=True, exist_ok=True)
@@ -264,6 +286,9 @@ def cmd_objetivo(a) -> int:
     defs = {d["clave"]: d for d in fuentes.get("documentos", [])}
     for d in (_leer(a.plan) or {}).get("documentos", []) if a.plan else []:
         defs[d["clave"]] = d
+    for c, r in fuera.items():
+        if r.get("definicion"):
+            defs.setdefault(c, r["definicion"])
     _escribir(rep / "registro.json", {"documentos": list(defs.values())})
     hora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S")
     descripcion = dict((n, d) for n, d, _ in CATEGORIAS).get(grupo, "otros defectos")
@@ -416,6 +441,121 @@ def cmd_comparar(a) -> int:
     return 2
 
 
+# ------------------------------------------------------------------ fuera / promover
+
+def es_limpia(r: dict) -> bool:
+    from extractor.federal import es_fiel
+    return bool(r.get("unidades")) and es_fiel(r)
+
+
+def reparables() -> dict:
+    """Clave → definición de las leyes en FUERA que no lo están por diseño."""
+    from extractor.estatales import fuera, fuera_por_diseno
+    diseno = fuera_por_diseno()
+    return {c: d for c, (d, _) in fuera().items() if c not in diseno}
+
+
+def cmd_fuera(a) -> int:
+    """Construye y audita, con el extractor en disco, las leyes de FUERA que no
+    lo están por diseño. Una que no se puede descargar se anota y no cuenta
+    como intento. La caché (`--cache`) guarda el resultado por PDF y huella del
+    extractor: una ley sin cambios no se reconstruye cada semana."""
+    from extractor import federal
+    from extractor.estatal import ESTATAL
+    from extractor.fuentes import descargar, url_vigente
+    from extractor.registro import a_dict
+    t = Path(a.trabajo)
+    registros = reparaciones.cargar(a.registro)
+    huella = federal.huella_extractor(ESTATAL.fuentes_extractor)
+    cache = Path(a.cache) if a.cache else None
+    defs = reparables()
+    reg = t / "fuera" / "registro.json"
+    _escribir(reg, {"documentos": [a_dict(d) for d in defs.values()]})
+    res, construidas = {}, 0
+    for c, d in sorted(defs.items()):
+        base = {"definicion": a_dict(d)}
+        pdf = Path(a.pdfs) / f"{c}.pdf"
+        try:
+            url = url_vigente(d)
+            descargar(url, str(pdf), via=d.via)
+            if not pdf.read_bytes()[:4] == b"%PDF":
+                raise ValueError("lo descargado no es un PDF")
+        except Exception as e:                       # noqa: BLE001 — se reporta
+            res[c] = {**base, "error_fuente": f"{type(e).__name__}: {e}"[:300]}
+            print(f"· {c}: sin PDF ({res[c]['error_fuente']})")
+            continue
+        sha = federal.sha256(pdf)
+        base.update(sha256=sha, url=url, intentos=reparaciones.intentos(c, sha, registros))
+        guardado = cache / f"{c.replace('/', '__')}.json" if cache else None
+        previo = _leer(guardado) if guardado else None
+        if previo and previo.get("sha256") == sha and previo.get("huella") == huella:
+            res[c] = {**previo, **base}
+        elif construidas >= a.max:
+            print(f"· {c}: queda para otra corrida (tope de {a.max} por corrida)")
+            continue
+        else:
+            construidas += 1
+            datos = t / "fuera" / "datos"
+            error = federal._construir({"clave": c}, str(pdf), str(datos), str(reg))
+            r = {"error": error} if error else federal.evaluar(datos, c, str(pdf))
+            res[c] = {**base, **r, "huella": huella}
+            if guardado:
+                _escribir(guardado, {**res[c], "intentos": None})
+        r = res[c]
+        estado = ("limpia" if es_limpia(r) else
+                  f"{len(r.get('problemas') or {})} unidades con problemas" if not r.get("error")
+                  else r["error"][:120])
+        print(f"{'✓' if es_limpia(r) else '✗'} {c}: {estado} ({r['intentos']} intentos con este PDF)")
+    _escribir(Path(a.salida), res)
+    limpias = sorted(c for c, r in res.items() if es_limpia(r))
+    _salida_gh(limpias=" ".join(limpias))
+    return 0
+
+
+BLOQUE_LEYES = """
+
+# Reparación autónoma (scripts/reparacion.py promover, {fecha}): estas leyes
+# de FUERA ya quedan con build y auditar limpios sobre su PDF; la vigilancia
+# las da de alta tras su revisión completa.
+_A_LEYES = {{
+{filas}
+}}
+LEYES = list(LEYES) + [d for d, _ in FUERA if d.clave in _A_LEYES]
+FUERA = [(d, m) for d, m in FUERA if d.clave not in _A_LEYES]
+"""
+
+
+def bloque_leyes(claves: list[str]) -> str:
+    filas = "\n".join(f"    {json.dumps(c, ensure_ascii=False)}," for c in sorted(claves))
+    return BLOQUE_LEYES.format(fecha=date.today().isoformat(), filas=filas)
+
+
+def cmd_promover(a) -> int:
+    """Lee resultados de build + auditar (de `fuera` o de las compuertas de un
+    arreglo, `construir`) y pasa a LEYES las de FUERA (no por diseño) que
+    quedaron limpias. Solo agrega un bloque al final de cada módulo."""
+    raiz = Path(a.raiz).resolve()
+    candidatas = set(reparables())
+    limpias = set()
+    for ruta in a.resultado:
+        for c, r in (_leer(ruta) or {}).items():
+            if c in candidatas and es_limpia(r):
+                limpias.add(c)
+    por_estado: dict[str, list[str]] = {}
+    for c in sorted(limpias):
+        por_estado.setdefault(c.split("/")[0], []).append(c)
+    for estado, claves in por_estado.items():
+        ruta = raiz / "extractor" / "estatales" / f"{estado.replace('-', '_')}.py"
+        ruta.write_text(ruta.read_text(encoding="utf-8").rstrip("\n") + bloque_leyes(claves),
+                        encoding="utf-8")
+        print(f"→ LEYES {', '.join(claves)}")
+    _salida_gh(promovidas=" ".join(sorted(limpias)),
+               estados=" ".join(sorted(por_estado)))
+    if not limpias:
+        print("Ninguna ley de FUERA quedó limpia.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -427,6 +567,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-leyes", type=int, default=4)
     p.add_argument("--con-auditoria", action="store_true",
                    help="también las leyes con fallas de la auditoría determinista")
+    p.add_argument("--fuera", default=None, help="resultado de `fuera`: las leyes de FUERA que fallan")
     p.add_argument("--registro", default=str(reparaciones.REGISTRO))
     p = sub.add_parser("preparar")
     p.add_argument("--trabajo", required=True)
@@ -446,9 +587,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--trabajo", required=True)
     p.add_argument("--antes", required=True)
     p.add_argument("--despues", required=True)
+    p = sub.add_parser("fuera")
+    p.add_argument("--trabajo", required=True)
+    p.add_argument("--pdfs", required=True)
+    p.add_argument("--salida", required=True)
+    p.add_argument("--cache", default=None)
+    p.add_argument("--max", type=int, default=8, help="leyes que se construyen por corrida")
+    p.add_argument("--registro", default=str(reparaciones.REGISTRO))
+    p = sub.add_parser("promover")
+    p.add_argument("--resultado", action="append", required=True)
+    p.add_argument("--raiz", default=str(EXTRACTOR))
     a = ap.parse_args(argv)
     return {"objetivo": cmd_objetivo, "preparar": cmd_preparar, "registrar": cmd_registrar,
-            "construir": cmd_construir, "comparar": cmd_comparar}[a.cmd](a)
+            "construir": cmd_construir, "comparar": cmd_comparar, "fuera": cmd_fuera,
+            "promover": cmd_promover}[a.cmd](a)
 
 
 if __name__ == "__main__":

@@ -516,14 +516,36 @@ jobs:
         with:
           name: plan
           path: /tmp/plan
+      - name: Caché de las leyes en FUERA
+        uses: actions/cache@v4
+        with:
+          path: /tmp/agente/fuera-cache
+          key: fuera-estatal-${{ github.run_id }}
+          restore-keys: fuera-estatal-
+      - name: Leyes en FUERA — build y auditar con el extractor de main
+        # Las que un módulo deja en FUERA sin ser por diseño: la vigilancia
+        # nunca las intenta, así que aquí se miden. Las que fallan pueden
+        # entrar al objetivo de la reparación (mismo tope por ley y PDF); las
+        # limpias pasan a LEYES al final de este job.
+        id: fuera
+        timeout-minutes: 90
+        continue-on-error: true
+        env:
+          EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
+        run: |
+          cd /tmp/extractor
+          python scripts/reparacion.py fuera --trabajo "$AGENTE_DIR" --pdfs /tmp/fuera-pdfs \
+            --salida "$AGENTE_DIR/fuera.json" --cache "$AGENTE_DIR/fuera-cache"
+          echo "sha=$(sha256sum "$AGENTE_DIR/fuera.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Elegir las leyes y el defecto a reparar
         id: objetivo
         if: env.TIENE_CLAUDE == 'true'
         run: |
           cd /tmp/extractor
           plan=(); [ -f /tmp/plan/plan.json ] && plan=(--plan /tmp/plan/plan.json)
+          fuera=(); [ -s "$AGENTE_DIR/fuera.json" ] && fuera=(--fuera "$AGENTE_DIR/fuera.json")
           python scripts/reparacion.py objetivo --corpus estatal --out "$OUT" \
-            --trabajo "$AGENTE_DIR" --con-auditoria --max-leyes 4 "${plan[@]}"
+            --trabajo "$AGENTE_DIR" --con-auditoria --max-leyes 4 "${plan[@]}" "${fuera[@]}"
       - name: Descargar sus PDF y anotar el intento
         # El intento cuenta desde ahora: si algo se cae a medias, también.
         id: preparar
@@ -629,12 +651,36 @@ jobs:
           EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
           EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
         run: bash /tmp/extractor/scripts/agente/reparar.sh publicar
+      - name: De FUERA a LEYES lo que quedó limpio
+        # Determinista: las leyes de FUERA (no por diseño) con build y auditar
+        # limpios, medidas antes del agente con el extractor de main (si su
+        # medición no cambió desde entonces) o reconstruidas por las compuertas
+        # con el arreglo recién publicado, pasan a LEYES en su módulo. La
+        # vigilancia siguiente las da de alta tras su revisión completa.
+        id: promover
+        if: ${{ !cancelled() }}
+        env:
+          EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
+          EXTRACTOR_SLUG: OpenCodice/fiscal-extractor
+          FUERA_SHA: ${{ steps.fuera.outputs.sha }}
+        run: |
+          if [ -s "$AGENTE_DIR/fuera.json" ] && ! echo "$FUERA_SHA  $AGENTE_DIR/fuera.json" | sha256sum -c --quiet; then
+            echo "::warning::La medición de FUERA cambió durante el agente: no se usa."
+            rm -f "$AGENTE_DIR/fuera.json"
+          fi
+          bash /tmp/extractor/scripts/agente/reparar.sh promover
       - name: Reintentar las leyes con el extractor reparado
         # La corrida nueva espera a que termine esta (concurrency).
         if: steps.publicar.outputs.reparado == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run vigilar-leyes-estatales.yml -R "$GITHUB_REPOSITORY" --ref main
+      - name: Dar de alta las leyes que pasaron a LEYES
+        if: steps.promover.outputs.promovidas != '' && steps.publicar.outputs.reparado != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ESTADOS: ${{ steps.promover.outputs.estados }}
+        run: gh workflow run vigilar-leyes-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f estados="$ESTADOS"
       - name: Guardar el trabajo de la reparación
         if: always() && steps.objetivo.outputs.hay == 'true'
         uses: actions/upload-artifact@v4
@@ -651,6 +697,7 @@ jobs:
             /tmp/agente/reparacion/impacto/veredicto*.json
             /tmp/agente/reparacion/medicion/medicion.json
             /tmp/agente/reparacion/medicion/medicion.md
+            /tmp/agente/fuera.json
           retention-days: 30
 
   salud:

@@ -22,6 +22,10 @@
 #   reparar.sh publicar — con EXTRACTOR_TOKEN. Pasa al registro el veredicto del
 #     juez y publica el arreglo en main solo si todo lo que cambia es mejora.
 #     Anota el intento (publicado o descartado) en verificaciones/reparaciones/.
+#   reparar.sh promover — con EXTRACTOR_TOKEN, en las leyes estatales: las de
+#     FUERA (no por diseño) que quedaron con build y auditar limpios, con el
+#     extractor de main ($AGENTE_DIR/fuera.json, de `reparacion.py fuera`) o
+#     con el arreglo recién publicado, pasan a LEYES en su módulo.
 #
 # Todo lo que no sea un `listo` comprobado aquí se descarta: el extractor se
 # queda como estaba y las leyes, fuera, hasta el siguiente intento (hay un tope
@@ -34,7 +38,7 @@
 # EXTRACTOR_SLUG o EXTRACTOR_PUSH_URL (pruebas).
 set -uo pipefail
 
-FASE="${1:?uso: reparar.sh medicion|agente|compuertas|publicar}"
+FASE="${1:?uso: reparar.sh medicion|agente|compuertas|publicar|promover}"
 EXTRACTOR="$(cd "$(dirname "$0")/../.." && pwd)"
 TRABAJO="${AGENTE_DIR:-/tmp/agente}"
 REP="$TRABAJO/reparacion"
@@ -302,7 +306,61 @@ if (rep / "impacto.md").exists():
 PY
 }
 
+# Pasa de FUERA a LEYES las leyes estatales que quedaron limpias (las de
+# `reparacion.py fuera` y, si se publicó un arreglo, las del objetivo
+# reconstruidas con él), desde un clon limpio de main: solo el bloque que agrega
+# `reparacion.py promover` al final de su módulo, y con las pruebas en verde.
+promover() {
+  echo "promovidas=" >> "${GITHUB_OUTPUT:-/dev/null}"
+  [ "$CORPUS" = estatal ] || return 0
+  local resultados=() dir="$TRABAJO/promover" destino salida
+  [ -s "$TRABAJO/fuera.json" ] && resultados+=(--resultado "$TRABAJO/fuera.json")
+  if [ -s "$REP/reparacion.json" ] && [ -s "$GATE/despues/resultado.json" ]; then
+    resultados+=(--resultado "$GATE/despues/resultado.json")
+  fi
+  [ ${#resultados[@]} -gt 0 ] || return 0
+  if [ -z "${EXTRACTOR_PUSH_URL:-}" ] && { [ -z "${EXTRACTOR_TOKEN:-}" ] || [ -z "${EXTRACTOR_SLUG:-}" ]; }; then
+    echo "::warning::Sin credenciales para publicar en el extractor."; return 0
+  fi
+  destino="${EXTRACTOR_PUSH_URL:-https://x-access-token:${EXTRACTOR_TOKEN:-}@github.com/${EXTRACTOR_SLUG:-}.git}"
+  rm -rf "$dir"
+  git clone -q "$destino" "$dir" || return 0
+  salida="$(cd "$dir" && PYTHONPATH="$dir" GITHUB_OUTPUT=/dev/null python scripts/reparacion.py promover "${resultados[@]}")" || return 0
+  echo "$salida"
+  [ -n "$(git -C "$dir" status --porcelain -- extractor/estatales)" ] || return 0
+  if [ -n "$(git -C "$dir" status --porcelain | grep -vE '^ M extractor/estatales/[a-z_]+\.py$')" ]; then
+    echo "::warning::promover tocó algo más que los módulos de los estados; no se publica."; return 0
+  fi
+  if ! (cd "$dir" && PYTHONPATH="$dir" python -m pytest -q > "$TRABAJO/promover-pytest.log" 2>&1); then
+    tail -n 20 "$TRABAJO/promover-pytest.log"
+    echo "::warning::Con las leyes promovidas las pruebas no pasan; se quedan en FUERA."; return 0
+  fi
+  local claves estados
+  claves="$(echo "$salida" | sed -n 's/^→ LEYES //p' | tr '\n' ' ' | sed 's/, / /g; s/ *$//')"
+  estados="$(for c in $claves; do echo "${c%%/*}"; done | sort -u | tr '\n' ' ' | sed 's/ *$//')"
+  export GIT_AUTHOR_NAME="${GITHUB_ACTOR:-opencodice-ci}" GIT_COMMITTER_NAME="${GITHUB_ACTOR:-opencodice-ci}"
+  export GIT_AUTHOR_EMAIL="${GITHUB_ACTOR_ID:-0}+${GITHUB_ACTOR:-opencodice-ci}@users.noreply.github.com"
+  export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+  git -C "$dir" add -- extractor/estatales
+  git -C "$dir" -c core.hooksPath=/dev/null commit -q \
+    -m "Leyes estatales: de FUERA a LEYES, con build y auditar limpios: $claves" \
+    -m "Lo decidió reparacion.py promover sobre la auditoría determinista de su PDF; la vigilancia las da de alta tras su revisión completa."
+  for intento in 1 2 3; do
+    if git -C "$dir" -c core.hooksPath=/dev/null pull -q --rebase "$destino" main \
+        && git -C "$dir" -c core.hooksPath=/dev/null push -q "$destino" HEAD:main; then
+      echo "promovidas=$claves" >> "${GITHUB_OUTPUT:-/dev/null}"
+      echo "estados=$estados" >> "${GITHUB_OUTPUT:-/dev/null}"
+      echo "De FUERA a LEYES: $claves" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+      return 0
+    fi
+    git -C "$dir" rebase --abort 2>/dev/null || true
+    sleep $((intento * 5))
+  done
+  echo "::warning::No se pudo publicar el paso de FUERA a LEYES; la corrida siguiente lo reintenta."
+}
+
 case "$FASE" in
+  promover) promover ;;
   medicion) medicion ;;
   agente) agente ;;
   compuertas) compuertas ;;

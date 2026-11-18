@@ -66,3 +66,6 @@ FUERA = [
      "y un archivo por número de artículo no puede guardar dos artículos con el mismo "
      "número."),
 ]
+
+# Un arreglo del parser no resuelve dos artículos con el mismo número.
+FUERA_POR_DISENO = {"cdmx/codigo-de-procedimientos-civiles"}

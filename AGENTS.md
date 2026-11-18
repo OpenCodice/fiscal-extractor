@@ -312,6 +312,25 @@ de `cerrar` y con su propio tiempo:
    `revision_pendiente` (`plan["revisar"]`). Sus bloques sin cambios reusan sus
    veredictos; solo se paga lo que cambió.
 
+**Las leyes estatales en `FUERA`** (las que la ronda de expansión o su agente
+dejaron fuera porque su extracción no quedaba fiel) tampoco esperan a nadie:
+la vigilancia nunca las intenta, así que el job `reparar`, antes del agente y
+con el extractor de main, las descarga, construye y audita (`reparacion.py
+fuera`, hasta 8 por corrida, con caché por PDF y huella del extractor; una que
+no se puede descargar se anota y no gasta intento). Las que fallan entran al
+`objetivo` como cualquier otra (`--fuera`, origen `fuera`, con el mismo tope
+por ley y PDF). Las que quedan con build y auditar limpios —ya con el extractor
+de main, o reconstruidas por las compuertas con el arreglo recién publicado—
+pasan solas a `LEYES`: un paso determinista (`reparar.sh promover`, que corre
+`reparacion.py promover` en un clon limpio de main) agrega al final de su
+módulo un bloque `_A_LEYES` que las mueve, sin tocar lo demás, con `pytest`
+en verde, y lanza la vigilancia de su estado, que las da de alta tras su
+revisión completa (para `planear` son un `reintento`). Una ley que ningún
+arreglo puede sumar (el Código de Procedimientos Civiles de la CDMX, que
+repite su numeración) va además en `FUERA_POR_DISENO` de su módulo y la
+reparación no la toca. La medición de FUERA se comprueba por sha256 después
+del agente: si cambió, no se promueve nada con ella.
+
 Tope: 3 intentos por ley y PDF (`extractor/reparaciones.py`). Una ley que lo
 alcanza y vuelve a salir con defectos queda `excluida` con `reparacion:
 {agotada: true}` y la nota en su motivo (o `revision_pendiente.agotada`), y ya
@@ -397,7 +416,9 @@ Agregar una ley: una entrada `ley(...)` en el módulo de su estado (o el módulo
 nuevo, con su `MEDIO`), `build` + `auditar` en cero problemas sobre su PDF, y la
 vigilancia la da de alta tras su revisión completa. Si no puede quedar fiel
 (p. ej. el Código de Procedimientos Civiles de la CDMX, que reinicia su
-numeración en el Título Especial), va en `FUERA` con su motivo.
+numeración en el Título Especial), va en `FUERA` con su motivo y, si ningún
+arreglo del extractor la puede sumar, también en `FUERA_POR_DISENO`; las demás
+de `FUERA` las retoma la reparación autónoma.
 
 ## Ronda de expansión
 
