@@ -34,8 +34,9 @@ unidad está mal, se corrige aquí.
   documento en su repo de datos. Ver «Leyes estatales».
 - `.github/workflows/vigilar-leyes-estatales.yml` — su vigilancia, y
   `expandir-estatales.yml` (con `scripts/expansion.py`,
-  `scripts/agente/expandir.sh`, `brief-expansion.md` y
-  `brief-expansion-codigo.md`), la ronda que suma estados (ver «Ronda de
+  `scripts/agente/expandir.sh`, `brief-expansion.md`,
+  `brief-expansion-codigo.md` y `brief-redeclaracion.md`), la ronda que suma
+  estados y redeclara las leyes de FUERA que no se descargan (ver «Ronda de
   expansión»).
 - `.github/workflows/vigilar-fiscal.yml` y `vigilar-federal.yml` — la vigilancia
   de `fiscal-mexicano` y `leyes-federales`. Viven aquí, no en los repos de
@@ -317,7 +318,9 @@ dejaron fuera porque su extracción no quedaba fiel) tampoco esperan a nadie:
 la vigilancia nunca las intenta, así que el job `reparar`, antes del agente y
 con el extractor de main, las descarga, construye y audita (`reparacion.py
 fuera`, hasta 8 por corrida, con caché por PDF y huella del extractor; una que
-no se puede descargar se anota y no gasta intento). Las que fallan entran al
+no se puede descargar se anota con su causa y no gasta intento: si es del
+extractor, no de la red, la redeclara la ronda de expansión, ver
+«Redeclaración de FUERA»). Las que fallan entran al
 `objetivo` como cualquier otra (`--fuera`, origen `fuera`, con el mismo tope
 por ley y PDF). Las que quedan con build y auditar limpios —ya con el extractor
 de main, o reconstruidas por las compuertas con el arreglo recién publicado—
@@ -557,6 +560,47 @@ con la misma forma que `reparar`:
    lo de una ronda normal. Si no, anota el descarte con su motivo y el intento
    sí cuenta. Al llegar a main, `impacto.yml` lo mide otra vez como cualquier
    cambio del extractor.
+
+### Redeclaración de FUERA
+
+Una ley en `FUERA` de un estado ya publicado que no se puede ni descargar no
+la arregla `reparar` (no hay PDF que reparar). Si la causa está en el
+extractor (`reparacion.causa_fuente`: un href que `http.client` rechaza, como
+el espacio de `….pdf?2026-03- 9` en Nuevo León; un patrón que ya no casa; un
+400 del servidor) y no en la red (caído, lento, un 404, una página de error),
+el job `reparar` de `vigilar-leyes-estatales.yml`, tras medir FUERA, lanza
+`expandir-estatales.yml -f redeclarar=<estado>` (`expansion.py
+redeclarar-pendiente`; un estado por corrida y no si ya hay una ronda en curso
+o en cola). Es la ronda de expansión sobre el módulo que ya existe:
+
+1. Con el extractor de main y `EGRESS_MX_TOKEN`, antes del agente:
+   `reparacion.py fuera --estado E --solo-fuente` vuelve a intentar la
+   descarga y `expansion.py registro` deja el registro del módulo como datos
+   (la referencia del cerco, protegida por sha256 durante el agente).
+   `expansion.py elegir --redeclarar E` cuenta el intento en el registro
+   `redeclaracion` del estado en `pendientes.json` (sigue `publicado`). Tope:
+   2 rondas (`tope_redeclaracion`) y 2 arreglos de código por **firma** de la
+   falla (qué leyes y qué excepción): la misma falla no se intenta más; una
+   distinta empieza de cero.
+2. El agente (`brief-redeclaracion.md`) solo puede agregar opciones de `ley()`
+   a esas entradas de FUERA, sin pasarlas a `LEYES` (la promoción es de
+   `reparar.sh promover`). Si falta la opción, entrega `codigo` y el mismo job
+   `codigo` de «Arreglo de código» la agrega; al publicarla relanza la
+   redeclaración (`-f redeclarar=`), con el intento devuelto.
+3. Cerco: solo cambia el módulo. Compuertas: `pytest`, `expansion.py
+   registro` y `redeclaracion-cerco`: `MEDIO`, cada entrada de `LEYES` (y su
+   orden), las claves de `FUERA` y de `FUERA_POR_DISENO` y las entradas de
+   FUERA que no son del objetivo, idénticas por `a_dict`; en las del objetivo
+   cada campo que ya tenían queda igual (dar valor a uno vacío es agregar una
+   opción). Cada ley que cambió se descarga desde un clon limpio
+   (`expansion.py descargar`, `python -I -S`) y el impacto en lo publicado es
+   nulo (`expandir.sh impacto`).
+4. `expandir.sh publicar` aplica el cambio del agente al módulo de main como
+   parche (main pudo cambiar el módulo: un bloque `_A_LEYES`), corre `pytest`
+   otra vez y sube «Leyes estatales: <Estado>, opciones nuevas para leyes en
+   FUERA»; después lanza la vigilancia del estado, cuyo `reparar` las descarga,
+   construye y audita: limpias pasan a `LEYES`, con defectos entran al
+   `objetivo` de la reparación.
 
 Un módulo nuevo cambia la huella del extractor de todas las leyes estatales
 (incluye `estatales/*.py`): la siguiente vigilancia completa las reconstruye

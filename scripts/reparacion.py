@@ -36,7 +36,7 @@ Uso:
   reparacion.py registrar --trabajo T --resultado iniciado|publicado|descartado [--motivo M] [--extractor S]
   reparacion.py construir --trabajo T --extractor-dir E --pdfs DIR --out DIR
   reparacion.py comparar  --trabajo T --antes DIR --despues DIR
-  reparacion.py fuera     --trabajo T --pdfs DIR --salida J [--cache DIR] [--max N]
+  reparacion.py fuera     --trabajo T --pdfs DIR --salida J [--cache DIR] [--max N] [--estado E] [--solo-fuente]
   reparacion.py promover  --resultado J [--resultado J2 …] [--raiz EXTRACTOR]
 """
 from __future__ import annotations
@@ -455,11 +455,36 @@ def reparables() -> dict:
     return {c: d for c, (d, _) in fuera().items() if c not in diseno}
 
 
+class NoEsPdf(ValueError):
+    pass
+
+
+def causa_fuente(e: Exception) -> str:
+    """Por qué no se pudo obtener el PDF: `codigo` si el extractor no sabe
+    resolver o pedir lo que el sitio publica (un href con un espacio que
+    http.client rechaza, ningún enlace que case, una URL que el servidor no
+    entiende), `red` si es del sitio o de la conexión (caído, lento, un 404,
+    una página de error en vez del PDF). Solo lo de `codigo` lo puede
+    arreglar un agente (expandir-estatales.yml con `redeclarar`); una caída
+    de red no gasta sus intentos."""
+    import http.client
+    import urllib.error
+    if isinstance(e, urllib.error.HTTPError):
+        return "codigo" if e.code in (400, 414) else "red"
+    if isinstance(e, (http.client.InvalidURL, LookupError, UnicodeError)):
+        return "codigo"
+    if isinstance(e, ValueError) and not isinstance(e, NoEsPdf):
+        return "codigo"                      # 'unknown url type' de urllib
+    return "red"
+
+
 def cmd_fuera(a) -> int:
     """Construye y audita, con el extractor en disco, las leyes de FUERA que no
-    lo están por diseño. Una que no se puede descargar se anota y no cuenta
-    como intento. La caché (`--cache`) guarda el resultado por PDF y huella del
-    extractor: una ley sin cambios no se reconstruye cada semana."""
+    lo están por diseño. Una que no se puede descargar se anota (con su
+    `causa_fuente`) y no cuenta como intento. La caché (`--cache`) guarda el
+    resultado por PDF y huella del extractor: una ley sin cambios no se
+    reconstruye cada semana. `--solo-fuente` solo descarga (la ronda de
+    redeclaración: qué leyes de un estado no se pueden descargar y por qué)."""
     from extractor import federal
     from extractor.estatal import ESTATAL
     from extractor.fuentes import descargar, url_vigente
@@ -468,7 +493,8 @@ def cmd_fuera(a) -> int:
     registros = reparaciones.cargar(a.registro)
     huella = federal.huella_extractor(ESTATAL.fuentes_extractor)
     cache = Path(a.cache) if a.cache else None
-    defs = reparables()
+    defs = {c: d for c, d in reparables().items()
+            if not a.estado or c.split("/")[0] == a.estado}
     reg = t / "fuera" / "registro.json"
     _escribir(reg, {"documentos": [a_dict(d) for d in defs.values()]})
     res, construidas = {}, 0
@@ -479,13 +505,18 @@ def cmd_fuera(a) -> int:
             url = url_vigente(d)
             descargar(url, str(pdf), via=d.via)
             if not pdf.read_bytes()[:4] == b"%PDF":
-                raise ValueError("lo descargado no es un PDF")
+                raise NoEsPdf("lo descargado no es un PDF")
         except Exception as e:                       # noqa: BLE001 — se reporta
-            res[c] = {**base, "error_fuente": f"{type(e).__name__}: {e}"[:300]}
-            print(f"· {c}: sin PDF ({res[c]['error_fuente']})")
+            res[c] = {**base, "error_fuente": f"{type(e).__name__}: {e}"[:300],
+                      "causa_fuente": causa_fuente(e)}
+            print(f"· {c}: sin PDF ({res[c]['causa_fuente']}: {res[c]['error_fuente']})")
             continue
         sha = federal.sha256(pdf)
         base.update(sha256=sha, url=url, intentos=reparaciones.intentos(c, sha, registros))
+        if a.solo_fuente:
+            res[c] = base
+            print(f"· {c}: PDF descargado ({url})")
+            continue
         guardado = cache / f"{c.replace('/', '__')}.json" if cache else None
         previo = _leer(guardado) if guardado else None
         if previo and previo.get("sha256") == sha and previo.get("huella") == huella:
@@ -593,6 +624,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--salida", required=True)
     p.add_argument("--cache", default=None)
     p.add_argument("--max", type=int, default=8, help="leyes que se construyen por corrida")
+    p.add_argument("--estado", default=None, help="solo las de este estado")
+    p.add_argument("--solo-fuente", action="store_true", help="solo descargar, sin construir")
     p.add_argument("--registro", default=str(reparaciones.REGISTRO))
     p = sub.add_parser("promover")
     p.add_argument("--resultado", action="append", required=True)

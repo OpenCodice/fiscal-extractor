@@ -537,6 +537,32 @@ jobs:
           python scripts/reparacion.py fuera --trabajo "$AGENTE_DIR" --pdfs /tmp/fuera-pdfs \
             --salida "$AGENTE_DIR/fuera.json" --cache "$AGENTE_DIR/fuera-cache"
           echo "sha=$(sha256sum "$AGENTE_DIR/fuera.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Leyes en FUERA que no se descargan por algo del extractor
+        # Una ley que no se puede ni descargar no la arregla el agente de
+        # abajo (no hay PDF que reparar). Si la causa está en el extractor (un
+        # href que no sabe pedir, no una caída de red: reparacion.causa_fuente),
+        # la redeclara la ronda de expansión, con su propio tope
+        # (expandir-estatales.yml -f redeclarar=<estado>), y si le falta una
+        # opción la agrega su job `codigo`. Un estado por corrida, y no si ya
+        # hay una ronda en curso o en cola.
+        if: steps.fuera.outcome == 'success' && env.TIENE_CLAUDE == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -s "$AGENTE_DIR/fuera.json" ] || exit 0
+          cd /tmp/extractor
+          estado=$(GITHUB_OUTPUT=/dev/stdout python scripts/expansion.py redeclarar-pendiente --fuera "$AGENTE_DIR/fuera.json" \
+                     | tee /dev/stderr | sed -n 's/^estado=//p')
+          [ -n "$estado" ] || exit 0
+          rondas=$(gh run list -R "$GITHUB_REPOSITORY" -w expandir-estatales.yml -L 20 \
+                     --json status -q '[.[] | select(.status != "completed")] | length')
+          if [ "$rondas" != 0 ]; then
+            echo "Hay una ronda de expansión en curso: la redeclaración de $estado espera a la siguiente vigilancia." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh workflow run expandir-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f redeclarar="$estado"
+          echo "Leyes en FUERA de $estado sin descarga por el extractor: ronda de redeclaración lanzada." | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Elegir las leyes y el defecto a reparar
         id: objetivo
         if: env.TIENE_CLAUDE == 'true'

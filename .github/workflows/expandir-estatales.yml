@@ -23,6 +23,15 @@ name: Expandir leyes estatales
 # encontrar o descargar los PDF, el job `codigo` la agrega (otro agente, con
 # compuertas). En los dos casos el estado vuelve a la cola sin gastar el
 # intento y se relanza la ronda.
+#
+# Con `redeclarar=<estado>` (lo lanza el job `reparar` de
+# vigilar-leyes-estatales.yml) la ronda es sobre un estado ya publicado: leyes
+# de su FUERA que no se pueden descargar por algo del extractor. El agente solo
+# agrega opciones a esas entradas del módulo (cerco por a_dict: LEYES y
+# FUERA_POR_DISENO idénticas); si falta la opción, el mismo job `codigo` la
+# agrega y la redeclaración se relanza. Con su propio tope por estado y falla
+# (registro `redeclaracion` de pendientes.json). No espera a la cadena: no
+# suma ningún estado.
 
 on:
   workflow_dispatch:
@@ -48,6 +57,10 @@ on:
         description: 'Con simular: lo que falta al extractor (codigo) o el dominio (egress)'
         required: false
         default: ''
+      redeclarar:
+        description: 'Estado ya publicado cuyas leyes de FUERA no se descargan por algo del extractor (lo lanza reparar)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -62,6 +75,8 @@ env:
   RAMA: reforma/leyes-estatales
   TRABAJO: /tmp/expansion
   PDF_CACHE: /tmp/pdfs-corpus
+  REDECLARAR: ${{ inputs.redeclarar != '' && 'true' || 'false' }}
+  REDECLARAR_ESTADO: ${{ inputs.redeclarar }}
 
 jobs:
   ronda:
@@ -91,7 +106,10 @@ jobs:
                         --json status -q '[.[] | select(.status != "completed")] | length')
           abiertos=$(gh pr list -R "$DATOS" --head "$RAMA" --state open --json number -q length)
           echo "Vigilancias en curso: $corriendo; PR abiertos: $abiertos"
-          if [ "${{ inputs.sin_esperar }}" = true ]; then
+          if [ "$REDECLARAR" = true ]; then
+            echo "Redeclaración de $REDECLARAR_ESTADO: no suma un estado, no espera a la cadena." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "libre=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ inputs.sin_esperar }}" = true ]; then
             echo "Prueba manual (sin_esperar): no se espera a la cadena anterior." | tee -a "$GITHUB_STEP_SUMMARY"
             echo "libre=true" >> "$GITHUB_OUTPUT"
           elif [ "$corriendo" != 0 ] || [ "$abiertos" != 0 ]; then
@@ -110,7 +128,7 @@ jobs:
           pip install -q -r /tmp/extractor/requirements.txt pytest
 
       - name: Altas pendientes
-        if: steps.cadena.outputs.libre == 'true'
+        if: steps.cadena.outputs.libre == 'true' && inputs.redeclarar == ''
         id: altas
         env:
           EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
@@ -127,9 +145,24 @@ jobs:
           gh workflow run vigilar-leyes-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f estados="$ESTADOS"
           echo "Quedan altas pendientes en: $ESTADOS. Se relanzó su vigilancia; el estado nuevo espera a la siguiente ronda." | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Redeclaración — qué leyes de FUERA no se descargan y por qué
+        # Con el extractor de main, antes del agente (con EGRESS_MX_TOKEN, que
+        # el agente no tiene): las que fallan por algo del extractor son su
+        # objetivo; su registro es la referencia del cerco.
+        id: fuera
+        if: steps.cadena.outputs.libre == 'true' && inputs.redeclarar != '' && env.TIENE_CLAUDE == 'true'
+        timeout-minutes: 30
+        env:
+          EGRESS_MX_TOKEN: ${{ secrets.EGRESS_MX_TOKEN }}
+        run: |
+          cd /tmp/extractor
+          python scripts/reparacion.py fuera --trabajo "$TRABAJO" --pdfs "$TRABAJO/fuera-pdfs" \
+            --salida "$TRABAJO/fuera.json" --estado "$REDECLARAR_ESTADO" --solo-fuente
+          python scripts/expansion.py registro --estado "$REDECLARAR_ESTADO" --salida "$TRABAJO/registro-antes.json"
+
       - name: Elegir el estado y contar el intento
         id: elegir
-        if: (steps.altas.outputs.pendientes == '0' || (inputs.sin_esperar && steps.altas.outputs.pendientes != '')) && env.TIENE_CLAUDE == 'true'
+        if: ((inputs.redeclarar == '' && (steps.altas.outputs.pendientes == '0' || (inputs.sin_esperar && steps.altas.outputs.pendientes != ''))) || steps.fuera.outcome == 'success') && env.TIENE_CLAUDE == 'true'
         env:
           ESTADO_PEDIDO: ${{ inputs.estado }}
           EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
@@ -143,12 +176,19 @@ jobs:
               > /tmp/egress-permitidos.json \
             || echo "::warning::No se pudo leer la lista de dominios de egress-mx."
           cd /tmp/extractor
-          python scripts/expansion.py elegir --estado "$ESTADO_PEDIDO" --permitidos /tmp/egress-permitidos.json
+          if [ "$REDECLARAR" = true ]; then
+            python scripts/expansion.py elegir --redeclarar "$REDECLARAR_ESTADO" --fuera "$TRABAJO/fuera.json" \
+              --objetivo "$TRABAJO/redeclarar.json" --permitidos /tmp/egress-permitidos.json
+          else
+            python scripts/expansion.py elegir --estado "$ESTADO_PEDIDO" --permitidos /tmp/egress-permitidos.json
+          fi
           estado=$(grep '^estado=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)
           [ -n "$estado" ] || exit 0
           NOMBRE="$(grep '^nombre=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2)" ESTADO="$estado" \
             bash scripts/agente/expandir.sh intento
           echo "partida=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # Lo que el cerco de una redeclaración compara no puede cambiar durante el agente.
+          [ "$REDECLARAR" != true ] || echo "huella_antes=$(cat "$TRABAJO/registro-antes.json" "$TRABAJO/redeclarar.json" | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "pista_url=$(grep '^pista=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)" >> "$GITHUB_OUTPUT"
 
       - name: Caché de los PDF publicados
@@ -226,12 +266,20 @@ jobs:
         env:
           PARTIDA: ${{ steps.elegir.outputs.partida }}
           MODULO: ${{ steps.elegir.outputs.modulo }}
+          HUELLA_ANTES: ${{ steps.elegir.outputs.huella_antes }}
         run: |
           pkill -f proxy_mx.py || true
           cd /tmp/extractor
           fuera=""
           [ "$(git rev-parse HEAD)" = "$PARTIDA" ] || fuera="commits propios en el extractor"
-          otros=$(git status --porcelain=v1 -uall --no-renames | grep -vE "^\?\? (extractor/estatales/${MODULO}\.py|tests/test_estatal_${MODULO}[a-z0-9_]*\.py)$" || true)
+          if [ "$REDECLARAR" = true ]; then
+            # Redeclaración: solo el módulo que ya existe.
+            otros=$(git status --porcelain=v1 -uall --no-renames | grep -vE "^ M extractor/estatales/${MODULO}\.py$" || true)
+            [ "$(cat "$TRABAJO/registro-antes.json" "$TRABAJO/redeclarar.json" | sha256sum | cut -d' ' -f1)" = "$HUELLA_ANTES" ] \
+              || fuera="cambió lo que el cerco compara (registro-antes.json o redeclarar.json)"
+          else
+            otros=$(git status --porcelain=v1 -uall --no-renames | grep -vE "^\?\? (extractor/estatales/${MODULO}\.py|tests/test_estatal_${MODULO}[a-z0-9_]*\.py)$" || true)
+          fi
           [ -z "$otros" ] || fuera="tocó otros archivos: $(echo "$otros" | head -3 | tr '\n' ' ')"
           if [ -n "$fuera" ]; then
             echo "::error::El agente $fuera"
@@ -265,12 +313,23 @@ jobs:
         run: |
           cd /tmp/extractor
           test -f "extractor/estatales/$MODULO.py" || { echo "::error::No hay módulo."; exit 1; }
-          ls tests/test_estatal_${MODULO}*.py > /dev/null 2>&1 \
-            && grep -qE '^def test_' tests/test_estatal_${MODULO}*.py \
-            || { echo "::error::No hay pruebas nuevas."; exit 1; }
+          if [ "$REDECLARAR" != true ]; then
+            ls tests/test_estatal_${MODULO}*.py > /dev/null 2>&1 \
+              && grep -qE '^def test_' tests/test_estatal_${MODULO}*.py \
+              || { echo "::error::No hay pruebas nuevas."; exit 1; }
+          fi
           EXPANSION_ESTADO="$ESTADO" python -m pytest -q > "$TRABAJO/pytest.log" 2>&1 || { tail -n 40 "$TRABAJO/pytest.log"; exit 1; }
           tail -n 1 "$TRABAJO/pytest.log"
           python scripts/expansion.py registro --estado "$ESTADO" --salida "$TRABAJO/registro.json"
+          if [ "$REDECLARAR" = true ]; then
+            # Solo opciones nuevas en las leyes por redeclarar; se descargan
+            # (y solo ellas) en el paso siguiente.
+            python3 -I -S /tmp/extractor/scripts/expansion.py redeclaracion-cerco --antes "$TRABAJO/registro-antes.json" \
+              --despues "$TRABAJO/registro.json" --objetivo "$TRABAJO/redeclarar.json" --salida "$TRABAJO/registro-objetivo.json"
+            echo "registro=$TRABAJO/registro-objetivo.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "registro=$TRABAJO/registro.json" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Compuertas — descargar cada PDF desde un clon limpio
         # Con EGRESS_MX_TOKEN, así que no importa nada del agente: lee su
@@ -282,12 +341,27 @@ jobs:
         run: |
           git clone -q "$EXTRACTOR_REPO" /tmp/limpio
           git -C /tmp/limpio checkout -q "$PARTIDA"
-          python3 -I -S /tmp/limpio/scripts/expansion.py descargar --registro "$TRABAJO/registro.json" \
+          python3 -I -S /tmp/limpio/scripts/expansion.py descargar --registro "${{ steps.forma.outputs.registro }}" \
             --pdfs "$TRABAJO/pdfs-estado" --resultado "$TRABAJO/descargas.json"
+
+      - name: Compuertas — cada ley redeclarada se descarga
+        # Su build y auditar los hace la reparación autónoma (reparacion.py
+        # fuera) en la vigilancia siguiente, que las promueve si quedan limpias.
+        id: descargadas
+        if: steps.forma.outcome == 'success' && inputs.redeclarar != ''
+        run: |
+          python3 -I -S - "$TRABAJO/descargas.json" <<'PY'
+          import json, sys
+          d = json.load(open(sys.argv[1], encoding="utf-8"))
+          malas = {c: r["error"] for c, r in d.items() if "error" in r}
+          for c, e in malas.items():
+              print(f"::error::{c} sigue sin descargarse: {e}")
+          sys.exit(1 if malas or not d else 0)
+          PY
 
       - name: Compuertas — build y auditar; lo que no quede limpio, a FUERA
         id: construir
-        if: steps.forma.outcome == 'success'
+        if: steps.forma.outcome == 'success' && inputs.redeclarar == ''
         env:
           ESTADO: ${{ steps.elegir.outputs.estado }}
         run: |
@@ -311,7 +385,7 @@ jobs:
         # una corrección de main aún sin confirmar), tiene que ser idéntico a lo
         # que cambia sin el módulo.
         id: impacto
-        if: steps.construir.outcome == 'success'
+        if: steps.construir.outcome == 'success' || steps.descargadas.outcome == 'success'
         timeout-minutes: 120
         env:
           PARTIDA: ${{ steps.elegir.outputs.partida }}
@@ -370,7 +444,9 @@ jobs:
             impacto=${{ steps.impacto.outcome }} publicar=${{ steps.publicar.outcome }}
         run: |
           expandir() { bash /tmp/extractor/scripts/agente/expandir.sh "$@"; }
-          if [ "$RESULTADO" = egress ] && [ -n "$DOMINIO" ] && ! echo " $PERMITIDOS " | grep -qF " $DOMINIO "; then
+          # En una redeclaración un sitio que rechaza IP extranjeras no es causa
+          # `codigo` (reparacion.causa_fuente): ese veredicto es un intento fallido.
+          if [ "$REDECLARAR" != true ] && [ "$RESULTADO" = egress ] && [ -n "$DOMINIO" ] && ! echo " $PERMITIDOS " | grep -qF " $DOMINIO "; then
             responde=""
             for intento in 1 2; do
               code=$(curl -s -o /dev/null -m 30 -w '%{http_code}' "https://$DOMINIO/" || true)
@@ -419,6 +495,7 @@ jobs:
             /tmp/expansion/*.md
             /tmp/expansion/*.log
             /tmp/expansion/*.err
+            /tmp/expansion/*.patch
             /tmp/expansion/borrador/*.py
             /tmp/expansion/construccion/*.json
             /tmp/expansion/impacto-*/resumen.json
@@ -560,7 +637,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow run expandir-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f estado="$ESTADO"
+          if [ "$REDECLARAR" = true ]; then
+            gh workflow run expandir-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f redeclarar="$ESTADO"
+          else
+            gh workflow run expandir-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f estado="$ESTADO"
+          fi
           echo "Arreglo publicado ($(cat "$TRABAJO/codigo/publicado.txt")); ronda relanzada para $ESTADO." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Guardar el trabajo del arreglo

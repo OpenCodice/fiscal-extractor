@@ -35,12 +35,23 @@
 #     un clon limpio de main y lo sube con el estado de vuelta en la cola (el
 #     intento que pidió el código no cuenta), o anota el descarte.
 #
+#   Con REDECLARAR=true (input `redeclarar` del workflow: un estado ya
+#   publicado con leyes de FUERA que no se pueden descargar por algo del
+#   extractor), las mismas fases sobre el módulo que ya existe: el agente
+#   (brief-redeclaracion.md) solo agrega opciones a esas entradas de FUERA,
+#   `publicar` aplica su cambio al módulo de main como parche, y lo que se
+#   anota va al registro `redeclaracion` del estado (expansion.py anotar
+#   --redeclaracion), que sigue `publicado`.
+#
 # Entorno: ESTADO, NOMBRE, MODULO (nombre del archivo sin .py), TRABAJO;
 # opcionales PISTA, PROXY_MX, PERMITIDOS, AGENTE_MINUTOS, AGENTE_MAX_TURNOS,
 # AGENTE_MODELO, PDF_CACHE, FUENTES (fuentes.json para la compuerta de
 # declaraciones), CORRIDA, ENSAYO (true: hace los commits pero no los sube), EXTRACTOR_TOKEN + EXTRACTOR_SLUG o
 # EXTRACTOR_PUSH_URL (y CONSTITUCION_PUSH_URL, pruebas).
 set -uo pipefail
+
+REDECL=()
+[ "${REDECLARAR:-}" = true ] && REDECL=(--redeclaracion)
 
 FASE="${1:?uso: expandir.sh intento|agente|publicar|anotar|impacto|egress|codigo-agente|codigo-compuertas|codigo-publicar}"
 shift
@@ -99,7 +110,9 @@ intento() {
   cd "$EXTRACTOR"
   [ -n "$(git status --porcelain -- extractor/estatales/pendientes.json)" ] || return 0
   git add -- extractor/estatales/pendientes.json
-  git -c core.hooksPath=/dev/null commit -q -m "Ronda de expansión: intento con ${NOMBRE:-$ESTADO}"
+  local que="intento con"
+  [ ${#REDECL[@]} -gt 0 ] && que="intento de redeclarar las leyes en FUERA de"
+  git -c core.hooksPath=/dev/null commit -q -m "Ronda de expansión: $que ${NOMBRE:-$ESTADO}"
   subir "$EXTRACTOR"
 }
 
@@ -122,8 +135,15 @@ if proxy and permitidos:
            f"uno de ellos y rechaza tu IP, úsala y declara sus leyes con `via=\"mx\"`.")
 else:
     via = "No hay puerta hacia el Worker egress-mx en esta corrida."
-brief = pathlib.Path(extractor, "scripts/agente/brief-expansion.md").read_text(encoding="utf-8")
-for k, v in {"__EXTRACTOR__": extractor, "__ESTADO__": e["ESTADO"], "__NOMBRE__": e["NOMBRE"],
+redeclarar = e.get("REDECLARAR") == "true"
+brief = pathlib.Path(extractor, "scripts/agente/brief-redeclaracion.md" if redeclarar
+                     else "scripts/agente/brief-expansion.md").read_text(encoding="utf-8")
+objetivo = ""
+if redeclarar:
+    import json
+    o = json.loads((trabajo / "redeclarar.json").read_text(encoding="utf-8"))
+    objetivo = "\n".join(f"- `{c}`: `{m}`" for c, m in o["leyes"].items())
+for k, v in {"__OBJETIVO__": objetivo, "__EXTRACTOR__": extractor, "__ESTADO__": e["ESTADO"], "__NOMBRE__": e["NOMBRE"],
              "__MODULO__": f"extractor/estatales/{e['MODULO']}.py",
              "__PRUEBA__": f"tests/test_estatal_{e['MODULO']}.py",
              "__PISTA__": e.get("PISTA") or "Sin pista.", "__VIA_MX__": via,
@@ -161,6 +181,10 @@ publicar() {
   local dir
   dir="$(limpio publicar)" || return 1
   local mod="extractor/estatales/$MODULO.py"
+  if [ ${#REDECL[@]} -gt 0 ]; then
+    publicar_redeclaracion "$dir" "$mod"
+    return
+  fi
   cp "$EXTRACTOR/$mod" "$dir/$mod"
   (cd "$EXTRACTOR" && git ls-files --others --exclude-standard -- "tests/test_estatal_${MODULO}*.py") \
     | while IFS= read -r f; do cp "$EXTRACTOR/$f" "$dir/$f"; done
@@ -183,14 +207,45 @@ print(" ".join(t.split())[:900])' "$TRABAJO/veredicto.json")"
   git -C "$dir" rev-parse HEAD > "$TRABAJO/publicado.txt"
 }
 
+# El módulo ya está en main y pudo cambiar desde la partida (p. ej. un bloque
+# _A_LEYES de `reparar.sh promover`): se aplica solo el cambio del agente, como
+# parche, y se comprueba otra vez que main con él pase las pruebas.
+publicar_redeclaracion() {
+  local dir="$1" mod="$2"
+  git -C "$EXTRACTOR" diff -- "$mod" > "$TRABAJO/redeclaracion.patch"
+  [ -s "$TRABAJO/redeclaracion.patch" ] || { echo "::error::Sin cambios en el módulo."; return 1; }
+  git -C "$dir" apply --3way "$TRABAJO/redeclaracion.patch" || return 1
+  (cd "$dir" && python -m pytest -q -x > "$TRABAJO/pytest-publicar.log" 2>&1) \
+    || { tail -n 30 "$TRABAJO/pytest-publicar.log"; echo "::error::Con main, las pruebas no pasan."; return 1; }
+  python3 -I -S "$dir/scripts/expansion.py" anotar --estado "$ESTADO" --resultado publicado \
+    --redeclaracion --corrida "${CORRIDA:-}" || return 1
+  git -C "$dir" add -- "$mod" extractor/estatales/pendientes.json
+  local resumen
+  resumen="$(python3 -c '
+import json, sys
+try:
+    t = str(json.load(open(sys.argv[1], encoding="utf-8")).get("resumen") or "")
+except Exception:
+    t = ""
+print(" ".join(t.split())[:900])' "$TRABAJO/veredicto.json")"
+  git -C "$dir" -c core.hooksPath=/dev/null commit -q \
+    -m "Leyes estatales: $NOMBRE, opciones nuevas para leyes en FUERA (ronda de expansión)" \
+    -m "${resumen:-El agente de la redeclaración agregó opciones a las leyes de FUERA que no se podían descargar.}" \
+    -m "Compuertas: solo opciones nuevas en esas entradas de FUERA (LEYES y FUERA_POR_DISENO idénticas por a_dict), pruebas, cada PDF descargado desde un clon limpio e impacto nulo en lo publicado. Las retoma la reparación autónoma (reparacion.py fuera). Corrida: ${CORRIDA:-local}"
+  subir "$dir" || return 1
+  git -C "$dir" rev-parse HEAD > "$TRABAJO/publicado.txt"
+}
+
 anotar() {
   identidad
   local dir
   dir="$(limpio anotar)" || return 1
-  python3 -I -S "$dir/scripts/expansion.py" anotar --estado "$ESTADO" "$@" || return 1
+  python3 -I -S "$dir/scripts/expansion.py" anotar --estado "$ESTADO" ${REDECL[@]+"${REDECL[@]}"} "$@" || return 1
   [ -n "$(git -C "$dir" status --porcelain)" ] || return 0
   git -C "$dir" add -- extractor/estatales/pendientes.json
-  git -C "$dir" -c core.hooksPath=/dev/null commit -q -m "Ronda de expansión: ${NOMBRE:-$ESTADO} sin publicar"
+  local que="${NOMBRE:-$ESTADO} sin publicar"
+  [ ${#REDECL[@]} -gt 0 ] && que="leyes en FUERA de ${NOMBRE:-$ESTADO} sin redeclarar"
+  git -C "$dir" -c core.hooksPath=/dev/null commit -q -m "Ronda de expansión: $que"
   subir "$dir"
 }
 
@@ -344,7 +399,7 @@ print(" ".join(t.split())[:120])' "$CODIGO/veredicto.json")"
   if [ "$est" = listo ]; then
     dir="$(limpio codigo)" || return 1
     if git -C "$dir" apply --3way "$CODIGO/arreglo.patch" \
-        && python3 -I -S "$dir/scripts/expansion.py" anotar --estado "$ESTADO" --resultado codigo-publicado \
+        && python3 -I -S "$dir/scripts/expansion.py" anotar --estado "$ESTADO" ${REDECL[@]+"${REDECL[@]}"} --resultado codigo-publicado \
              --motivo "${titulo:-opción nueva del extractor}" --corrida "${CORRIDA:-}"; then
       git -C "$dir" add -A -- extractor tests
       git -C "$dir" -c core.hooksPath=/dev/null commit -q \

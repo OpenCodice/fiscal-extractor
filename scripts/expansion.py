@@ -28,6 +28,14 @@ Subcomandos:
             arreglo de código: con el extractor de partida, que descarga las
             páginas índice, y con el arreglo, que las lee de H sin red)
   declaraciones-iguales A B   el arreglo no cambia ninguna declaración ni URL
+
+Redeclaración (un estado ya publicado con leyes en FUERA que no se pueden
+descargar por algo del extractor, `reparacion.py fuera` con causa `codigo`):
+
+  redeclarar-pendiente --fuera J   el estado que toca redeclarar (lo lanza `reparar`)
+  elegir --redeclarar E --fuera J --objetivo O   cuenta su intento y deja sus leyes
+  redeclaracion-cerco --antes R --despues R --objetivo O --salida R2
+            el agente solo agregó opciones a esas leyes de FUERA
 """
 from __future__ import annotations
 
@@ -47,6 +55,7 @@ sys.path.insert(0, str(RAIZ))
 LISTA = RAIZ / "extractor" / "estatales" / "pendientes.json"
 MAX_LEYES = 30
 TOPE_CODIGO = 2           # arreglos de código por estado (y por vuelta a la cola)
+TOPE_REDECLARACION = 2    # rondas de redeclaración por estado y firma de sus fallas
 SEMANAS_HUELLA = 4        # un agotado vuelve si cambió la huella y pasó esto…
 SEMANAS_MAX = 12          # …o, sin cambios, tras esto
 # Lo que el agente de la ronda puede usar del extractor: si cambia, un estado
@@ -195,6 +204,22 @@ def elegir(lista: dict, estado: str | None, dominios: set[str], hay_modulo,
 def cmd_elegir(a) -> int:
     lista = _leer(LISTA)
     dominios = permitidos(a.permitidos)
+    if a.redeclarar:
+        o = elegir_redeclaracion(lista, a.redeclarar, _leer(Path(a.fuera)))
+        if o is None:
+            print(f"{a.redeclarar}: ninguna ley de FUERA por redeclarar (o se agotaron sus intentos).")
+            _salida_gh(hay="false")
+            return 0
+        _escribir(LISTA, lista)
+        _escribir(Path(a.objetivo), o)
+        from extractor.estatales import ENTIDADES
+        e = next(x for x in lista["estados"] if x["estado"] == a.redeclarar)
+        print(f"Redeclaración de {ENTIDADES[a.redeclarar]}: {', '.join(o['leyes'])} "
+              f"(intento {o['intentos'] + 1} de {lista.get('tope_redeclaracion', TOPE_REDECLARACION)})")
+        _salida_gh(hay="true", estado=a.redeclarar, nombre=ENTIDADES[a.redeclarar],
+                   modulo=modulo_de(a.redeclarar).stem, pista=" ".join((e.get("pista") or "").split()),
+                   permitidos=" ".join(sorted(dominios)))
+        return 0
     e = elegir(lista, a.estado or None, dominios, lambda s: modulo_de(s).exists(),
                huella_expansion())
     if e is None:
@@ -211,6 +236,62 @@ def cmd_elegir(a) -> int:
                modulo=modulo_de(e["estado"]).stem, pista=" ".join((e.get("pista") or "").split()),
                permitidos=" ".join(sorted(dominios)))
     return 0
+
+
+# ------------------------------------------------------------------ redeclaración
+
+def objetivo_redeclaracion(e: dict, fuera_res: dict, lista: dict) -> dict | None:
+    """Las leyes de FUERA del estado de `e` (ya publicado) que no se pudieron
+    descargar por algo del extractor, y si quedan intentos para ellas. La
+    firma (qué leyes y qué excepción) separa una falla nueva de la misma: los
+    intentos de redeclaración y de código se cuentan por firma, así que la
+    misma falla cuesta a lo más TOPE_REDECLARACION rondas, y una distinta
+    empieza de cero."""
+    if e.get("situacion") != "publicado":
+        return None
+    leyes = {c: r["error_fuente"] for c, r in sorted(fuera_res.items())
+             if c.split("/")[0] == e["estado"] and r.get("causa_fuente") == "codigo"}
+    if not leyes:
+        return None
+    firma = hashlib.sha256("\n".join(f"{c}|{m.split(':')[0]}" for c, m in leyes.items())
+                           .encode()).hexdigest()[:16]
+    r = e.get("redeclaracion") or {}
+    intentos = r.get("intentos", 0) if r.get("firma") == firma else 0
+    if intentos >= lista.get("tope_redeclaracion", TOPE_REDECLARACION):
+        return None
+    return {"estado": e["estado"], "firma": firma, "intentos": intentos, "leyes": leyes}
+
+
+def cmd_redeclarar_pendiente(a) -> int:
+    """El primer estado publicado con leyes de FUERA por redeclarar (bajo su
+    tope), para que `reparar` lance su ronda."""
+    lista, res = _leer(LISTA), _leer(Path(a.fuera))
+    for e in lista["estados"]:
+        if (o := objetivo_redeclaracion(e, res, lista)):
+            print(f"Redeclarar {o['estado']}: {', '.join(o['leyes'])} "
+                  f"(intento {o['intentos'] + 1} con esta falla)")
+            _salida_gh(estado=o["estado"])
+            return 0
+    print("Ninguna ley de FUERA espera un arreglo de su declaración.")
+    _salida_gh(estado="")
+    return 0
+
+
+def elegir_redeclaracion(lista: dict, estado: str, fuera_res: dict) -> dict | None:
+    e = next((x for x in lista["estados"] if x["estado"] == estado), None)
+    if e is None or not modulo_de(estado).exists():
+        raise SystemExit(f"{estado} no es un estado publicado")
+    e["situacion"] = "publicado"
+    o = objetivo_redeclaracion(e, fuera_res, lista)
+    if o is None:
+        return None
+    r = e.get("redeclaracion") or {}
+    if r.get("firma") != o["firma"]:
+        r = {"firma": o["firma"], "intentos": 0, "intentos_codigo": 0}
+    r.update(intentos=r.get("intentos", 0) + 1, ultimo_intento=_hoy(), leyes=sorted(o["leyes"]))
+    r.pop("motivo", None)
+    e["redeclaracion"] = r
+    return o
 
 
 # ------------------------------------------------------------------ registro
@@ -258,8 +339,67 @@ def cmd_registro(a) -> int:
             print(f"✗ {e}")
         return 1
     _escribir(Path(a.salida), {"documentos": [a_dict(d) for d in leyes],
-                               "fuera": {d.clave: m for d, m in fuera}})
+                               "fuera": {d.clave: m for d, m in fuera},
+                               "medio": mod.MEDIO,
+                               "fuera_documentos": [a_dict(d) for d, _ in fuera],
+                               "por_diseno": sorted(diseno)})
     print(f"{len(leyes)} leyes y {len(fuera)} fuera.")
+    return 0
+
+
+# ------------------------------------------------------------------ redeclaracion-cerco
+
+# Un campo con su valor por omisión es una opción que no se usa: darle valor es agregarla.
+_VACIOS = (None, False, "", [], ())
+
+
+def cerco_redeclaracion(antes: dict, despues: dict, leyes: set[str]) -> tuple[list[str], list[dict]]:
+    """Lo que el agente de una redeclaración no puede cambiar del módulo (por
+    `a_dict`, como datos): MEDIO, cada entrada de LEYES (y su orden), qué
+    claves hay en FUERA y en FUERA_POR_DISENO, y las entradas de FUERA que no
+    son de sus `leyes`. En las suyas solo puede agregar opciones: cada campo
+    que ya tenían queda igual. Devuelve (errores, entradas cambiadas)."""
+    errores = []
+    if despues.get("medio") != antes.get("medio"):
+        errores.append("cambió MEDIO")
+    if despues["documentos"] != antes["documentos"]:
+        errores.append("cambió LEYES (la promoción a LEYES es de reparar.sh promover)")
+    if despues.get("por_diseno") != antes.get("por_diseno"):
+        errores.append("cambió FUERA_POR_DISENO")
+    a = {d["clave"]: d for d in antes["fuera_documentos"]}
+    d = {x["clave"]: x for x in despues["fuera_documentos"]}
+    if set(a) != set(d):
+        errores.append("cambió qué leyes hay en FUERA")
+    cambiadas = []
+    for c in sorted(set(a) & set(d)):
+        if a[c] == d[c]:
+            continue
+        if c not in leyes or c in (antes.get("por_diseno") or []):
+            errores.append(f"{c}: no es una de las leyes por redeclarar")
+            continue
+        tocados = [k for k, v in a[c].items() if v not in _VACIOS and d[c].get(k) != v]
+        if tocados:
+            errores.append(f"{c}: cambió {', '.join(tocados)} (solo se pueden agregar opciones)")
+            continue
+        cambiadas.append(d[c])
+    if not cambiadas and not errores:
+        errores.append("no agregó ninguna opción a las leyes por redeclarar")
+    return errores, cambiadas
+
+
+def cmd_redeclaracion_cerco(a) -> int:
+    o = _leer(Path(a.objetivo))
+    errores, cambiadas = cerco_redeclaracion(_leer(Path(a.antes)), _leer(Path(a.despues)),
+                                             set(o["leyes"]))
+    for e in errores:
+        print(f"✗ {e}")
+    if errores:
+        return 1
+    _escribir(Path(a.salida), {"documentos": cambiadas})
+    antes = {d["clave"]: d for d in _leer(Path(a.antes))["fuera_documentos"]}
+    for x in cambiadas:
+        nuevas = [k for k, v in x.items() if antes[x["clave"]].get(k) in _VACIOS and v not in _VACIOS]
+        print(f"✓ {x['clave']}: agrega {', '.join(nuevas)}")
     return 0
 
 
@@ -395,9 +535,40 @@ def _agotar_o_seguir(e: dict, lista: dict, motivo: str) -> None:
     e["motivo"] = motivo[:400]
 
 
+def anotar_redeclaracion(e: dict, lista: dict, a) -> None:
+    """Como la ronda de un estado nuevo, pero en el registro `redeclaracion`
+    del estado ya publicado: el estado sigue `publicado` pase lo que pase."""
+    r = e.setdefault("redeclaracion", {})
+    tope_codigo = lista.get("tope_codigo", TOPE_CODIGO)
+    if a.resultado == "publicado":
+        r.update(situacion="redeclarado", fecha=_hoy(), motivo="leyes redeclaradas: las retoma `reparar`")
+    elif a.resultado == "codigo":
+        hay = r.get("intentos_codigo", 0) < tope_codigo
+        if hay:
+            r["intentos_codigo"] = r.get("intentos_codigo", 0) + 1
+            r["falta"] = " ".join(a.motivo.split())[:600]
+        r["motivo"] = (f"necesita código en el extractor: {a.motivo}" if hay else
+                       f"necesita código y se agotaron sus {tope_codigo} intentos de código: {a.motivo}")[:400]
+        _salida_gh(codigo="true" if hay else "false")
+    elif a.resultado == "codigo-publicado":
+        r["intentos"] = max(0, r.get("intentos", 0) - 1)
+        r["motivo"] = f"el extractor ya tiene lo que faltaba ({a.motivo}): se reintenta"[:400]
+    elif a.resultado == "codigo-descartado":
+        r["motivo"] = f"{r.get('motivo', '')}; arreglo de código descartado: {a.motivo}"[:400]
+    else:
+        r["motivo"] = (a.motivo or "la redeclaración falló")[:400]
+    if a.corrida:
+        r["corrida"] = a.corrida
+    print(f"{a.estado} (redeclaración): {r.get('motivo', '')}")
+
+
 def cmd_anotar(a) -> int:
     lista = _leer(LISTA)
     e = next(x for x in lista["estados"] if x["estado"] == a.estado)
+    if a.redeclaracion:
+        anotar_redeclaracion(e, lista, a)
+        _escribir(LISTA, lista)
+        return 0
     if not a.resultado.startswith("codigo-"):
         for k in ("motivo", "dominio", "leyes", "fuera_por_compuertas", "falta", "agotado"):
             e.pop(k, None)
@@ -599,6 +770,11 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("listo"); s.add_argument("--out", required=True)
     s = sub.add_parser("elegir"); s.add_argument("--estado", default=""); s.add_argument("--permitidos")
+    s.add_argument("--redeclarar", default=""); s.add_argument("--fuera"); s.add_argument("--objetivo")
+    s = sub.add_parser("redeclarar-pendiente"); s.add_argument("--fuera", required=True)
+    s = sub.add_parser("redeclaracion-cerco")
+    for k in ("--antes", "--despues", "--objetivo", "--salida"):
+        s.add_argument(k, required=True)
     s = sub.add_parser("registro"); s.add_argument("--estado", required=True); s.add_argument("--salida", required=True)
     s = sub.add_parser("descargar")
     for k in ("--registro", "--pdfs", "--resultado"):
@@ -618,6 +794,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--leyes", type=int, default=0)
     s.add_argument("--fuera", type=int, default=0)
     s.add_argument("--corrida", default="")
+    s.add_argument("--redeclaracion", action="store_true",
+                   help="el resultado es de la redeclaración de un estado ya publicado")
     s = sub.add_parser("impacto-igual"); s.add_argument("antes"); s.add_argument("despues")
     s = sub.add_parser("egress-agregar")
     for k in ("--json", "--dominio", "--estado"):
@@ -634,7 +812,9 @@ def main(argv: list[str] | None = None) -> int:
             "descargar": cmd_descargar, "construir": cmd_construir, "fuera": cmd_fuera,
             "anotar": cmd_anotar, "impacto-igual": cmd_impacto_igual,
             "egress-agregar": cmd_egress_agregar, "declaraciones": cmd_declaraciones,
-            "declaraciones-iguales": cmd_declaraciones_iguales}[a.cmd](a)
+            "declaraciones-iguales": cmd_declaraciones_iguales,
+            "redeclarar-pendiente": cmd_redeclarar_pendiente,
+            "redeclaracion-cerco": cmd_redeclaracion_cerco}[a.cmd](a)
 
 
 if __name__ == "__main__":
