@@ -444,8 +444,14 @@ jobs:
     if: needs.cerrar.outputs.continuar == 'true' && needs.cerrar.outputs.pr != ''
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       actions: write
     steps:
+      - uses: actions/checkout@v5
+        with:
+          path: _lanzador
+          sparse-checkout: scripts/lanzar_vigilancia_estatal.sh
+          sparse-checkout-cone-mode: false
       - name: Esperar la fusión y lanzar la siguiente corrida
         env:
           GH_TOKEN: ${{ github.token }}
@@ -454,7 +460,7 @@ jobs:
           for i in $(seq 1 90); do
             estado=$(gh pr view "$PR" -R "$DATOS" --json state -q .state)
             case "$estado" in
-              MERGED) gh workflow run vigilar-leyes-estatales.yml -R "$GITHUB_REPOSITORY" --ref main
+              MERGED) bash "$GITHUB_WORKSPACE/_lanzador/scripts/lanzar_vigilancia_estatal.sh"
                       echo "Siguiente corrida lanzada."; exit 0 ;;
               CLOSED) echo "El PR se cerró sin fusionar; no se continúa."; exit 0 ;;
             esac
@@ -700,13 +706,13 @@ jobs:
         if: steps.publicar.outputs.reparado == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run vigilar-leyes-estatales.yml -R "$GITHUB_REPOSITORY" --ref main
+        run: bash "$GITHUB_WORKSPACE/scripts/lanzar_vigilancia_estatal.sh"
       - name: Dar de alta las leyes que pasaron a LEYES
         if: steps.promover.outputs.promovidas != '' && steps.publicar.outputs.reparado != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           ESTADOS: ${{ steps.promover.outputs.estados }}
-        run: gh workflow run vigilar-leyes-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f estados="$ESTADOS"
+        run: bash "$GITHUB_WORKSPACE/scripts/lanzar_vigilancia_estatal.sh" "$ESTADOS"
       - name: Guardar el trabajo de la reparación
         if: always() && steps.objetivo.outputs.hay == 'true'
         uses: actions/upload-artifact@v4
@@ -731,17 +737,23 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       actions: write
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          path: _lanzador
+          sparse-checkout: scripts/lanzar_vigilancia_estatal.sh
+          sparse-checkout-cone-mode: false
       - name: Reintentar una vez si falló
         # Casi todas las fallas son de red o de la fuente oficial: se reintenta
         # solo, una vez. Si el reintento también falla, la siguiente vigilancia
         # semanal lo vuelve a intentar.
         if: (needs.planear.result == 'failure' || needs.cerrar.result == 'failure' || needs.revisar.result == 'failure') && inputs.reintento != true
-        run: gh workflow run vigilar-leyes-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f reintento=true
+        run: bash "$GITHUB_WORKSPACE/_lanzador/scripts/lanzar_vigilancia_estatal.sh" "" -f reintento=true
 
       - name: Dejar constancia si también falló el reintento
         if: (needs.planear.result == 'failure' || needs.cerrar.result == 'failure' || needs.revisar.result == 'failure') && inputs.reintento == true

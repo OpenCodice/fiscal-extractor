@@ -93,6 +93,11 @@ jobs:
       estado: ${{ steps.elegir.outputs.estado }}
       nombre: ${{ steps.elegir.outputs.nombre }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          path: _lanzador
+          sparse-checkout: scripts/lanzar_vigilancia_estatal.sh
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -142,7 +147,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ESTADOS: ${{ steps.altas.outputs.estados }}
         run: |
-          gh workflow run vigilar-leyes-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f estados="$ESTADOS"
+          bash "$GITHUB_WORKSPACE/_lanzador/scripts/lanzar_vigilancia_estatal.sh" "$ESTADOS"
           echo "Quedan altas pendientes en: $ESTADOS. Se relanzó su vigilancia; el estado nuevo espera a la siguiente ronda." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Redeclaración — qué leyes de FUERA no se descargan y por qué
@@ -413,7 +418,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ESTADO: ${{ steps.elegir.outputs.estado }}
         run: |
-          gh workflow run vigilar-leyes-estatales.yml -R "$GITHUB_REPOSITORY" --ref main -f estados="$ESTADO"
+          bash "$GITHUB_WORKSPACE/_lanzador/scripts/lanzar_vigilancia_estatal.sh" "$ESTADO"
           echo "Módulo de $ESTADO publicado (${{ steps.publicar.outputs.sha }}); vigilancia lanzada." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Anotar el resultado sin módulo

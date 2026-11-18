@@ -379,6 +379,11 @@ fase (2026-11-17):
   `fuentes.json` de leyes-estatales guarda lo publicado (incluida/excluida y por
   qué, PDF, extractor), solo con los campos que identifican a la ley: cómo leer
   su PDF vive en el código y `registro.cargar` lo toma de ahí.
+- **Relanzar la vigilancia:** todo lo que la lanza (la cadena, `reparar`, la
+  ronda) usa `scripts/lanzar_vigilancia_estatal.sh`. GitHub deja una sola
+  corrida en espera por grupo de concurrency y la nueva cancela a la que
+  esperaba; si ya hay una en espera, el script lanza la vigilancia completa en
+  lugar de solo los `estados` pedidos, para no perder lo que esa iba a hacer.
 - **Vigilancia:** `vigilar-leyes-estatales.yml`, el flujo federal
   (`extractor estatal planear|extraer|integrar|cerrar`, mismos pasos que
   `federal …`) por tandas (`--lote`, 8 altas por corrida). Las altas pasan la
