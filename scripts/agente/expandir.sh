@@ -60,8 +60,8 @@ TRABAJO="${TRABAJO:-/tmp/expansion}"
 mkdir -p "$TRABAJO"
 
 identidad() {
-  export GIT_AUTHOR_NAME="${GITHUB_ACTOR:-opencodice-ci}" GIT_COMMITTER_NAME="${GITHUB_ACTOR:-opencodice-ci}"
-  export GIT_AUTHOR_EMAIL="${GITHUB_ACTOR_ID:-0}+${GITHUB_ACTOR:-opencodice-ci}@users.noreply.github.com"
+  export GIT_AUTHOR_NAME="Claude (agente OpenCodice)" GIT_COMMITTER_NAME="Claude (agente OpenCodice)"
+  export GIT_AUTHOR_EMAIL="noreply@anthropic.com"
   export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 }
 
