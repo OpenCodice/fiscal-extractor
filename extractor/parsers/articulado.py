@@ -475,7 +475,16 @@ _ROTULO_ABREVIADO_RE = re.compile(
     r"(?m)^Art(?=\.\s*\d+(?:\s+[A-Za-z]+(?:\s+[IVX]+)?)?\.-?(?:\s|$))\.?")
 
 
+# 'ART. 224 BIS.-', 'ARTÌCULO 270 BIS.-' (acento grave) y 'ARTÍCULO161 BIS 2.-': el
+# mismo rótulo escrito de otra forma.
+_ROTULO_MAYUS_RE = re.compile(
+    r"(?m)^(?:ART\.(?=\s*\d+(?:\s+[A-Za-z]+(?:\s+\d+)?)?\s*\.-)|ART[ÌÍ]CULO(?=\d))\s*(?=\d)")
+_ROTULO_GRAVE_RE = re.compile(r"(?m)^ARTÌCULO(?=\s)")
+
+
 def _rotulo_abreviado_completo(texto: str) -> str:
+    texto = _ROTULO_GRAVE_RE.sub("ARTÍCULO", texto)
+    texto = _ROTULO_MAYUS_RE.sub("ARTÍCULO ", texto)
     return _ROTULO_ABREVIADO_RE.sub("Artículo", texto)
 
 
@@ -1011,11 +1020,31 @@ MAX_RENGLONES_NOTA = 4
 MAX_RENGLONES_NOTA_EDITOR = 8     # la nota del editor ('N. DE E. …') es más larga
 
 
+# Nota de reforma sin su paréntesis de apertura (el PDF de Nuevo León lo omite a
+# veces: 'REFORMADO, P.O. 09 DE JUNIO DE 2010)'): su paréntesis de cierre es el
+# de una apertura implícita.
+_NOTA_SIN_APERTURA_RE = re.compile(
+    r"^(?:REFORMAD|ADICIONAD|DEROGAD)[OA]S?\b[^()]*P\.\s?O\.\s?\d")
+# Nota que termina en el año de su fecha (sin cerrar su paréntesis, o la nota del
+# editor sin punto final).
+_FECHA_FINAL_RE = re.compile(r"\b(?:1[89]|20)\d\d\s*$")
+
+
 def _parentesis_cerrados(texto: str) -> bool:
-    return texto.count("(") <= texto.count(")")
+    abiertos = texto.count("(") + bool(_NOTA_SIN_APERTURA_RE.match(texto.lstrip()))
+    return abiertos <= texto.count(")") or bool(_FECHA_FINAL_RE.search(texto))
 
 
 _NOTA_EDITOR_RE = re.compile(r"N\.\s?DE\s?E\.")
+# '(ADICIONADO CON EL ARTÍCULO QUE LO INTEGRA, P.O. …)': la nota de un título o
+# capítulo completo, no de un artículo.
+_NOTA_TITULO_RE = re.compile(r"\bCON\s+(?:EL|LOS|LAS)\s+(?:ART[ÍI]CULOS?|CAP[ÍI]TULOS?)\s+QUE\s+LO",
+                             re.IGNORECASE)
+# Nota que anota un párrafo derogado del artículo que la precede ('(DEROGADO
+# CUARTO PÁRRAFO, P.O. …)'): va tras el texto, no es una nota previa del siguiente.
+_NOTA_PARRAFO_DEROGADO_RE = re.compile(
+    r"^\(?DEROGAD[OA],?\s+(?:PRIMER|SEGUNDO|TERCER|CUARTO|QUINTO|SEXTO|S[ÉE]PTIMO|OCTAVO|"
+    r"NOVENO|D[ÉE]CIMO|[ÚU]LTIMO)\S*\s+P[ÁA]RRAFO\b")
 
 
 _NOTA_ENCABEZADO_RE = re.compile(
@@ -1028,7 +1057,8 @@ def _nota_abierta(nota: str) -> bool:
     nota del editor ('N. DE E. EN RELACIÓN CON …', sin paréntesis), si no cerró
     la oración."""
     return (not _parentesis_cerrados(nota)
-            or (bool(_NOTA_EDITOR_RE.match(nota)) and not nota.rstrip().endswith(".")))
+            or (bool(_NOTA_EDITOR_RE.match(nota)) and not nota.rstrip().endswith(".")
+                and not _FECHA_FINAL_RE.search(nota)))
 
 
 def _notas_al_final(u: Unidad | None, notas_previas: re.Pattern | None) -> list[str]:
@@ -1049,7 +1079,8 @@ def _notas_al_final(u: Unidad | None, notas_previas: re.Pattern | None) -> list[
         # renglón inicial hasta uno que cierra la oración.
         def cierra(k: int) -> bool:
             if _NOTA_EDITOR_RE.match(lineas[k].strip()):
-                return (lineas[j - 1].rstrip().endswith(".")
+                return ((lineas[j - 1].rstrip().endswith(".")
+                         or bool(_FECHA_FINAL_RE.search(lineas[j - 1])))
                         and not any(lineas[m].rstrip().endswith(".") for m in range(k, j - 1)))
             return (_parentesis_cerrados("\n".join(lineas[k:j]))
                     and (k == j - 1 or not _parentesis_cerrados("\n".join(lineas[k:j - 1]))))
@@ -1058,7 +1089,7 @@ def _notas_al_final(u: Unidad | None, notas_previas: re.Pattern | None) -> list[
                   and (j - k <= MAX_RENGLONES_NOTA
                        or _NOTA_EDITOR_RE.match(lineas[k].strip()))
                   and cierra(k)), None)
-        if k is None or k == 0:
+        if k is None or k == 0 or _NOTA_PARRAFO_DEROGADO_RE.match(lineas[k].strip()):
             break
         grupos.insert(0, "\n".join(ln.strip() for ln in lineas[k:j]))
         inicios.insert(0, k)
@@ -1469,6 +1500,24 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             elif actual is not None and desemboca_en_articulo(i):
                 entra_bloque()
                 en_bloque = True
+            continue
+
+        # Estatal: el nombre en MAYÚSCULAS de un título sin su rótulo ('DELITOS CONTRA
+        # LA PAZ Y SEGURIDAD DE LAS PERSONAS.'), tras la nota que lo anota y antes de
+        # un capítulo que desemboca en el artículo siguiente: estructura, no texto
+        # del artículo anterior.
+        if (estatal and actual is not None and not en_bloque and notas_previas is not None
+                and stripped.isupper() and stripped.endswith(".") and len(stripped) <= 120
+                and not stripped.endswith("..") and es_nota_bloque(anterior)
+                and not _nota_abierta(anterior)
+                and _NOTA_TITULO_RE.search(anterior)
+                and (sig := next((lineas[j].strip() for j in range(i + 1, len(lineas))
+                                  if lineas[j].strip()), ""))
+                and nivel_de(sig) in ("titulo", "capitulo", "seccion")
+                and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True)):
+            fijar("titulo", stripped)
+            entra_bloque()
+            en_bloque = True
             continue
 
         if actual is not None and not en_bloque and stripped and (

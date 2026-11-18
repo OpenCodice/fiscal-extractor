@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from .parsers.articulado import ARTICULO_RE
+from .parsers.articulado import ARTICULO_RE, _nota_abierta
 
 # Inicio de una nota de reforma al pie ("... DOF DD-MM-YYYY"), posiblemente
 # envuelta en varias líneas por el PDF.
@@ -51,6 +51,7 @@ def _note_is_complete(note: str) -> bool:
     return bool(NOTE_COMPLETE_RE.search(note.strip()))
 
 
+IMPORTE_SUELTO_RE = re.compile(r"\$?\s?\d[\d.,]*(?:\s+(?:cuotas?|veces))?")
 TARIFA_FINAL_RE = re.compile(r"[A-ZÁÉÍÓÚÑ][^.;:,]{0,60}\$\s?\d[\d.,]*$")
 
 
@@ -110,8 +111,7 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             # del editor ('N. DE E. EN RELACIÓN CON …'), si no cerró la oración.
             note, j = s, i + 1
             while (j < n and (j - i) <= MAX_NOTA_ESTATAL_LINES and lines[j].strip()
-                   and (note.count("(") > note.count(")")
-                        or (note.startswith("N. DE E.") and not note.endswith(".")))):
+                   and _nota_abierta(note)):
                 note = f"{note} {lines[j].strip()}"
                 j += 1
             blocks.append(f"_{note}_")
@@ -152,6 +152,11 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             if (not sigue and cortes and corte is None and buf and buf[-1].endswith(";")
                     and re.match(r"[a-záéíóúüñ]{2,}\s", s) and not re.match(r"[a-zñ]{1,4}[.)]\s", s)):
                 sigue = True
+        # Ley estatal: el importe de una tarifa ('204.5 cuotas') que el PDF pasa al
+        # renglón siguiente de los puntos guía ('…suplente………') es de esa fila.
+        if (not sigue and cortes is not None and buf and IMPORTE_SUELTO_RE.fullmatch(s)
+                and re.search(r"(?:…|\.{3,})\.?$", buf[-1])):
+            sigue = True
         if not sigue:
             flush_buf()
         elif corte is False and re.search(r"\w-$", buf[-1]):

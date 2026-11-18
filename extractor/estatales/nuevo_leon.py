@@ -25,9 +25,14 @@ _CODIGOS = _BASE + "codigos.php"
 # Todas van ANTES de lo que anotan, entre paréntesis y en MAYÚSCULAS: '(REFORMADO,
 # P.O. 08 DE DICIEMBRE DE 2004)', '(ADICIONADA, P.O. …)', '(REFORMADA SU
 # DENOMINACIÓN, P.O. …)', '(F. DE E., P.O. …)'. A veces envuelven a otro renglón.
-NOTAS = (r"^\((?:REFORMAD|REFORMDA|ADICIONAD|ADICIOND|DEROGAD|RECORRID|REUBICAD|SE\s+DEROGA"
+NOTAS = (r"^(?:\((?:REFORMAD|REFORMDA|ADICIONAD|ADICIOND|DEROGAD|RECORRID|REUBICAD|SE\s+DEROGA"
          r"|F\.\s?DE\s?E\.|N\.\s?DE\s?E\.|FE\s+DE\s+ERRATAS|ADCIONAD|SE\s+SUSPENDE"
-         r"|\(REFORMAD|P\.\s?O\.\s?\d|P[ÁA]RRAFO\s+\w+\s+(?:REFORMAD|ADICIONAD|DEROGAD))")
+         r"|\(REFORMAD|P\.\s?O\.\s?\d|P[ÁA]RRAFO\s+\w+\s+(?:REFORMAD|ADICIONAD|DEROGAD))"
+         # …y la que el PDF imprime sin su paréntesis de apertura: 'REFORMADO, P.O. 09 DE
+         # JUNIO DE 2010)'.
+         r"|(?:REFORMAD|ADICIONAD|DEROGAD)[OA]S?\b[^()]*P\.\s?O\.\s?\d[^()]*\)"
+         # …y la nota del editor, que va sin paréntesis: 'N. DE E., LOS ARTICULOS 32 A 103 …'.
+         r"|N\.\s?DE\s?E\.)")
 NOTAS_PREVIAS = NOTAS
 
 
