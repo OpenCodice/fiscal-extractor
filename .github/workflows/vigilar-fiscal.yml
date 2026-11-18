@@ -1,4 +1,5 @@
 name: Vigilar corpus fiscal
+run-name: "vigilar-fiscal reintento=[${{ inputs.reintento }}] origen=[${{ inputs.origen }}]"
 
 # Vigila las fuentes oficiales del corpus fiscal (Cámara de Diputados para leyes,
 # códigos y reglamentos; SAT para la RMF y los criterios) y abre un PR cuando el
@@ -21,6 +22,10 @@ on:
         description: 'Reintento automático tras una falla'
         type: boolean
         default: false
+      origen:
+        description: 'Quién lanzó la corrida (scheduler, supervisor, continuar, reparar, ronda, salud); vacío = a mano'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -40,6 +45,9 @@ concurrency:
 jobs:
   vigilar:
     runs-on: ubuntu-latest
+    # Los tres agentes del job, juntos, dejan tiempo para reconstruir el corpus
+    # y medir el impacto de un arreglo.
+    timeout-minutes: 355
     outputs:
       pr: ${{ steps.pr.outputs.pull-request-number }}
     steps:
@@ -92,10 +100,10 @@ jobs:
       - name: Caché de los PDF publicados
         # Medir el impacto de un arreglo reconstruye todo lo publicado desde su
         # PDF exacto (scripts/impacto_corpus.py); los ya descargados se guardan.
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: /tmp/pdfs-corpus
-          key: pdfs-corpus-${{ github.run_id }}
+          key: pdfs-corpus-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: pdfs-corpus-
 
       - name: Compuertas del arreglo del agente
@@ -110,9 +118,17 @@ jobs:
           bash /tmp/extractor/scripts/agente/cerrar.sh compuertas
           echo "arreglo=$(python3 -c 'import json; print(json.load(open("/tmp/agente/arreglo.json"))["estado"])' 2>/dev/null || echo ninguno)" >> "$GITHUB_OUTPUT"
 
+      - name: Guardar la caché de los PDF publicados
+        # En cuanto se descargaron: lo que falle después no obliga a bajarlos otra vez.
+        if: always() && steps.compuertas.outcome != 'skipped'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/pdfs-corpus
+          key: pdfs-corpus-${{ github.run_id }}-${{ github.run_attempt }}
+
       - name: Agente — confirmar el impacto del arreglo en el corpus
         if: steps.compuertas.outputs.arreglo == 'impacto'
-        timeout-minutes: 180
+        timeout-minutes: 90
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           IMPACTO: /tmp/agente/impacto-arreglo
@@ -228,7 +244,7 @@ jobs:
 
       - name: Agente — confirmar las correcciones
         if: steps.correcciones.outputs.pendientes == 'true' && env.TIENE_CLAUDE == 'true'
-        timeout-minutes: 120
+        timeout-minutes: 90
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           IMPACTO: /tmp/agente/impacto-vigilancia
@@ -348,12 +364,13 @@ jobs:
       - name: Reintentar una vez si falló
         # Casi todas las fallas son de red o de la fuente oficial: se reintenta
         # solo, una vez. Si el reintento también falla, la siguiente vigilancia
-        # semanal lo vuelve a intentar.
-        if: (needs.vigilar.result == 'failure' || needs.revisar.result == 'failure') && inputs.reintento != true
-        run: gh workflow run vigilar-fiscal.yml -R "$GITHUB_REPOSITORY" --ref main -f reintento=true
+        # semanal lo vuelve a intentar. Un job que agota su tiempo termina
+        # `cancelled` sin que la corrida se haya cancelado: también es una falla.
+        if: ${{ !cancelled() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && inputs.reintento != true }}
+        run: gh workflow run vigilar-fiscal.yml -R "$GITHUB_REPOSITORY" --ref main -f reintento=true -f origen=salud
 
       - name: Dejar constancia si también falló el reintento
-        if: (needs.vigilar.result == 'failure' || needs.revisar.result == 'failure') && inputs.reintento == true
+        if: ${{ !cancelled() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && inputs.reintento == true }}
         run: |
           titulo="🚨 Falló: ${{ github.workflow }}"
           url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -388,3 +405,13 @@ jobs:
           # No falla la vigilancia: sus datos ya están publicados; solo la web se
           # queda atrás hasta el siguiente aviso o push.
           echo "::warning::No se pudo avisar a constitucion-web tras tres intentos."
+
+  estado:
+    # El supervisor (OpenCodice/supervisor) lee el nombre de este job para saber si quedó trabajo pendiente.
+    name: "estado pendiente=[false]"
+    needs: [vigilar, revisar, salud]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - run: 'true'
