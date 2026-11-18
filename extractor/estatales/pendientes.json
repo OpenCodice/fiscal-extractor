@@ -30,7 +30,10 @@
           "nuevo-leon/ley-organica-de-la-administracion-publica"
         ],
         "falta": "La página índice https://www.hcnl.gob.mx/trabajo_legislativo/leyes/ enlaza estas 5 leyes con href como '…/LEY%20DE%20GOBIERNO%20MUNICIPAL%20DEL%20ESTADO%20DE%20NUEVO%20LEON.pdf?2025-11- 7' (espacio literal en la consulta, un cache-buster). Con consulta=True url_vigente los encuentra (_HREF_PDF_CONSU",
-        "corrida": "https://github.com/OpenCodice/fiscal-extractor/actions/runs/44237546890"
+        "corrida": "https://github.com/OpenCodice/fiscal-extractor/actions/runs/44241546635",
+        "situacion": "redeclarado",
+        "fecha": "2026-11-18",
+        "motivo": "leyes redeclaradas: las retoma `reparar`"
       }
     },
     {

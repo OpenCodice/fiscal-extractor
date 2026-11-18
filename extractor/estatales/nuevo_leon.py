@@ -84,18 +84,21 @@ LEYES = [
 FUERA = [
     (
     _nl("Ley Orgánica de la Administración Pública para el Estado de Nuevo León", "LOAP NL",
-            "LEY%20ORGANICA%20DE%20LA%20ADMINISTRACION%20PUBLICA%20PARA%20EL%20ESTADO%20DE%20NUEVO%20LEON"),
-     "el enlace del Congreso lleva un espacio en la consulta ('….pdf?2026-03- 9') y la descarga lo rechaza; se podrá sumar cuando el descargador lo admita"),
+            "LEY%20ORGANICA%20DE%20LA%20ADMINISTRACION%20PUBLICA%20PARA%20EL%20ESTADO%20DE%20NUEVO%20LEON",
+            sin_consulta=True),
+     "su PDF ya se descarga (se ignora la consulta inválida del enlace); falta construirlo y auditarlo"),
     (
     _nl("Ley de Responsabilidades Administrativas del Estado de Nuevo León", "LRA NL",
             "LEY%20DE%20RESPONSABILIDADES%20ADMINISTRATIVAS%20DEL%20ESTADO%20DE%20NUEVO%20LEON",
-            titulos_encabezado=_pie(144, "LXXV")),
-     "el enlace del Congreso lleva un espacio en la consulta ('….pdf?2026-03- 9') y la descarga lo rechaza; se podrá sumar cuando el descargador lo admita"),
+            titulos_encabezado=_pie(144, "LXXV"),
+            sin_consulta=True),
+     "su PDF ya se descarga (se ignora la consulta inválida del enlace); falta construirlo y auditarlo"),
     (
     _nl("Ley de Asentamientos Humanos, Ordenamiento Territorial y Desarrollo Urbano para el Estado de Nuevo León", "LAHOTDU NL",
             "LEY%20DE%20ASENTAMIENTOS%20HUMANOS%20ORDENAMIENTO%20TERRITORIAL%20Y%20DESARROLLO%20URBANO%20PARA%20EL%20ESTADO%20DE%20NUEVO%20LEON",
-            titulos_encabezado=_pie(312, "LXXIV", numerado=False)),
-     "el enlace del Congreso lleva un espacio en la consulta ('….pdf?2026-03- 9') y la descarga lo rechaza; se podrá sumar cuando el descargador lo admita"),
+            titulos_encabezado=_pie(312, "LXXIV", numerado=False),
+            sin_consulta=True),
+     "su PDF ya se descarga (se ignora la consulta inválida del enlace); falta construirlo y auditarlo"),
     (
     _nl("Código Penal para el Estado de Nuevo León", "CP NL",
             "CODIGO%20PENAL%20PARA%20EL%20ESTADO%20DE%20%20NUEVO%20LEON", _CODIGOS),
@@ -111,7 +114,7 @@ FUERA = [
     (
     _nl("Ley de Gobierno Municipal del Estado de Nuevo León", "LGM NL",
             "LEY%20DE%20GOBIERNO%20MUNICIPAL%20DEL%20ESTADO%20DE%20NUEVO%20LEON",
-            ),
+            sin_consulta=True),
      "el PDF escribe 'ARTíCULO 110 Bis' con una í minúscula y el artículo 110 Bis se confunde con el 110 y sus 'Bis I' a 'Bis IV'"),
     (
     _nl("Ley de Hacienda del Estado de Nuevo León", "LH NL",
@@ -120,7 +123,8 @@ FUERA = [
     (
     _nl("Ley de Justicia Administrativa para el Estado y Municipios de Nuevo León", "LJA NL",
             "LEY%20DE%20JUSTICIA%20ADMINISTRATIVA%20PARA%20EL%20ESTADO%20Y%20MUNICIPIOS",
-            clave="ley-de-justicia-administrativa-para-el-estado-y-municipios"),
+            clave="ley-de-justicia-administrativa-para-el-estado-y-municipios",
+            sin_consulta=True),
      "el artículo 6 Bis no puede verificarse contra el PDF porque su rótulo ('6o Bis') no coincide con el del PDF"),
     (
     _nl("Ley de Transparencia y Acceso a la Información Pública del Estado de Nuevo León", "LTAIP NL",
