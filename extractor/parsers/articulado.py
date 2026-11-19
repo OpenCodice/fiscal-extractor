@@ -439,12 +439,45 @@ def _sin_numero_de_pagina(paginas: list[str]) -> list[str]:
     return salida
 
 
+_PIE_PAGINA_N_DE_M_RE = re.compile(r"Página\s+\d{1,4}\s+de\s+\d{1,4}")
+MIN_RENGLONES_MEMBRETE = 3
+FRACCION_MEMBRETE = 0.9
+
+
+def _sin_membrete_repetido(paginas: list[str]) -> list[str]:
+    """Quita el membrete de varios renglones que un PDF estatal repite idéntico
+    arriba de casi todas las páginas (título, 'H. CONGRESO DEL ESTADO…',
+    'Publicada: P.O. …', 'Reforma: …') y el pie 'Página N de M'. Solo quita el
+    bloque contiguo desde el primer renglón, si repite en el 90 % de las páginas
+    y tiene al menos tres renglones (el título corrido de uno o dos ya lo
+    quita `_quitar_encabezados`): un renglón suelto del texto no lo cumple."""
+    if len(paginas) < 5:
+        return paginas
+    minimo = FRACCION_MEMBRETE * len(paginas)
+    listas = [t.split("\n") for t in paginas]
+    veces = Counter(ln for lineas in listas for ln in {x.strip() for x in lineas} if ln)
+    pies = sum(1 for lineas in listas
+               if (l := [x for x in lineas if x.strip()])
+               and _PIE_PAGINA_N_DE_M_RE.fullmatch(l[-1].strip()))
+    salida = []
+    for lineas in listas:
+        llenas = [k for k, ln in enumerate(lineas) if ln.strip()]
+        n = 0
+        while n < len(llenas) and veces[lineas[llenas[n]].strip()] >= minimo:
+            n += 1
+        quitar = set(llenas[:n]) if n >= MIN_RENGLONES_MEMBRETE else set()
+        if llenas and pies >= minimo and _PIE_PAGINA_N_DE_M_RE.fullmatch(lineas[llenas[-1]].strip()):
+            quitar.add(llenas[-1])
+        salida.append("\n".join(ln for k, ln in enumerate(lineas) if k not in quitar))
+    return salida
+
+
 def limpiar_paginas(paginas: list[str], doc: Documento, formulas: bool = False) -> str:
     """Texto completo sin encabezados/pies, a partir del texto crudo por página.
     Con `formulas`, cada fórmula ilegible se sustituye por su marca."""
     fuera = doc.titulos_encabezado + _titulo_corrido(paginas)
     if doc.medio:
-        paginas = _sin_numero_de_pagina(paginas)
+        paginas = _sin_numero_de_pagina(_sin_membrete_repetido(paginas))
     # Las leyes estatales no traen el encabezado de la Cámara, y en ellas un
     # renglón que empieza con 'Secretaría General' es texto ('…el apoyo de la /
     # Secretaría General y sus Coordinaciones'). Algunos de sus PDF escriben
