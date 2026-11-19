@@ -7,7 +7,11 @@
       "situacion": "pendiente",
       "intentos": 1,
       "pista": "La constitución del estado se descarga de https://congreso-gto.s3.amazonaws.com/uploads/reforma/pdf/3731/CPELYSG_REF_04Agosto2026.pdf.",
-      "ultimo_intento": "2026-11-19"
+      "ultimo_intento": "2026-11-19",
+      "intentos_codigo": 1,
+      "falta": "Los PDF vigentes están en un bucket S3 público (https://congreso-gto.s3.amazonaws.com/uploads/reforma/pdf/<id>/<SIGLA>_REF_<fecha>.pdf) y se descargan bien directo. Pero las páginas índice que los enlazan (www.congresogto.gob.mx/leyes y /codigos, único lugar que lista solo el PDF vigente de cada ley",
+      "motivo": "necesita código en el extractor: Los PDF vigentes están en un bucket S3 público (https://congreso-gto.s3.amazonaws.com/uploads/reforma/pdf/<id>/<SIGLA>_REF_<fecha>.pdf) y se descargan bien directo. Pero las páginas índice que los enlazan (www.congresogto.gob.mx/leyes y /codigos, único lugar que lista solo el PDF vigente de cada ley",
+      "corrida": "https://github.com/OpenCodice/fiscal-extractor/actions/runs/44532074414"
     },
     {
       "estado": "nuevo-leon",
