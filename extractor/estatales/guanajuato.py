@@ -106,3 +106,18 @@ FUERA = [
          orden="unico", notas=NOTAS, notas_previas=NOTAS_PREVIAS),
      "Su PDF vigente tiene un nombre opaco (un uuid) y su extracción deja texto fuera en tres artículos (675, 704, 843): no queda fiel."),
 ]
+
+# Reparación autónoma (scripts/reparacion.py promover, 2026-11-19): estas leyes
+# de FUERA ya quedan con build y auditar limpios sobre su PDF; la vigilancia
+# las da de alta tras su revisión completa.
+_A_LEYES = {
+    "guanajuato/codigo-de-procedimientos-civiles",
+    "guanajuato/codigo-penal",
+    "guanajuato/codigo-territorial",
+    "guanajuato/ley-de-instituciones-y-procedimientos-electorales",
+    "guanajuato/ley-organica-del-poder-ejecutivo",
+    "guanajuato/ley-organica-del-poder-legislativo",
+    "guanajuato/ley-para-el-gobierno-y-administracion-de-los-municipios",
+}
+LEYES = list(LEYES) + [d for d, _ in FUERA if d.clave in _A_LEYES]
+FUERA = [(d, m) for d, m in FUERA if d.clave not in _A_LEYES]
