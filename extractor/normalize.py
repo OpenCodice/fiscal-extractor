@@ -168,6 +168,18 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             if (not sigue and cortes and corte is None and buf and buf[-1].endswith(";")
                     and re.match(r"[a-záéíóúüñ]{2,}\s", s) and not re.match(r"[a-zñ]{1,4}[.)]\s", s)):
                 sigue = True
+            # Ley estatal: la conjunción sola en su renglón ('…que se impugnó;' /
+            # 'y' / 'III. Por consulta…') cierra la fracción de arriba.
+            if (not sigue and cortes and corte is None and buf and buf[-1].endswith(";")
+                    and re.fullmatch(r"[yoeu]", s)):
+                sigue = True
+            # Ley estatal: el punto de un ordinal abreviado ('…del artículo 3o.' /
+            # 'de la Constitución…') no cierra la oración si sigue una minúscula.
+            if (not sigue and cortes and corte is None and buf
+                    and re.search(r"\b\d{1,3}\s?[oº°]\.$", buf[-1])
+                    and re.match(r"[a-záéíóúüñ]{2,}\s", s)
+                    and not re.match(r"[a-zñ]{1,4}[.)]\s", s)):
+                sigue = True
         # Ley estatal: 'DEROGADO. P.O. 20 DE MAYO DE 2022.' es un párrafo propio
         # aunque abra una página y la geometría lo dé por continuación.
         if (sigue and cortes and buf and SENTENCE_END_RE.search(buf[-1])

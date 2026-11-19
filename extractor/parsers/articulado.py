@@ -67,7 +67,7 @@ ARTICULO_RE = re.compile(
 # Es otra regex para no cambiar la lectura de las leyes federales. El paréntesis
 # que sigue al rótulo ('Artículo 58 (Derogado)') es del texto.
 ORDINALES_ESTATAL = (ORDINALES + "|Quitus|Quintos|Sextus|Sexties|S[ée]ptimus|Octavus|"
-                     "Undecies|Duodecies|Terdecies|Quaterdecies|Cuarter")
+                     "Undecies|Duodecies|Terdecies|Quaterdecies|Quindecies|Sexdecies|Cuarter")
 ARTICULO_ESTATAL_RE = re.compile(
     r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|\(SIC\)(?=\s+\d+\s+[A-ZÁÉÍÓÚÑ]+\s*\.-)|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$)|\.\s*\d+\s+\((?:DEROGAD|Derogad)|\.\s*\d+\.-\s?\(\s?(?:DEROGAD|Derogad))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
@@ -1007,6 +1007,21 @@ def es_rotulo_corto(s: str, maximo: int = EPIGRAFE_MAX_ESTATAL) -> bool:
     return len(s) <= maximo and "," not in s
 
 
+def _rotulo_con_comas_antes_de_articulo(s: str, anterior: str, lineas: list[str], i: int,
+                                        ART: re.Pattern, estatal: bool) -> bool:
+    """Estatal: un epígrafe con comas ('Universalidad, laicidad y gratuidad en la
+    educación pública') pegado al rótulo del artículo que encabeza. Solo si cierra
+    una oración del artículo anterior, no acaba en puntuación y el renglón
+    siguiente es ya el rótulo de artículo."""
+    if not estatal or len(s) > 100 or not anterior.endswith("."):
+        return False
+    if re.match(r"(?:el|la|los|las|lo|un|una|en|no|si|cuando|para|por|con|sin|se|que|y|o|a|al|su|sus)\b",
+                s, re.IGNORECASE) or "(" in s or re.search(r"[.;:]\s", s):
+        return False
+    sig = next((ln.strip() for ln in lineas[i + 1:] if ln.strip()), "")
+    return bool(ART.match(sig))
+
+
 def parse(pdf_path: str, doc: Documento) -> list[Unidad]:
     """Parsea el PDF de una ley/código/reglamento y devuelve sus unidades. En
     una ley estatal, cada unidad lleva los cortes de párrafo que dice la
@@ -1359,6 +1374,27 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
         j = next((j for j in range(i + 1, len(lineas)) if lineas[j].strip()), None)
         return j is not None and abre_articulo(lineas[j].strip(), j)
 
+    usa_epigrafes_cache: list[bool] = []
+
+    def usa_epigrafes() -> bool:
+        """Estatal: ¿casi todo artículo del PDF trae su epígrafe encima (sin comas,
+        como el Código Fiscal de Guanajuato)? Solo entonces un rótulo con comas
+        pegado a un artículo es también epígrafe, no un párrafo sin punto."""
+        if not usa_epigrafes_cache:
+            con = total = 0
+            for j, ln in enumerate(lineas):
+                if not ART.match(ln.strip()):
+                    continue
+                total += 1
+                k = j - 1
+                while k >= 0 and (not lineas[k].strip() or es_nota_bloque(lineas[k].strip())):
+                    k -= 1
+                if k >= 0 and es_rotulo_corto(lineas[k].strip(), epigrafe_max or 80) and (
+                        nombre_suelto(lineas[k].strip())):
+                    con += 1
+            usa_epigrafes_cache.append(total >= 20 and con >= 0.5 * total)
+        return usa_epigrafes_cache[0]
+
     def entra_bloque() -> None:
         """Empieza un bloque de encabezado: las notas previas que cerraban el
         artículo anterior anotan ese encabezado (su denominación, el capítulo
@@ -1531,6 +1567,18 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     and nombre_suelto(stripped[:-1]) and siguiente_abre(i)):
                 pendiente = (nivel, encabezado, [stripped])
                 continue
+            # Estatal: el nombre que un salto de página parte en una conjunción o
+            # artículo ('Del Fraccionamiento y' / … / 'la Urbanización Del Suelo.')
+            # sigue en minúscula y cierra con punto; el artículo va justo debajo.
+            if (estatal and partes and not estricto and len(partes) == 1
+                    and re.search(r"\b(?:y|e|o|u|de|del|la|las|el|los|al|en|con|por|para)$",
+                                  partes[0])
+                    and stripped[:1].islower() and stripped.endswith(".")
+                    and not stripped.endswith("..") and len(stripped) <= 60
+                    and not es_nota_bloque(stripped) and not ART.match(stripped)
+                    and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True)):
+                pendiente = (nivel, encabezado, [*partes, stripped])
+                continue
             # Estatal: 'Capítulo IV' / 'De la financiación y del fomento.' — el
             # nombre en caja normal que cierra con punto, de un renglón y con el
             # artículo justo debajo.
@@ -1593,7 +1641,9 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 or (nombre_suelto(stripped) and not stripped.endswith(",")
                     # 'Derogado' tras la última fracción es texto del artículo.
                     and not (estatal and MARCA_DEROGADO_RE.fullmatch(stripped))
-                    and (epigrafe_max is None or es_rotulo_corto(stripped, epigrafe_max))
+                    and (epigrafe_max is None or es_rotulo_corto(stripped, epigrafe_max)
+                         or (usa_epigrafes() and _rotulo_con_comas_antes_de_articulo(
+                             stripped, anterior, lineas, i, ART, estatal)))
                     and (anterior.endswith((".", ";", ":")) or es_nota_bloque(anterior))
                     # La segunda línea de una nota envuelta ('DE 2024)') no es un rótulo.
                     and not (estatal and es_nota_bloque(anterior) and _nota_abierta(anterior))
