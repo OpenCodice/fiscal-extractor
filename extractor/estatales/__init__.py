@@ -73,7 +73,7 @@ def ley(estado: str, nombre: str, sigla: str, *, medio: str, indice: str | None 
         notas_previas: str | None = None, via: str | None = None,
         notas_en_linea: str | None = None,
         titulos_encabezado: tuple[str, ...] = (), consulta: bool = False,
-        sin_consulta: bool = False) -> Documento:
+        sin_consulta: bool = False, via_indice: str | None = None) -> Documento:
     """Una ley estatal del registro. `huecos`: los PDF estatales suelen omitir
     los artículos derogados (ver `articulado.parse_texto`)."""
     if estado not in ENTIDADES:
@@ -84,7 +84,7 @@ def ley(estado: str, nombre: str, sigla: str, *, medio: str, indice: str | None 
         medio=medio, orden=orden, huecos=huecos, notas=notas, notas_previas=notas_previas,
         notas_en_linea=notas_en_linea,
         via=via, titulos_encabezado=titulos_encabezado, consulta=consulta,
-        sin_consulta=sin_consulta)
+        sin_consulta=sin_consulta, via_indice=via_indice)
 
 
 def _modulos():

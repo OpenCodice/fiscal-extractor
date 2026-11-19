@@ -5,12 +5,12 @@
     {
       "estado": "guanajuato",
       "situacion": "pendiente",
-      "intentos": 1,
+      "intentos": 0,
       "pista": "La constitución del estado se descarga de https://congreso-gto.s3.amazonaws.com/uploads/reforma/pdf/3731/CPELYSG_REF_04Agosto2026.pdf.",
       "ultimo_intento": "2026-11-19",
       "intentos_codigo": 1,
       "falta": "Los PDF vigentes están en un bucket S3 público (https://congreso-gto.s3.amazonaws.com/uploads/reforma/pdf/<id>/<SIGLA>_REF_<fecha>.pdf) y se descargan bien directo. Pero las páginas índice que los enlazan (www.congresogto.gob.mx/leyes y /codigos, único lugar que lista solo el PDF vigente de cada ley",
-      "motivo": "necesita código en el extractor: Los PDF vigentes están en un bucket S3 público (https://congreso-gto.s3.amazonaws.com/uploads/reforma/pdf/<id>/<SIGLA>_REF_<fecha>.pdf) y se descargan bien directo. Pero las páginas índice que los enlazan (www.congresogto.gob.mx/leyes y /codigos, único lugar que lista solo el PDF vigente de cada ley",
+      "motivo": "el extractor ya tiene lo que faltaba (opción via_indice para leer el índice por egress-mx y descargar los PDF directo (Guanajuato)): se reintenta",
       "corrida": "https://github.com/OpenCodice/fiscal-extractor/actions/runs/44532074414"
     },
     {

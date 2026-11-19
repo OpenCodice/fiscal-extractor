@@ -137,7 +137,7 @@ def url_vigente(doc, leer=_leer_indice) -> str:
         if not doc.url:
             raise LookupError(f"{doc.clave}: sin URL ni página índice en el registro")
         return doc.url
-    via = getattr(doc, "via", None)
+    via = getattr(doc, "via_indice", None) or getattr(doc, "via", None)
     html = leer(doc.indice, via) if via else leer(doc.indice)
     patron = re.compile(doc.patron, re.IGNORECASE)
     sin_consulta = getattr(doc, "sin_consulta", False)

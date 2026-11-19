@@ -75,6 +75,9 @@ class Documento:
     # veces trae un espacio ('….pdf?2026-03- 9') que la descarga rechaza; se
     # descarta y queda la URL del PDF sin ella.
     sin_consulta: bool = False
+    # 'mx' solo para leer la página índice (su TLS no se verifica aquí, p. ej.
+    # falta el certificado intermedio); los PDF se descargan directo.
+    via_indice: str | None = None
 
 
 def _ley(clave, etiqueta, sigla, archivo, encabezado="", *, parser="articulado",
@@ -234,7 +237,7 @@ def a_dict(doc: Documento) -> dict:
             d[campo] = getattr(doc, campo)
     if doc.titulos_encabezado:
         d["titulos_encabezado"] = list(doc.titulos_encabezado)
-    for campo in ("medio", "notas", "notas_previas", "via", "notas_en_linea"):
+    for campo in ("medio", "notas", "notas_previas", "via", "via_indice", "notas_en_linea"):
         if getattr(doc, campo):
             d[campo] = getattr(doc, campo)
     if doc.orden != "ddmmaaaa":
@@ -258,7 +261,7 @@ def de_dict(d: dict) -> Documento:
         medio=d.get("medio"), orden=d.get("orden", "ddmmaaaa"),
         huecos=bool(d.get("huecos")), notas=d.get("notas"),
         notas_previas=d.get("notas_previas"),
-        via=d.get("via"), notas_en_linea=d.get("notas_en_linea"),
+        via=d.get("via"), via_indice=d.get("via_indice"), notas_en_linea=d.get("notas_en_linea"),
         consulta=bool(d.get("consulta")), sin_consulta=bool(d.get("sin_consulta")),
     )
 
