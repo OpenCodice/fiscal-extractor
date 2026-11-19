@@ -508,7 +508,8 @@ _ROTULO_ART_RE = re.compile(r"(?:ART[ÍI]CULO|Art[íi]culo)\s+\d")
 # El rótulo de verdad ('Artículo 5.', 'Artículo 5 Bis.', 'Artículo 15 Ter'), no una
 # cita al inicio de renglón ('Artículo 169 de este Código.').
 _ROTULO_PROPIO_RE = re.compile(
-    r"(?:ART[ÍI]CULO|Art[íi]culo)\s+\d+(?:\s*[ºo°])?(?:\s+(?:[A-ZÁÉÍÓÚ][\wáéíóú]*|\d+))*"
+    r"(?:ART[ÍI]CULO|Art[íi]culo)\s+\d+(?:\s*[ºo°])?"
+    r"(?:\s+(?:[A-ZÁÉÍÓÚ][\wáéíóú]*|\d+|(?i:bis|ter|qu[aá]ter|quinquies|sexies|septies|octies|nonies|decies)))*"
     r"\s*(?:[.\-:].*)?$")
 _EPIGRAFE_FRACCION_RE = re.compile(r"(?:[IVXLCDM]+|\d+|[A-Za-z])\s*[.)\-]")
 _FIN_DE_ORACION_ABIERTA_RE = re.compile(
@@ -548,6 +549,24 @@ def _nota_tras_epigrafe_pagina(texto: str, notas_previas: re.Pattern) -> str:
                     and not _ENCABEZADO_SOLO_RE.fullmatch(anterior)):
                 salida += [lineas[i + 1], lineas[i]]
                 i += 2
+                continue
+        # El epígrafe puede envolver a dos renglones ('Prueba práctica para jueces
+        # de partido, … y' / 'gestión, y encargados …'): el segundo sigue en minúscula.
+        if (i + 3 < len(lineas) and lineas[i].strip() and notas_previas.match(lineas[i].strip())
+                and "DENOMINACI" not in lineas[i].upper()
+                and not _NOTA_PARRAFO_DEROGADO_RE.match(lineas[i].strip())
+                and _ROTULO_PROPIO_RE.match(lineas[i + 3].strip())):
+            e1, e2 = lineas[i + 1].strip(), lineas[i + 2].strip()
+            anterior = next((x.strip() for x in reversed(salida) if x.strip()), "")
+            if (e1[:1].isupper() and not e1.isupper() and e2[:1].islower()
+                    and len(e1) + len(e2) <= 200
+                    and not e1.endswith((".", ";", ":", ")", "-"))
+                    and not e2.endswith((".", ";", ":", ",", ")", "-"))
+                    and not notas_previas.match(e1) and not notas_previas.match(e2)
+                    and not _ROTULO_ART_RE.match(e1) and not _EPIGRAFE_FRACCION_RE.match(e1)
+                    and not _ENCABEZADO_SOLO_RE.fullmatch(anterior)):
+                salida += [e1 + " " + e2, lineas[i]]
+                i += 3
                 continue
         salida.append(lineas[i])
         i += 1
@@ -652,6 +671,7 @@ _CIERRA_RE = re.compile(r"(?:[.:;)]|[;,]\s+[yoeu])$")
 _ACABA_EN_PARTICULA_RE = re.compile(r"\b(?:de|del|la|las|el|los|lo|al|en|con|por|para|un|una|su|sus|que)$")
 _ACABA_EN_CONJUNCION_RE = re.compile(r"\b[ou]$")
 _FRACCION_ROMANA_RE = re.compile(r"^[IVX]{1,5}\.\s+[A-ZÁÉÍÓÚÑ]")
+_FIN_DE_FRACCION_RE = re.compile(r";(?:\s+[yoeu])?$")
 _INCISO_MAYUSCULA_RE = re.compile(r"^[A-Z]\)\s+\S")
 _ABRE_PARRAFO_RE = re.compile(r"^(?:[^a-záéíóúüñ]|[a-zñ]{1,4}[.)]\s)")   # o un inciso: 'd. ', 'ii) '
 
@@ -795,6 +815,11 @@ def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str,
         # parece no caber si el epígrafe queda a menos de una palabra del margen.
         if (ra.get("justificada") and ra["margen"] and ra["x1"] < ra["margen"] - 3
                 and _ROTULO_EPIGRAFE_RE.match(ra["texto"]) and _ABRE_PARRAFO_RE.match(rb["texto"])):
+            return True
+        # Una fracción que cierra con '; y' / ';' y llega justo al margen, seguida
+        # de la numeral romana de la siguiente ('…fracción VII; y' / 'VI. De…'):
+        # la numeral es corta y 'no cabe' solo en apariencia; es otra fracción.
+        if _FIN_DE_FRACCION_RE.search(ra["texto"]) and _FRACCION_ROMANA_RE.match(rb["texto"]):
             return True
         sin_sitio = _sin_sitio(ra, rb)
         if sin_sitio is None:
@@ -1066,7 +1091,7 @@ def _rotulo_con_comas_antes_de_articulo(s: str, anterior: str, lineas: list[str]
     educación pública') pegado al rótulo del artículo que encabeza. Solo si cierra
     una oración del artículo anterior, no acaba en puntuación y el renglón
     siguiente es ya el rótulo de artículo."""
-    if not estatal or len(s) > 100 or not anterior.endswith("."):
+    if not estatal or len(s) > 140 or not anterior.endswith("."):
         return False
     if re.match(r"(?:el|la|los|las|lo|un|una|en|no|si|cuando|para|por|con|sin|se|que|y|o|a|al|su|sus)\b",
                 s, re.IGNORECASE) or "(" in s or re.search(r"[.;:]\s", s):
