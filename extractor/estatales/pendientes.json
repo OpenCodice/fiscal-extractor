@@ -5,8 +5,9 @@
     {
       "estado": "guanajuato",
       "situacion": "pendiente",
-      "intentos": 0,
-      "pista": "La constitución del estado se descarga de https://congreso-gto.s3.amazonaws.com/uploads/reforma/pdf/3731/CPELYSG_REF_04Agosto2026.pdf."
+      "intentos": 1,
+      "pista": "La constitución del estado se descarga de https://congreso-gto.s3.amazonaws.com/uploads/reforma/pdf/3731/CPELYSG_REF_04Agosto2026.pdf.",
+      "ultimo_intento": "2026-11-19"
     },
     {
       "estado": "nuevo-leon",
