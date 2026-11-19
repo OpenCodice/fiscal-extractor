@@ -179,7 +179,9 @@ jobs:
 
       - name: Elegir el estado y contar el intento
         id: elegir
-        if: ((inputs.redeclarar == '' && (steps.altas.outputs.pendientes == '0' || (inputs.sin_esperar && steps.altas.outputs.pendientes != ''))) || steps.fuera.outcome == 'success') && env.TIENE_CLAUDE == 'true'
+        # Con la cadena ocupada «Altas pendientes» no corre y su salida es nula,
+        # que en una expresión es igual a '0': hay que preguntar antes por la cadena.
+        if: steps.cadena.outputs.libre == 'true' && ((inputs.redeclarar == '' && (steps.altas.outputs.pendientes == '0' || (inputs.sin_esperar && steps.altas.outputs.pendientes != ''))) || steps.fuera.outcome == 'success') && env.TIENE_CLAUDE == 'true'
         env:
           ESTADO_PEDIDO: ${{ inputs.estado }}
           EXTRACTOR_TOKEN: ${{ secrets.PR_TOKEN }}
