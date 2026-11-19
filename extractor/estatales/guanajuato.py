@@ -30,7 +30,7 @@ _CODIGOS = "https://www.congresogto.gob.mx/codigos"
 # del editor 'N. DE E. EN RELACIÓN CON …' (sin paréntesis, en mayúsculas).
 _VERBO = (r"(?:REFORMAD|ADICIONAD|DEROGAD|REUBICAD|RECORRID|CAMBIAD|ACLARAD|"
           r"F\.\s?DE\s?E\b|FE\s+DE\s+ERRATAS)")
-_UNA = rf"\((?:[A-ZÁÉÍÓÚÑ.\s]*?){_VERBO}[^()]*?(?:P\.\s?O\.|\b\d{{4}}\b)[^()]*\)"
+_UNA = rf"\((?:[A-ZÁÉÍÓÚÑ.,\s]*?){_VERBO}[^()]*?(?:P\.\s?O\.|\b\d{{4}}\b)[^()]*\)"
 NOTAS_EN_LINEA = (rf"{_UNA}(?:[ \t]*{_UNA})*"
                   r"|N\.\s?DE\s?E\.[A-ZÁÉÍÓÚÑ0-9 ,.\n]*?\.(?=\n|$)")
 NOTAS = rf"^(?:{NOTAS_EN_LINEA})$"

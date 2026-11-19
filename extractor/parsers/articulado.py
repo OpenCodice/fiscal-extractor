@@ -490,6 +490,8 @@ def limpiar_paginas(paginas: list[str], doc: Documento, formulas: bool = False) 
         limpias = (_rotulo_abreviado_completo(t) for t in limpias)
     if doc.notas_en_linea:
         limpias = _notas_aparte(list(limpias), re.compile(doc.notas_en_linea))
+    if doc.medio and doc.notas and doc.notas_previas:
+        limpias = _nota_tras_epigrafe(list(limpias), re.compile(doc.notas_previas))
     if not formulas:
         return "\n".join(limpias)
     # Se detecta sobre el texto ya unido: una fórmula que cruza el salto de
@@ -500,6 +502,56 @@ def limpiar_paginas(paginas: list[str], doc: Documento, formulas: bool = False) 
         lineas += partes
         pagina_de += [n] * len(partes)
     return sustituir_formulas("\n".join(lineas), pagina_de)
+
+
+_ROTULO_ART_RE = re.compile(r"(?:ART[ÍI]CULO|Art[íi]culo)\s+\d")
+# El rótulo de verdad ('Artículo 5.', 'Artículo 5 Bis.', 'Artículo 15 Ter'), no una
+# cita al inicio de renglón ('Artículo 169 de este Código.').
+_ROTULO_PROPIO_RE = re.compile(
+    r"(?:ART[ÍI]CULO|Art[íi]culo)\s+\d+(?:\s*[ºo°])?(?:\s+(?:[A-ZÁÉÍÓÚ][\wáéíóú]*|\d+))*"
+    r"\s*(?:[.\-:].*)?$")
+_EPIGRAFE_FRACCION_RE = re.compile(r"(?:[IVXLCDM]+|\d+|[A-Za-z])\s*[.)\-]")
+_FIN_DE_ORACION_ABIERTA_RE = re.compile(
+    r"\b(?:de|del|la|las|el|los|lo|en|y|e|o|u|a|al|con|por|para|que|se|su|sus|este|esta)$",
+    re.IGNORECASE)
+_ENCABEZADO_SOLO_RE = re.compile(
+    r"(?:T[ÍI]TULO|CAP[ÍI]TULO|SECCI[ÓO]N|LIBRO|PARTE)\s+\S+(?:\s+BIS)?\.?", re.IGNORECASE)
+
+
+def _nota_tras_epigrafe(paginas: list[str], notas_previas: re.Pattern) -> list[str]:
+    """Estatal: '(REFORMADO, P.O. …)' / 'Epígrafe' / 'Artículo N.' (Guanajuato:
+    la nota va antes del epígrafe marginal del artículo que anota). Se escribe
+    la nota tras el epígrafe, pegada al rótulo, que es donde el articulado
+    reconoce la nota de su artículo; el epígrafe, que va al contexto y no al
+    cuerpo, no queda entre la nota y el texto. Solo un epígrafe de un renglón
+    (con mayúscula inicial, sin puntuación final), y no una nota de párrafo
+    derogado, que es del artículo anterior, ni de una denominación."""
+    return [_nota_tras_epigrafe_pagina(t, notas_previas) for t in paginas]
+
+
+def _nota_tras_epigrafe_pagina(texto: str, notas_previas: re.Pattern) -> str:
+    lineas = texto.split("\n")
+    salida: list[str] = []
+    i = 0
+    while i < len(lineas):
+        if (i + 2 < len(lineas) and lineas[i].strip() and notas_previas.match(lineas[i].strip())
+                and "DENOMINACI" not in lineas[i].upper()
+                and not _NOTA_PARRAFO_DEROGADO_RE.match(lineas[i].strip())
+                and _ROTULO_PROPIO_RE.match(lineas[i + 2].strip())):
+            epi = lineas[i + 1].strip()
+            anterior = next((x.strip() for x in reversed(salida) if x.strip()), "")
+            if (epi[:1].isupper() and not epi.isupper() and len(epi) <= 100
+                    and not epi.endswith((".", ";", ":", ",", ")", "-"))
+                    and not notas_previas.match(epi) and not _ROTULO_ART_RE.match(epi)
+                    and not _EPIGRAFE_FRACCION_RE.match(epi)
+                    and not _FIN_DE_ORACION_ABIERTA_RE.search(epi)
+                    and not _ENCABEZADO_SOLO_RE.fullmatch(anterior)):
+                salida += [lineas[i + 1], lineas[i]]
+                i += 2
+                continue
+        salida.append(lineas[i])
+        i += 1
+    return "\n".join(salida)
 
 
 # 'Art. 54.- Para la inscripción…' o 'Art. 134. La cancelación…' (Código Civil
@@ -1008,7 +1060,8 @@ def es_rotulo_corto(s: str, maximo: int = EPIGRAFE_MAX_ESTATAL) -> bool:
 
 
 def _rotulo_con_comas_antes_de_articulo(s: str, anterior: str, lineas: list[str], i: int,
-                                        ART: re.Pattern, estatal: bool) -> bool:
+                                        ART: re.Pattern, estatal: bool,
+                                        es_nota=None) -> bool:
     """Estatal: un epígrafe con comas ('Universalidad, laicidad y gratuidad en la
     educación pública') pegado al rótulo del artículo que encabeza. Solo si cierra
     una oración del artículo anterior, no acaba en puntuación y el renglón
@@ -1018,7 +1071,10 @@ def _rotulo_con_comas_antes_de_articulo(s: str, anterior: str, lineas: list[str]
     if re.match(r"(?:el|la|los|las|lo|un|una|en|no|si|cuando|para|por|con|sin|se|que|y|o|a|al|su|sus)\b",
                 s, re.IGNORECASE) or "(" in s or re.search(r"[.;:]\s", s):
         return False
-    sig = next((ln.strip() for ln in lineas[i + 1:] if ln.strip()), "")
+    # Las notas de reforma entre el epígrafe y el rótulo ('(REFORMADO ACÁPITE, …)')
+    # no cuentan.
+    sig = next((ln.strip() for ln in lineas[i + 1:]
+                if ln.strip() and not (es_nota and es_nota(ln.strip()))), "")
     return bool(ART.match(sig))
 
 
@@ -1118,7 +1174,10 @@ _NOTA_TITULO_RE = re.compile(r"\bCON\s+(?:EL|LOS|LAS)\s+(?:ART[ÍI]CULOS?|CAP[Í
 # CUARTO PÁRRAFO, P.O. …)'): va tras el texto, no es una nota previa del siguiente.
 _NOTA_PARRAFO_DEROGADO_RE = re.compile(
     r"^\(?DEROGAD[OA],?\s+(?:PRIMER|SEGUNDO|TERCER|CUARTO|QUINTO|SEXTO|S[ÉE]PTIMO|OCTAVO|"
-    r"NOVENO|D[ÉE]CIMO|[ÚU]LTIMO)\S*\s+P[ÁA]RRAFO\b")
+    r"NOVENO|D[ÉE]CIMO|[ÚU]LTIMO)\S*\s+P[ÁA]RRAFO\b"
+    # 'PÁRRAFO SEGUNDO, DEROGADO, P.O. …' (Guanajuato)
+    r"|^\(P[ÁA]RRAFO\s+(?:PRIMERO|SEGUNDO|TERCERO|CUARTO|QUINTO|SEXTO|S[ÉE]PTIMO|OCTAVO|"
+    r"NOVENO|D[ÉE]CIMO|[ÚU]LTIMO),\s+DEROGAD[OA],\s+P\.\s?O\.")
 
 
 _NOTA_ENCABEZADO_RE = re.compile(
@@ -1643,7 +1702,7 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     and not (estatal and MARCA_DEROGADO_RE.fullmatch(stripped))
                     and (epigrafe_max is None or es_rotulo_corto(stripped, epigrafe_max)
                          or (usa_epigrafes() and _rotulo_con_comas_antes_de_articulo(
-                             stripped, anterior, lineas, i, ART, estatal)))
+                             stripped, anterior, lineas, i, ART, estatal, es_nota_bloque)))
                     and (anterior.endswith((".", ";", ":")) or es_nota_bloque(anterior))
                     # La segunda línea de una nota envuelta ('DE 2024)') no es un rótulo.
                     and not (estatal and es_nota_bloque(anterior) and _nota_abierta(anterior))
