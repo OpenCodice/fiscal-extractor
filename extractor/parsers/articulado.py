@@ -711,7 +711,7 @@ _INTERLINEADO_PARRAFO = 1.5    # × el interlineado: espacio entre párrafos
 # ('…a través de la Dirección' / 'General del Registro Civil.') y se decide
 # como siempre, por el texto.
 _CIERRA_RE = re.compile(r"(?:[.:;)]|[;,]\s+[yoeu])$")
-_ACABA_EN_PARTICULA_RE = re.compile(r"\b(?:de|del|la|las|el|los|lo|al|en|con|por|para|un|una|su|sus|que)$")
+_ACABA_EN_PARTICULA_RE = re.compile(r"\b(?:de|del|la|las|el|los|lo|al|en|con|por|para|un|una|su|sus|que|sobre)$")
 _ACABA_EN_CONJUNCION_RE = re.compile(r"\b[ou]$")
 _FRACCION_ROMANA_RE = re.compile(r"^[IVX]{1,5}\.\s+[A-ZÁÉÍÓÚÑ]")
 _FIN_DE_FRACCION_RE = re.compile(r";(?:\s+[yoeu])?$")
