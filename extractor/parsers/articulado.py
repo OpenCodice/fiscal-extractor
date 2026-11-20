@@ -615,6 +615,11 @@ def _rotulo_abreviado_completo(texto: str) -> str:
         lambda m: "Artículo" + (" " if m.group("pegado") is not None else ""), texto)
 
 
+_ROTULO_DEROGADO_RE = re.compile(r"(?:^|\n)[ \t]*((?:[IVXLCDM]+\.|[a-zñ]{1,2}\)))$")
+_COLA_DEROGADO_RE = re.compile(r"([;.]?)[ \t]*(?=\n|$)")
+_NOTA_DEROGADA_RE = re.compile(r"\(\s*DEROGAD[OA]S?\b[^()]*\)$")
+
+
 def _notas_aparte(paginas: list[str], nota: re.Pattern) -> list[str]:
     """Cada nota a renglón seguido en su propio renglón, sin el salto que la
     partía. Una nota que cruza el salto de página (arranca en los últimos renglones
@@ -638,6 +643,17 @@ def _notas_aparte(paginas: list[str], nota: re.Pattern) -> list[str]:
                 recorte = m.end() - len(texto) - 1
                 texto = texto + "\n" + sigue[:recorte]
             antes = texto[previo:m.start()].rstrip(" \t")
+            # 'XII. (DEROGADA, P.O. …);' / 'i) (DEROGADO, …);': la fracción o el
+            # inciso derogado es un solo renglón del PDF, con su rótulo delante y
+            # su ';' detrás; no se parte en rótulo, nota y ';'.
+            rotulo = _ROTULO_DEROGADO_RE.search(antes)
+            cola = _COLA_DEROGADO_RE.match(texto, m.end())
+            if rotulo and cola and _NOTA_DEROGADA_RE.match(m.group(0)):
+                partes.append(antes[:rotulo.start(1)])
+                partes.append(rotulo.group(1) + " " + re.sub(
+                    r"\s*\n\s*", " ", m.group(0)) + cola.group(1) + "\n")
+                previo = cola.end()
+                continue
             # '…o de particulares;' / 'y (Ref. …)': la conjunción que cierra la
             # fracción viene en el renglón de la nota; es del texto anterior.
             antes = re.sub(r"(?<=\S)\n(y|o|e|u|y/o)$", r" \1", antes)
