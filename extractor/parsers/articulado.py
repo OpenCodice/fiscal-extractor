@@ -1757,6 +1757,18 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True)):
                 pendiente = (nivel, encabezado, [*partes, stripped])
                 continue
+            # Estatal: el nombre de un capítulo en caja normal que envuelve en un
+            # segundo renglón en minúscula y cierra con punto ('Disposiciones sobre
+            # testamentarias … no' / 'exceda de la cuantía … de este Código.'); el
+            # artículo va justo debajo.
+            if (estatal and len(partes) == 1 and not partes[0].endswith((".", ";", ":", ",", ")"))
+                    and not partes[0].isupper() and stripped[:1].islower()
+                    and stripped.endswith(".") and not stripped.endswith("..")
+                    and len(stripped) <= 100 and not es_nota_bloque(stripped)
+                    and not ART.match(stripped) and not re.search(r"[.;:]\s", stripped)
+                    and siguiente_abre(i)):
+                pendiente = (nivel, encabezado, [*partes, stripped])
+                continue
             # Estatal: 'Capítulo IV' / 'De la financiación y del fomento.' — el
             # nombre en caja normal que cierra con punto, de un renglón y con el
             # artículo justo debajo.
@@ -1863,6 +1875,17 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
         if (estatal and en_bloque and previas_bloque and stripped
                 and _nota_abierta(previas_bloque[-1]) and not abre_articulo(stripped, i)):
             previas_bloque[-1] += "\n" + stripped     # la nota del editor sigue
+            continue
+        if (estatal and en_bloque and stripped.startswith("(") and stripped.isupper()
+                and stripped.endswith(",") and _nota_abierta(stripped)
+                and not abre_articulo(stripped, i)
+                and (sig_n := next((lineas[j].strip() for j in range(i + 1, len(lineas))
+                                    if lineas[j].strip()), ""))
+                and re.match(r"(?:P|G|D)\.\s?O\.", sig_n)):
+            # Nota de reforma de un encabezado partida en dos renglones
+            # ('(ADICIONADA CON LOS ARTÍCULOS QUE LA INTEGRAN,' / 'P.O. 27 DE
+            # DICIEMBRE DE 2011)') dentro del bloque: es de la estructura.
+            previas_bloque.append(stripped)
             continue
         if en_bloque and not ART.match(stripped):
             if not stripped:
