@@ -71,7 +71,8 @@ ORDINALES_ESTATAL = (ORDINALES + "|Quitus|Quintos|Sextus|Sexties|S[ée]ptimus|Oc
 ARTICULO_ESTATAL_RE = re.compile(
     r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|\(SIC\)(?=\s+\d+\s+[A-ZÁÉÍÓÚÑ]+\s*\.-)|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$)|\.\s*\d+\s+\((?:DEROGAD|Derogad)|\.\s*\d+\.-\s?\(\s?(?:DEROGAD|Derogad))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
-    r"(?:(?:-(?=[A-ZÑ])|\s(?=[A-ZÑ][.\-])|(?<=\d)(?=[A-Z]\.))([A-ZÑ])(?![A-Za-zñ]))?"  # letra "-A", " A." (118 A.) o "132G."; "142-Ñ"
+    r"(?:(?:-(?=[A-ZÑ])|\s(?=[A-ZÑ][.\-])|(?<=\d)(?=[A-Z]\.)|-(?=[a-zñ]\.-))"
+    r"([A-ZÑ]|(?<=\.-)[a-zñ])(?![A-Za-zñ]))?"  # letra "-A", " A." (118 A.) o "132G."; "142-Ñ"; "149.-a.-" (Guanajuato)
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
     rf"(?:[\s.\-]+(?i:({ORDINALES_ESTATAL}))"         # ordinal
     r"(?:(?:[\s\-]+|\.\s?|(?=\d))(\d+|(?i:uno|dos|tres)|[IVX]{1,4}(?=\s*[.\-]|,\s+\((?:DEROGAD|Derogad)))(?:\s+([A-Z])(?=[.\-]|\s*$))?"  # numeral ("Bis 1", "Bis. 3", "Ter2", "Bis Uno") y letra ("Bis 35 A.-")
@@ -132,6 +133,8 @@ def _es_nombre_encabezado(s: str, estricto: bool = True, estatal: bool = False) 
         return False
     if (ARTICULO_ESTATAL_RE if estatal else ARTICULO_RE).match(s) or PAGE_FOOTER_RE.match(s):
         return False
+    if estatal and CAPITULO_ESTATAL_RE.match(s):
+        return False
     letras = [c for c in s if c.isalpha()]
     if not letras:
         return False
@@ -180,6 +183,8 @@ def _es_nombre_suelto(s: str, continuacion: bool = False, estatal: bool = False)
         return False
     if re.match(r"\[\s*Art[ií]culo\b", s):
         return False                      # '[Artículo 28 Bis. Suprimido]': texto, no nombre
+    if estatal and CAPITULO_ESTATAL_RE.match(s):
+        return False                      # 'Capitulo primero' (ordinal en minúscula)
     if estatal and re.fullmatch(r"[A-Z]\)\s+[A-ZÁÉÍÓÚÑ]{2,}(?:\s+[A-ZÁÉÍÓÚÑ]+)*", s):
         return s[-1:] not in ".;:"        # rótulo 'C) DEL SECRETARIO DE FINANZAS' (C, D, L, M no son fracción)
     if re.fullmatch(r"[IVXLCDM]+", s) or re.match(r"^(?:[IVXLCDM]+|[a-zñ])\s*[.)\-–]", s):
@@ -530,6 +535,14 @@ def _nota_tras_epigrafe(paginas: list[str], notas_previas: re.Pattern) -> list[s
     return [_nota_tras_epigrafe_pagina(t, notas_previas) for t in paginas]
 
 
+# 'Artículo 89 Las autoridades…': el PDF omite el punto del rótulo.
+_ROTULO_SIN_PUNTO_RE = re.compile(r"Art[íi]culo\s+\d+\s+[A-ZÁÉÍÓÚ][a-záéíóú]+\s+[a-záéíóú]")
+
+
+def _es_rotulo_de_articulo(s: str) -> bool:
+    return bool(_ROTULO_PROPIO_RE.match(s) or _ROTULO_SIN_PUNTO_RE.match(s))
+
+
 def _nota_tras_epigrafe_pagina(texto: str, notas_previas: re.Pattern) -> str:
     lineas = texto.split("\n")
     salida: list[str] = []
@@ -538,7 +551,7 @@ def _nota_tras_epigrafe_pagina(texto: str, notas_previas: re.Pattern) -> str:
         if (i + 2 < len(lineas) and lineas[i].strip() and notas_previas.match(lineas[i].strip())
                 and "DENOMINACI" not in lineas[i].upper()
                 and not _NOTA_PARRAFO_DEROGADO_RE.match(lineas[i].strip())
-                and _ROTULO_PROPIO_RE.match(lineas[i + 2].strip())):
+                and _es_rotulo_de_articulo(lineas[i + 2].strip())):
             epi = lineas[i + 1].strip()
             anterior = next((x.strip() for x in reversed(salida) if x.strip()), "")
             if (epi[:1].isupper() and not epi.isupper() and len(epi) <= 100
@@ -555,7 +568,7 @@ def _nota_tras_epigrafe_pagina(texto: str, notas_previas: re.Pattern) -> str:
         if (i + 3 < len(lineas) and lineas[i].strip() and notas_previas.match(lineas[i].strip())
                 and "DENOMINACI" not in lineas[i].upper()
                 and not _NOTA_PARRAFO_DEROGADO_RE.match(lineas[i].strip())
-                and _ROTULO_PROPIO_RE.match(lineas[i + 3].strip())):
+                and _es_rotulo_de_articulo(lineas[i + 3].strip())):
             e1, e2 = lineas[i + 1].strip(), lineas[i + 2].strip()
             anterior = next((x.strip() for x in reversed(salida) if x.strip()), "")
             if (e1[:1].isupper() and not e1.isupper() and e2[:1].islower()
@@ -1036,7 +1049,9 @@ ARTICULO_DECRETO_RE = re.compile(
 ARTICULO_DECRETO_ESTATAL_RE = re.compile(ARTICULO_DECRETO_RE.pattern + r"(?!\s+TRANSITORIO)",
                                          re.MULTILINE)
 # Capítulo con la errata 'CÁPITULO' (Código Civil de la CDMX).
-CAPITULO_ESTATAL_RE = re.compile(r"^C[AÁ]P" + CAPITULO_RE.pattern[4:])
+# Guanajuato escribe 'Capitulo primero' con el ordinal en minúscula.
+CAPITULO_ESTATAL_RE = re.compile(r"^C[AÁ]P" + CAPITULO_RE.pattern[4:]
+                                 + rf"|^Cap[íi]tulo\s+(?i:{_ORDINAL_TC})\s*$")
 
 
 def _solo_articulado(texto: str, estatal: bool = False) -> str:
@@ -1051,6 +1066,16 @@ def _solo_articulado(texto: str, estatal: bool = False) -> str:
             texto, primero.end())
         if d:
             texto = _sin_rotulo_final(texto[: d.start()])
+    # Estatal: el decreto de expedición abre «LEY …» antes del primer artículo y
+    # su comilla de cierre queda tras el último; no es texto de la ley. Solo si
+    # la de apertura está antes del primer artículo y el último renglón no tiene
+    # otra que lo abra.
+    if estatal and primero and texto.rstrip().endswith("»"):
+        fin = texto.rstrip()
+        ultimo = fin.rsplit("\n", 1)[-1]
+        if ("«" in texto[:primero.start()] and "«" not in ultimo
+                and texto.count("«") == texto.count("»")):
+            texto = fin[:-1]
     return texto
 
 
@@ -1675,6 +1700,18 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     and ((not estricto and siguiente_abre(i)) or nota_y_articulo(i))):
                 pendiente = (nivel, encabezado, [*partes, stripped])
                 continue
+            # Estatal: el nombre de un Título en caja normal que cierra con punto
+            # ('TÍTULO DÉCIMO' / 'Del Tribunal de Conciliación y Arbitraje.') y al
+            # que sigue el encabezado de su primer capítulo o sección.
+            if (estatal and estricto and nivel == "titulo" and not partes
+                    and stripped.endswith(".") and not stripped.endswith("..")
+                    and es_rotulo_corto(stripped) and not stripped.isupper()
+                    and _es_nombre_encabezado(stripped[:-1], False, True)
+                    and not es_nota_bloque(stripped)
+                    and nivel_de(next((x.strip() for x in lineas[i + 1:] if x.strip()), ""))
+                    in ("capitulo", "seccion")):
+                pendiente = (nivel, encabezado, [stripped])
+                continue
             pendiente = None
             nombre = " ".join(partes)
             # 'TÍTULO IV. DE LAS PERSONAS FÍSICAS'; sin nombre: solo número.
@@ -1728,7 +1765,12 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     and (epigrafe_max is None or es_rotulo_corto(stripped, epigrafe_max)
                          or (usa_epigrafes() and _rotulo_con_comas_antes_de_articulo(
                              stripped, anterior, lineas, i, ART, estatal, es_nota_bloque)))
-                    and (anterior.endswith((".", ";", ":")) or es_nota_bloque(anterior))
+                    and (anterior.endswith((".", ";", ":")) or es_nota_bloque(anterior)
+                         # Estatal: el párrafo que el PDF deja sin punto final y
+                         # un epígrafe con su nota de reforma y el artículo debajo.
+                         or (estatal and anterior[-1:].isalpha() and not stripped.isupper()
+                             and nota_y_articulo(i)
+                             and not _FIN_DE_ORACION_ABIERTA_RE.search(anterior)))
                     # La segunda línea de una nota envuelta ('DE 2024)') no es un rótulo.
                     and not (estatal and es_nota_bloque(anterior) and _nota_abierta(anterior))
                     and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))):
