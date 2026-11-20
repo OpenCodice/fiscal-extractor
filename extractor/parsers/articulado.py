@@ -67,7 +67,8 @@ ARTICULO_RE = re.compile(
 # Es otra regex para no cambiar la lectura de las leyes federales. El paréntesis
 # que sigue al rótulo ('Artículo 58 (Derogado)') es del texto.
 ORDINALES_ESTATAL = (ORDINALES + "|Quitus|Quintos|Sextus|Sexties|S[ée]ptimus|Octavus|"
-                     "Undecies|Duodecies|Terdecies|Quaterdecies|Quindecies|Sexdecies|Cuarter")
+                     "Undecies|Duodecies|Terdecies|Quaterdecies|Quindecies|Sexdecies|Cuarter|"
+                     "Cuaterdecies|Cuater|Sexiesdecies|Septedecies|Octodecies")
 ARTICULO_ESTATAL_RE = re.compile(
     r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|\(SIC\)(?=\s+\d+\s+[A-ZÁÉÍÓÚÑ]+\s*\.-)|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$)|\.\s*\d+\s+\((?:DEROGAD|Derogad)|\.\s*\d+\.-\s?\(\s?(?:DEROGAD|Derogad))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
@@ -550,7 +551,7 @@ def _nota_tras_epigrafe_pagina(texto: str, notas_previas: re.Pattern) -> str:
     i = 0
     while i < len(lineas):
         if (i + 2 < len(lineas) and lineas[i].strip() and notas_previas.match(lineas[i].strip())
-                and "DENOMINACI" not in lineas[i].upper()
+                and not _NOTA_ACAPITE_RE.search(lineas[i])
                 and not _NOTA_PARRAFO_DEROGADO_RE.match(lineas[i].strip())
                 and _es_rotulo_de_articulo(lineas[i + 2].strip())):
             epi = lineas[i + 1].strip()
@@ -615,9 +616,14 @@ def _rotulo_abreviado_completo(texto: str) -> str:
         lambda m: "Artículo" + (" " if m.group("pegado") is not None else ""), texto)
 
 
+# '(REFORMADA SU DENOMINACION, …)' / '(REFORMADO SU ACÁPITE, …)': anotan el
+# nombre del encabezado (o el epígrafe), no al artículo que sigue.
+_NOTA_ACAPITE_RE = re.compile(r"DENOMINACI|SU\s+AC[ÁA]PITE", re.IGNORECASE)
 _ROTULO_DEROGADO_RE = re.compile(r"(?:^|\n)[ \t]*((?:[IVXLCDM]+\.|[a-zñ]{1,2}\)))$")
 _COLA_DEROGADO_RE = re.compile(r"([;.]?)[ \t]*(?=\n|$)")
 _NOTA_DEROGADA_RE = re.compile(r"\(\s*DEROGAD[OA]S?\b[^()]*\)$")
+_NOTA_REFORMADA_VACIA_RE = re.compile(r"\(\s*(?:REFORMAD|ADICIONAD)[OA]\s*,[^()]*\)$")
+_FRACCION_SIGUE_RE = re.compile(r"[ \t]*(?:[IVXLCDM]+\.|[a-zñ]{1,2}\))\s")
 
 
 def _notas_aparte(paginas: list[str], nota: re.Pattern) -> list[str]:
@@ -648,7 +654,12 @@ def _notas_aparte(paginas: list[str], nota: re.Pattern) -> list[str]:
             # su ';' detrás; no se parte en rótulo, nota y ';'.
             rotulo = _ROTULO_DEROGADO_RE.search(antes)
             cola = _COLA_DEROGADO_RE.match(texto, m.end())
-            if rotulo and cola and _NOTA_DEROGADA_RE.match(m.group(0)):
+            if rotulo and cola and (
+                    _NOTA_DEROGADA_RE.match(m.group(0))
+                    # 'VIII. (REFORMADA, P.O. …)' sin texto (el PDF no lo trae): la
+                    # fracción siguiente va justo después.
+                    or (_NOTA_REFORMADA_VACIA_RE.match(m.group(0))
+                        and _FRACCION_SIGUE_RE.match(texto, cola.end() + 1))):
                 partes.append(antes[:rotulo.start(1)])
                 partes.append(rotulo.group(1) + " " + re.sub(
                     r"\s*\n\s*", " ", m.group(0)) + cola.group(1) + "\n")
@@ -1135,16 +1146,30 @@ def _rotulo_con_comas_antes_de_articulo(s: str, anterior: str, lineas: list[str]
     educación pública') pegado al rótulo del artículo que encabeza. Solo si cierra
     una oración del artículo anterior, no acaba en puntuación y el renglón
     siguiente es ya el rótulo de artículo."""
-    if not estatal or len(s) > 140 or not anterior.endswith("."):
+    if not estatal or len(s) > 140:
+        return False
+    if es_nota and es_nota(anterior):
+        # '(REFORMADO SU ACÁPITE, …)' entre el artículo y su epígrafe: el fin de
+        # oración es el del último renglón que no es nota.
+        anterior = next((ln.strip() for ln in reversed(lineas[:i])
+                         if ln.strip() and not es_nota(ln.strip())), "")
+    if not anterior.endswith("."):
         return False
     if re.match(r"(?:el|la|los|las|lo|un|una|en|no|si|cuando|para|por|con|sin|se|que|y|o|a|al|su|sus)\b",
                 s, re.IGNORECASE) or "(" in s or re.search(r"[.;:]\s", s):
         return False
     # Las notas de reforma entre el epígrafe y el rótulo ('(REFORMADO ACÁPITE, …)')
     # no cuentan.
-    sig = next((ln.strip() for ln in lineas[i + 1:]
-                if ln.strip() and not (es_nota and es_nota(ln.strip()))), "")
-    return bool(ART.match(sig))
+    resto = [ln.strip() for ln in lineas[i + 1:]
+             if ln.strip() and not (es_nota and es_nota(ln.strip()))]
+    sig = resto[0] if resto else ""
+    if ART.match(sig):
+        return True
+    # Epígrafe envuelto a un segundo renglón en minúscula ('Procedimiento para la
+    # revisión, modificación' / 'y actualización de los programas municipales').
+    return bool(sig[:1].islower() and len(sig) <= 100 and not sig.endswith((".", ";", ":"))
+                and not re.search(r"[.;:]\s", sig) and "(" not in sig
+                and len(resto) > 1 and ART.match(resto[1]))
 
 
 def parse(pdf_path: str, doc: Documento) -> list[Unidad]:
@@ -1796,7 +1821,11 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 # hasta el siguiente artículo.
                 (re.fullmatch(r"[IVXLCDM]+", stripped)
                  and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))
-                or (nombre_suelto(stripped) and not stripped.endswith(",")
+                or (nombre_suelto(stripped)
+                    and (not stripped.endswith(",")
+                         # Epígrafe envuelto que cierra su primer renglón con coma.
+                         or (usa_epigrafes() and _rotulo_con_comas_antes_de_articulo(
+                             stripped, anterior, lineas, i, ART, estatal, es_nota_bloque)))
                     # 'Derogado' tras la última fracción es texto del artículo.
                     and not (estatal and MARCA_DEROGADO_RE.fullmatch(stripped))
                     and (epigrafe_max is None or es_rotulo_corto(stripped, epigrafe_max)

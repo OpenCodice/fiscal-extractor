@@ -33,8 +33,17 @@ _VERBO = (r"(?:REFORMAD|ADICIONAD|DEROGAD|REUBICAD|RECORRID|CAMBIAD|ACLARAD|"
 _UNA = rf"\((?:[A-ZÁÉÍÓÚÑ.,\s]*?){_VERBO}[^()]*?(?:P\.\s?O\.|\b\d{{4}}\b)[^()]*\)"
 NOTAS_EN_LINEA = (rf"{_UNA}(?:[ \t]*{_UNA})*"
                   r"|N\.\s?DE\s?E\.[A-ZÁÉÍÓÚÑ0-9 ,.\n]*?\.(?=\n|$)")
-NOTAS = rf"^(?:{NOTAS_EN_LINEA})$"
-NOTAS_PREVIAS = NOTAS
+# A veces el PDF omite el paréntesis de apertura de la nota, que va sola en su
+# renglón: 'REFORMADO [N. DE E. ESTE PÁRRAFO], P.O. 5 DE DICIEMBRE DE 2017)'.
+_SIN_ABRIR = (rf"(?:REFORMAD|ADICIONAD|DEROGAD)[OA]S?\b[^()\n]*?"
+              r"(?:P\.\s?O\.|\b\d{4}\b)[^()\n]*\)")
+# La nota del editor entre corchetes, que el PDF pone tras el último texto de un
+# artículo y antes del rótulo del siguiente y que comenta lo anterior: '[N. DE E.
+# VÉASE LITERALIDAD DEL DECRETO … PÁGINA 50.]', a veces en dos renglones.
+_EDITOR_CORCHETES = r"(?m:^)\[N\.\s?DE\s?E\.[^\[\]]*\.\](?=[ \t]*(?:\n|$))"
+NOTAS_PREVIAS = rf"^(?:{NOTAS_EN_LINEA}|{_SIN_ABRIR})$"
+NOTAS_EN_LINEA = rf"{NOTAS_EN_LINEA}|{_EDITOR_CORCHETES}"
+NOTAS = rf"^(?:{NOTAS_EN_LINEA}|{_SIN_ABRIR})$"
 
 
 def _gto(nombre: str, sigla: str, indice: str, archivo: str, **kw) -> object:
