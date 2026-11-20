@@ -67,7 +67,7 @@ ARTICULO_RE = re.compile(
 # Es otra regex para no cambiar la lectura de las leyes federales. El paréntesis
 # que sigue al rótulo ('Artículo 58 (Derogado)') es del texto.
 ORDINALES_ESTATAL = (ORDINALES + "|Quitus|Quintos|Sextus|Sexties|S[ée]ptimus|Octavus|"
-                     "Undecies|Duodecies|Terdecies|Quaterdecies|Quindecies|Sexdecies|Cuarter|"
+                     "Undecies|Undiecies|Duodecies|Terdecies|Quaterdecies|Quindecies|Sexdecies|Cuarter|"
                      "Cuaterdecies|Cuater|Sexiesdecies|Septedecies|Octodecies")
 ARTICULO_ESTATAL_RE = re.compile(
     r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|\(SIC\)(?=\s+\d+\s+[A-ZÁÉÍÓÚÑ]+\s*\.-)|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$)|\.\s*\d+\s+\((?:DEROGAD|Derogad)|\.\s*\d+\.-\s?\(\s?(?:DEROGAD|Derogad))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
@@ -1139,6 +1139,14 @@ def es_rotulo_corto(s: str, maximo: int = EPIGRAFE_MAX_ESTATAL) -> bool:
     return len(s) <= maximo and "," not in s
 
 
+def _articulo_justo_despues(lineas: list[str], i: int, abre_articulo) -> bool:
+    """Estatal: ¿el siguiente renglón con texto tras el `i` es el rótulo de un
+    artículo? (El epígrafe marginal sin nota de reforma entre medias, en una ley
+    donde casi todo artículo lo trae.)"""
+    j = next((j for j in range(i + 1, len(lineas)) if lineas[j].strip()), None)
+    return j is not None and abre_articulo(lineas[j].strip(), j)
+
+
 def _rotulo_con_comas_antes_de_articulo(s: str, anterior: str, lineas: list[str], i: int,
                                         ART: re.Pattern, estatal: bool,
                                         es_nota=None) -> bool:
@@ -1835,7 +1843,8 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                          # Estatal: el párrafo que el PDF deja sin punto final y
                          # un epígrafe con su nota de reforma y el artículo debajo.
                          or (estatal and anterior[-1:].isalpha() and not stripped.isupper()
-                             and nota_y_articulo(i)
+                             and (nota_y_articulo(i) or (
+                                 usa_epigrafes() and _articulo_justo_despues(lineas, i, abre_articulo)))
                              and not _FIN_DE_ORACION_ABIERTA_RE.search(anterior)))
                     # La segunda línea de una nota envuelta ('DE 2024)') no es un rótulo.
                     and not (estatal and es_nota_bloque(anterior) and _nota_abierta(anterior))
