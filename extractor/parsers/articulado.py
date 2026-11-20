@@ -593,7 +593,7 @@ def _nota_tras_epigrafe_pagina(texto: str, notas_previas: re.Pattern) -> str:
 # encabezado '# Artículo 54.' de su unidad: así la nota previa y el rótulo de la
 # propia unidad que le sigue se reconocen como tales (verificar.cobertura).
 _ROTULO_ABREVIADO_RE = re.compile(
-    r"(?m)^Art(?=\.\s*\d+(?:-[A-ZÑ])?(?:\s+[A-Za-z]+(?:\s+[IVX]+)?|\s*\(sic\))?\.-?(?:\s|$))\.?(?P<pegado>(?=\d))?")
+    r"(?m)^Art(?=\.\s*\d+[º°]?(?:-[A-ZÑ])?(?:\s+[A-Za-z]+(?:\s+[IVX]+)?|\s*\(sic\))?\.-?(?:\s|$))\.?(?P<pegado>(?=\d))?")
 
 
 # 'ART. 224 BIS.-', 'ARTÌCULO 270 BIS.-' (acento grave) y 'ARTÍCULO161 BIS 2.-': el
@@ -737,7 +737,7 @@ def _renglones_con_geometria(pdf) -> list[list[dict]]:
         # final más común de la página, o del documento si la página tiene pocos.
         margenes.append(Counter(round(ln["x1"]) for ln in lineas if ln["x1"] > page.width * 0.6))
         paginas.append([{"texto": unicodedata.normalize("NFC", ln["text"]).strip(),
-                         "top": ln["top"], "x1": ln["x1"],
+                         "top": ln["top"], "x0": ln["x0"], "x1": ln["x1"],
                          "palabra": _ancho_primera_palabra(ln["chars"])} for ln in lineas])
     total = sum(margenes, Counter())
     general = total.most_common(1)[0][0] if total else None
@@ -770,6 +770,18 @@ def _ancho_primera_palabra(chars: list[dict]) -> float | None:
     return fin["x1"] - visibles[0]["x0"] + 0.25 * visibles[0]["size"]
 
 
+_MIN_RENGLON_RESINCRONIZA = 40
+_SANGRIA_PARRAFO = 15            # pt de sangría que abren un párrafo
+_VENTANA_RESINCRONIZA = 400
+_ROTULO_ABREV_CLAVE_RE = re.compile(r"^Art(?:[íi]culo|\.)\s*(?=\d)")
+
+
+def _clave_renglon(texto: str) -> str:
+    """El renglón con su rótulo en una sola forma ('Art. 14.-' y 'Artículo
+    14.-' son el mismo renglón: el texto limpio lee el abreviado completo)."""
+    return _ROTULO_ABREV_CLAVE_RE.sub("Artículo ", texto)
+
+
 def _sin_sitio(a: dict, b: dict) -> bool | None:
     """¿El renglón `a` acabó porque la primera palabra de `b` no cabía?"""
     if a["margen"] is None or b["palabra"] is None:
@@ -800,8 +812,10 @@ def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str,
     if not paso:
         return {}
     crudos = [(n, k, r) for n, p in enumerate(paginas) for k, r in enumerate(p)]
+    claves = [_clave_renglon(r["texto"]) for _, _, r in crudos]
     lineas = [ln.strip() for ln in texto.split("\n")]
     ubicados: list[int | None] = []
+    resincronizados: set[int] = set()
     j = 0
     for s in lineas:
         hallado = None
@@ -809,17 +823,31 @@ def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str,
         # Una nota entre paréntesis se repite idéntica por todo el texto: ubicarla
         # arrastraría la búsqueda hasta otra copia más adelante.
         if s and not (s.startswith("(") and s.endswith(")")):
+            clave_s = _clave_renglon(s)
             for m in range(j, min(j + 8, len(crudos))):
                 crudo = crudos[m][2]["texto"]
-                if crudo == s or (len(s) >= _MIN_PARTE_RENGLON and crudo.endswith(" " + s)):
+                clave = claves[m]
+                if (crudo == s or clave == clave_s
+                        or (len(s) >= _MIN_PARTE_RENGLON and crudo.endswith(" " + s))):
                     hallado = m
                     break
                 # El texto limpio separa a veces del final del renglón su nota
                 # ('…desplazamiento;' / '(Adición P. O. No. 38, 11-V-18)'): la
                 # primera parte ubica el renglón, y la nota queda en el mismo.
-                if len(s) >= _MIN_PARTE_RENGLON and crudo.startswith(s + " "):
+                if len(s) >= _MIN_PARTE_RENGLON and (crudo.startswith(s + " ")
+                                                     or clave.startswith(clave_s + " ")):
                     hallado, sigue_en_renglon = m, True
                     break
+            # Tras una racha de renglones que el texto limpio no conserva (cien
+            # artículos derogados seguidos en una sola nota), la búsqueda corta
+            # se perdería para el resto del texto: un renglón largo y entero se
+            # busca más adelante.
+            if hallado is None and len(s) >= _MIN_RENGLON_RESINCRONIZA:
+                for m in range(j + 8, min(j + _VENTANA_RESINCRONIZA, len(crudos))):
+                    if claves[m] == clave_s:
+                        hallado = m
+                        resincronizados.add(m)
+                        break
         if hallado is not None:
             j = hallado if sigue_en_renglon else hallado + 1
         ubicados.append(hallado)
@@ -831,6 +859,15 @@ def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str,
                 return None
             salto = rb["top"] - ra["top"]
             if salto >= _INTERLINEADO_PARRAFO * paso:
+                # Una fórmula en imagen dentro del renglón (el símbolo de una
+                # variable) lo agranda: el renglón que llega al margen sin cerrar
+                # la oración y sigue en minúscula es el mismo párrafo.
+                if (ra.get("justificada") and _sin_sitio(ra, rb)
+                        and not _CIERRA_RE.search(ra["texto"])
+                        and re.match(r"[a-záéíóúüñ]{2,}\s", rb["texto"])
+                        and not re.match(r"[a-zñ]{1,4}[.)]\s", rb["texto"])
+                        and salto < 2 * paso):
+                    return False
                 # Un renglón que acaba en una palabra que no puede cerrar un
                 # párrafo ('…del Poder Ejecutivo del') sigue en el siguiente aunque
                 # el PDF deje entre ambos el espacio de un párrafo.
@@ -868,6 +905,15 @@ def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str,
         if sin_sitio is None:
             return None
         if sin_sitio:
+            # Un renglón con sangría tras uno que cierra la oración a ancho completo
+            # ('…competente.' / '    Tratándose de…') puede abrir un párrafo: el
+            # margen no lo dice, y se decide por el texto.
+            # (Solo desde el primer renglón que la búsqueda ubicó tras perder el
+            # hilo: antes de él ya se decidía así.)
+            if ((resincronizados and min(a, b) >= min(resincronizados))
+                    and ra.get("x0") is not None and rb.get("x0") is not None
+                    and rb["x0"] - ra["x0"] >= _SANGRIA_PARRAFO and _CIERRA_RE.search(ra["texto"])):
+                return None
             return False
         if _CIERRA_RE.search(ra["texto"]) and _ABRE_PARRAFO_RE.match(rb["texto"]):
             return True
@@ -1706,7 +1752,7 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 and desemboca_en_articulo(i, max_lineas=3, solo_estructura=True))
 
     def nivel_de(s: str) -> str | None:
-        if estatal and re.fullmatch(r"(?:T[íi]tulo|Cap[íi]tulo|Secci[óo]n|Libro)\s.*[^.]\.", s):
+        if estatal and re.fullmatch(r"(?:T[íi]tulo|Cap[íi]tulo|Secci[óo]n|Libro|T[ÍI]TULO|CAP[ÍI]TULO|SECCI[ÓO]N)\s.*[^.]\.", s):
             s = s[:-1]                  # 'Título Séptimo Bis.' (Código Electoral de Jalisco)
         if (TITULO_RE.match(s) or LIBRO_RE.match(s) or PARTE_RE.match(s)) and (
                 actual is None or len(s) < 35):
@@ -1940,6 +1986,13 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 previas_bloque[-1] += "\n" + stripped     # la nota previa sigue
                 continue
             if notas_previas is not None and notas_previas.match(stripped):
+                previas_bloque.append(stripped)
+                continue
+            # Estatal: la nota del editor ('N. DE E. …', en varios renglones) tras
+            # el nombre de la estructura es del artículo que sigue, no parte de
+            # ese nombre (sus renglones van en mayúsculas, como un nombre).
+            if (estatal and notas_previas is not None and _NOTA_EDITOR_RE.match(stripped)
+                    and not nota_previa and ultimo_nivel):
                 previas_bloque.append(stripped)
                 continue
             if es_nota_bloque(stripped):
