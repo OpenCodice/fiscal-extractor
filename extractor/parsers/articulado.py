@@ -446,7 +446,7 @@ def _sin_numero_de_pagina(paginas: list[str]) -> list[str]:
     return salida
 
 
-_PIE_PAGINA_N_DE_M_RE = re.compile(r"Página\s+\d{1,4}\s+de\s+\d{1,4}")
+_PIE_PAGINA_N_DE_M_RE = re.compile(r"Página\s+\d{1,4}\s+de\s+\d{1,4}", re.IGNORECASE)
 MIN_RENGLONES_MEMBRETE = 3
 FRACCION_MEMBRETE = 0.9
 
@@ -1944,6 +1944,12 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                          or (usa_epigrafes() and _rotulo_con_comas_antes_de_articulo(
                              stripped, anterior, lineas, i, ART, estatal, es_nota_bloque)))
                     and (anterior.endswith((".", ";", ":")) or es_nota_bloque(anterior)
+                         # Estatal: un artículo derogado en una sola línea
+                         # ('Artículo 28. (DEROGADO, P.O. …)') y su epígrafe
+                         # marginal, con el artículo siguiente debajo.
+                         or (estatal and anterior.endswith(")") and ART.match(anterior)
+                             and re.search(r"\(DEROGAD[OA]\b", anterior)
+                             and _articulo_justo_despues(lineas, i, abre_articulo))
                          # Estatal: el párrafo que el PDF deja sin punto final y
                          # un epígrafe con su nota de reforma y el artículo debajo.
                          or (estatal and anterior[-1:].isalpha() and not stripped.isupper()
