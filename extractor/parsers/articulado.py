@@ -1298,7 +1298,30 @@ def _nota_abierta(nota: str) -> bool:
                 and not _FECHA_FINAL_RE.search(nota)))
 
 
-def _notas_al_final(u: Unidad | None, notas_previas: re.Pattern | None) -> list[str]:
+def _cola_de_encabezado(lineas: list[str], j: int, notas_previas: re.Pattern) -> int | None:
+    """Índice de la nota de una sola línea que precede a un bloque de encabezado
+    (renglones de TÍTULO/CAPÍTULO/… y su nombre) que llega hasta `j`, o None."""
+    bloque = []
+    for k in range(j - 1, max(0, j - 7), -1):
+        s = lineas[k].strip()
+        if not s:
+            continue
+        if notas_previas.match(s):
+            if not bloque:
+                return None
+            # El primer renglón tras la nota debe ser un encabezado.
+            return k if _es_encabezado(bloque[-1].rstrip('.')) else None
+        if _es_encabezado(s.rstrip('.')) or (len(s) <= 100 and not s.endswith((";", ":", ","))
+                                 and not s[:1].islower() and not notas_previas.match(s)
+                                 and not ARTICULO_ESTATAL_RE.match(s)):
+            bloque.append(s)
+            continue
+        return None
+    return None
+
+
+def _notas_al_final(u: Unidad | None, notas_previas: re.Pattern | None,
+                    con_encabezado: bool = True) -> list[str]:
     """Quita del final del cuerpo de `u` los renglones de nota que anotan al
     artículo siguiente y los devuelve en orden. Si el cuerpo quedaría vacío
     (el artículo solo es su nota: '(DEROGADO, G.O. …)'), se queda con ellas."""
@@ -1309,6 +1332,16 @@ def _notas_al_final(u: Unidad | None, notas_previas: re.Pattern | None) -> list[
     while j > 1:
         if not lineas[j - 1].strip():
             j -= 1
+            continue
+        # Nota de un encabezado y el encabezado mismo al final ('(REFORMADA SU
+        # NUMERACIÓN, P.O. …)' / 'TITULO QUINTO.' / 'CAPITULO UNICO.' /
+        # 'Declaración …'): es estructura que desemboca en el artículo siguiente,
+        # no cuerpo de este.
+        c = _cola_de_encabezado(lineas, j, notas_previas) if con_encabezado else None
+        if c is not None:
+            grupos.insert(0, lineas[c].strip())
+            inicios.insert(0, c)
+            j = c
             continue
         # La nota puede ocupar varios renglones: abre en uno que casa con la
         # regex y cierra su paréntesis justo en el último (no antes).
@@ -1322,7 +1355,10 @@ def _notas_al_final(u: Unidad | None, notas_previas: re.Pattern | None) -> list[
             return (_parentesis_cerrados("\n".join(lineas[k:j]))
                     and (k == j - 1 or not _parentesis_cerrados("\n".join(lineas[k:j - 1]))))
         k = next((k for k in range(j - 1, max(0, j - 1 - MAX_RENGLONES_NOTA_EDITOR), -1)
-                  if notas_previas.match(lineas[k].strip())
+                  if (notas_previas.match(lineas[k].strip())
+                      or (j - k > 1 and lineas[k].lstrip().startswith(("(", "N"))
+                          and notas_previas.match(
+                              "\n".join(ln.strip() for ln in lineas[k:j]))))
                   and (j - k <= MAX_RENGLONES_NOTA
                        or _NOTA_EDITOR_RE.match(lineas[k].strip()))
                   and cierra(k)), None)
@@ -1357,7 +1393,7 @@ def _notas_antes(lineas: list[str], notas_previas: re.Pattern | None) -> list[st
         return []
     u = Unidad(numero=0)
     u.cuerpo = "\n".join(["Artículo 0.", "-", *lineas[-(MAX_RENGLONES_NOTA * 3):]])
-    return _notas_al_final(u, notas_previas)
+    return _notas_al_final(u, notas_previas, con_encabezado=False)
 
 
 _EPIGRAFE_MARGINAL_MAX = 100
@@ -1742,6 +1778,16 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             if (estatal and estricto and not partes and stripped.endswith(".") and ".- " in stripped
                     and nombre_suelto(stripped[:-1]) and siguiente_abre(i)):
                 pendiente = (nivel, encabezado, [stripped])
+                continue
+            # Estatal: un encabezado con punto ('CAPITULO UNICO.') lleva su nombre en
+            # caja normal con punto ('Declaración de estado de interdicción.') y el
+            # artículo va justo debajo.
+            if (estatal and estricto and not partes and encabezado.rstrip().endswith(".")
+                    and stripped.endswith(".") and not stripped.endswith("..")
+                    and len(stripped) <= 80 and not re.search(r"[.;:]\s", stripped)
+                    and not es_nota_bloque(stripped) and not ART.match(stripped)
+                    and nombre_suelto(stripped[:-1]) and siguiente_abre(i)):
+                pendiente = (nivel, encabezado.rstrip().rstrip("."), [stripped])
                 continue
             # Estatal: el nombre que un salto de página parte en una conjunción o
             # artículo ('Del Fraccionamiento y' / … / 'la Urbanización Del Suelo.')
