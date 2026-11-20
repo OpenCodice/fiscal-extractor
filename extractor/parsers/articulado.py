@@ -71,12 +71,13 @@ ORDINALES_ESTATAL = (ORDINALES + "|Quitus|Quintos|Sextus|Sexties|S[ée]ptimus|Oc
 ARTICULO_ESTATAL_RE = re.compile(
     r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|\(SIC\)(?=\s+\d+\s+[A-ZÁÉÍÓÚÑ]+\s*\.-)|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$)|\.\s*\d+\s+\((?:DEROGAD|Derogad)|\.\s*\d+\.-\s?\(\s?(?:DEROGAD|Derogad))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
-    r"(?:(?:-(?=[A-ZÑ])|\s(?=[A-ZÑ][.\-])|(?<=\d)(?=[A-Z]\.)|[-\s](?=[a-zñ](?:\.-|-\d{1,2}\.-)))"
-    r"([A-ZÑ]|[a-zñ](?=\.-|-\d{1,2}\.-))(?![A-Za-zñ]))?"  # letra "-A", " A." (118 A.) o "132G."; "142-Ñ"; "149.-a.-" (Guanajuato)
+    r"(?:(?:-(?=[A-ZÑ])|\s(?=[A-ZÑ][.\-])|(?<=\d)(?=[A-Z]\.)|[-\s](?=[a-zñ](?:\.-|-\d{1,2}\.-|\.(?:\s+[A-ZÁÉÍÓÚÑ]|$)|\s\(sic\)\.-)))"
+    r"([A-ZÑ]|[a-zñ](?=\.-|-\d{1,2}\.-|\.(?:\s+[A-ZÁÉÍÓÚÑ]|$)|\s\(sic\)\.-))(?![A-Za-zñ]))?"  # letra "-A", " A." (118 A.) o "132G."; "142-Ñ"; "149.-a.-" (Guanajuato)
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
     rf"(?:[\s.\-]+(?i:({ORDINALES_ESTATAL}))"         # ordinal
     r"(?:(?:[\s\-]+|\.\s?|(?=\d))(\d+|(?i:uno|dos|tres)|[IVX]{1,4}(?=\s*[.\-]|,\s+\((?:DEROGAD|Derogad)))(?:\s+([A-Z])(?=[.\-]|\s*$))?"  # numeral ("Bis 1", "Bis. 3", "Ter2", "Bis Uno") y letra ("Bis 35 A.-")
-    r"|-([A-Z])(?=[.\-]|\s))?)?"                    # letra pegada al ordinal: "221 BIS-A.-"
+    r"|-([A-Z]|[a-zñ](?=\.-|\.(?:\s+[A-ZÁÉÍÓÚÑ]|$)))(?=[.\-]|\s|$))?)?"  # letra pegada al ordinal: "221 BIS-A.-", "235 ter-a.-"
+    r"(?:\s\(sic\)(?=\.-))?"                         # "99-y (sic).-": el PDF marca su propia errata
     r"(?:\s*\.?\s?[-–]?\.?(?:\s|$|(?=\())|\.-(?=\S)"   # separador final ("29 BIS. - ", "137-.", "209 TER. – " o ".-" pegado)
     r"|\.(?=[A-ZÁÉÍÓÚÑ](?:[a-záéíóúñ]|\s))"            # o el punto pegado: "127.Se deroga.", "36.A través"
     r"|:(?=\s)"                                      # o dos puntos: "Artículo 276 Quater: Comete"
@@ -1227,7 +1228,9 @@ _NOTA_TITULO_RE = re.compile(r"\bCON\s+(?:EL|LOS|LAS)\s+(?:ART[ÍI]CULOS?|CAP[Í
 _NOTA_PARRAFO_DEROGADO_RE = re.compile(
     r"^\(?DEROGAD[OA],?\s+(?:PRIMER|SEGUNDO|TERCER|CUARTO|QUINTO|SEXTO|S[ÉE]PTIMO|OCTAVO|"
     r"NOVENO|D[ÉE]CIMO|[ÚU]LTIMO)\S*\s+P[ÁA]RRAFO\b"
-    # 'PÁRRAFO SEGUNDO, DEROGADO, P.O. …' (Guanajuato)
+    # '(DEROGADO PÁRRAFO TERCERO, P.O. …)' y 'PÁRRAFO SEGUNDO, DEROGADO, P.O. …' (Guanajuato)
+    r"|^\(DEROGAD[OA],?\s+P[ÁA]RRAFO\s+(?:PRIMERO|SEGUNDO|TERCERO|CUARTO|QUINTO|SEXTO|S[ÉE]PTIMO|"
+    r"OCTAVO|NOVENO|D[ÉE]CIMO|[ÚU]LTIMO)\b"
     r"|^\(P[ÁA]RRAFO\s+(?:PRIMERO|SEGUNDO|TERCERO|CUARTO|QUINTO|SEXTO|S[ÉE]PTIMO|OCTAVO|"
     r"NOVENO|D[ÉE]CIMO|[ÚU]LTIMO),\s+DEROGAD[OA],\s+P\.\s?O\.")
 
@@ -1598,6 +1601,19 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 return False
         return False
 
+    def oraciones_hasta_articulo(i: int) -> bool:
+        """Estatal: ¿entre el renglón `i` y el siguiente artículo hay un renglón
+        con un fin de oración a media línea ('…supervisión. Las personas …')? Un
+        epígrafe no lo tiene: es un párrafo sin punto final, no un rótulo."""
+        for j in range(i, len(lineas)):
+            s = lineas[j].strip()
+            if j > i and abre_articulo(s, j):
+                return False
+            if (s and not es_nota_bloque(s)
+                    and re.search(r"[a-záéíóúñ)]\.\s+[A-ZÁÉÍÓÚÑ]", s)):
+                return True
+        return False
+
     def nota_y_articulo(i: int) -> bool:
         """¿Tras el renglón `i` van una o más notas de reforma y luego un artículo?"""
         j = next((j for j in range(i + 1, len(lineas)) if lineas[j].strip()), None)
@@ -1684,8 +1700,10 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             if (estatal and partes and not estricto and len(partes) == 1
                     and re.search(r"\b(?:y|e|o|u|de|del|la|las|el|los|al|en|con|por|para)$",
                                   partes[0])
-                    and stripped[:1].islower() and stripped.endswith(".")
-                    and not stripped.endswith("..") and len(stripped) <= 60
+                    and stripped[:1].islower()
+                    and ((stripped.endswith(".") and not stripped.endswith(".."))
+                         or not stripped.endswith((".", ";", ":", ",", ")")))
+                    and len(stripped) <= 60
                     and not es_nota_bloque(stripped) and not ART.match(stripped)
                     and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True)):
                 pendiente = (nivel, encabezado, [*partes, stripped])
@@ -1696,7 +1714,8 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             # El artículo puede ir tras una nota de reforma ('(ADICIONADO, P.O. …)'),
             # y el nombre envolver a un segundo renglón.
             if (estatal and len(partes) <= 1 and stripped.endswith(".")
-                    and not stripped.endswith("..") and es_rotulo_corto(stripped)
+                    and not stripped.endswith("..")
+                    and (es_rotulo_corto(stripped) or (not partes and len(stripped) <= 80))
                     and _es_nombre_encabezado(stripped[:-1], False, True)
                     and not stripped.isupper() and not es_nota_bloque(stripped)
                     and ((not estricto and siguiente_abre(i)) or nota_y_articulo(i))):
@@ -1775,6 +1794,7 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                              and not _FIN_DE_ORACION_ABIERTA_RE.search(anterior)))
                     # La segunda línea de una nota envuelta ('DE 2024)') no es un rótulo.
                     and not (estatal and es_nota_bloque(anterior) and _nota_abierta(anterior))
+                    and not (estatal and oraciones_hasta_articulo(i))
                     and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))):
             fijar("epigrafe", stripped)
             entra_bloque()
@@ -1844,6 +1864,12 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             if ok:
                 stripped = line = f"Artículo {esperado}.-{stripped[sm.end():]}"
         am = ART.match(stripped)
+        if am and estatal and am.group(2) and re.search(r"\(sic\)", stripped[:am.end()], re.I):
+            # 'Artículo 99-y (sic).- Cuando…': el '(sic)' es del PDF y se conserva, al
+            # inicio del texto, para que el rótulo quede como el de la unidad.
+            stripped = line = (re.sub(r"\s*\(sic\)", "", stripped[:am.end()], flags=re.I).rstrip()
+                               + " (sic) " + stripped[am.end():]).rstrip()
+            am = ART.match(stripped)
         if am:
             numero = int(am.group(1).replace(",", ""))
             letra = (am.group(2) or "").upper()
