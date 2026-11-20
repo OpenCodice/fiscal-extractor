@@ -71,8 +71,8 @@ ORDINALES_ESTATAL = (ORDINALES + "|Quitus|Quintos|Sextus|Sexties|S[ée]ptimus|Oc
 ARTICULO_ESTATAL_RE = re.compile(
     r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|\(SIC\)(?=\s+\d+\s+[A-ZÁÉÍÓÚÑ]+\s*\.-)|Art(?=\.\s*\d+(?:\s+[A-Za-z]+)?\.(?:\s|$)|\.\s*\d+\s+\((?:DEROGAD|Derogad)|\.\s*\d+\.-\s?\(\s?(?:DEROGAD|Derogad))|(?:Art[íi]culos|ART[IÍ]CULOS)(?=\s+\d+\s*[oº°]?\.-?\s))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
 
-    r"(?:(?:-(?=[A-ZÑ])|\s(?=[A-ZÑ][.\-])|(?<=\d)(?=[A-Z]\.)|-(?=[a-zñ]\.-))"
-    r"([A-ZÑ]|(?<=\.-)[a-zñ])(?![A-Za-zñ]))?"  # letra "-A", " A." (118 A.) o "132G."; "142-Ñ"; "149.-a.-" (Guanajuato)
+    r"(?:(?:-(?=[A-ZÑ])|\s(?=[A-ZÑ][.\-])|(?<=\d)(?=[A-Z]\.)|[-\s](?=[a-zñ](?:\.-|-\d{1,2}\.-)))"
+    r"([A-ZÑ]|[a-zñ](?=\.-|-\d{1,2}\.-))(?![A-Za-zñ]))?"  # letra "-A", " A." (118 A.) o "132G."; "142-Ñ"; "149.-a.-" (Guanajuato)
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
     rf"(?:[\s.\-]+(?i:({ORDINALES_ESTATAL}))"         # ordinal
     r"(?:(?:[\s\-]+|\.\s?|(?=\d))(\d+|(?i:uno|dos|tres)|[IVX]{1,4}(?=\s*[.\-]|,\s+\((?:DEROGAD|Derogad)))(?:\s+([A-Z])(?=[.\-]|\s*$))?"  # numeral ("Bis 1", "Bis. 3", "Ter2", "Bis Uno") y letra ("Bis 35 A.-")
@@ -591,14 +591,14 @@ def _nota_tras_epigrafe_pagina(texto: str, notas_previas: re.Pattern) -> str:
 # encabezado '# Artículo 54.' de su unidad: así la nota previa y el rótulo de la
 # propia unidad que le sigue se reconocen como tales (verificar.cobertura).
 _ROTULO_ABREVIADO_RE = re.compile(
-    r"(?m)^Art(?=\.\s*\d+(?:\s+[A-Za-z]+(?:\s+[IVX]+)?)?\.-?(?:\s|$))\.?")
+    r"(?m)^Art(?=\.\s*\d+(?:-[A-ZÑ])?(?:\s+[A-Za-z]+(?:\s+[IVX]+)?|\s*\(sic\))?\.-?(?:\s|$))\.?(?P<pegado>(?=\d))?")
 
 
 # 'ART. 224 BIS.-', 'ARTÌCULO 270 BIS.-' (acento grave) y 'ARTÍCULO161 BIS 2.-': el
 # mismo rótulo escrito de otra forma.
 _ROTULO_MAYUS_RE = re.compile(
-    r"(?m)^(?:ART\.(?=\s*\d+(?:\s+[A-Za-z]+(?:\s+\d+)?)?\s*\.-)|ART[ÌÍ]CULO(?=\d))\s*(?=\d)")
-_ROTULO_GRAVE_RE = re.compile(r"(?m)^ARTÌCULO(?=\s)")
+    r"(?m)^(?:ART\.(?=\s*\d+(?:\s+[A-Za-z]+(?:\s+\d+)?)?\s*\.-|\s*\d+\.\s+\((?:DEROGAD|Derogad))|ART[ÌÍ]CULO(?=\d))\s*(?=\d)")
+_ROTULO_GRAVE_RE = re.compile(r"(?m)^ART[Ìí]CULO(?=\s)")
 
 
 # 'ARTÍCULO 79 BlS. - …': la 'I' de 'BIS' escrita como ele minúscula.
@@ -609,7 +609,9 @@ def _rotulo_abreviado_completo(texto: str) -> str:
     texto = _ROTULO_BIS_ELE_RE.sub(r"\g<1>I\2", texto)
     texto = _ROTULO_GRAVE_RE.sub("ARTÍCULO", texto)
     texto = _ROTULO_MAYUS_RE.sub("ARTÍCULO ", texto)
-    return _ROTULO_ABREVIADO_RE.sub("Artículo", texto)
+    # 'Art.146.': el PDF pega el número al punto; el rótulo lleva su espacio.
+    return _ROTULO_ABREVIADO_RE.sub(
+        lambda m: "Artículo" + (" " if m.group("pegado") is not None else ""), texto)
 
 
 def _notas_aparte(paginas: list[str], nota: re.Pattern) -> list[str]:
@@ -1906,7 +1908,8 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     and (not re.match(r"\s*(?:/[oº°]|[oº°])", line[am.end(1):])
                          # Con la nota de reforma antes del rótulo ('6° Bis'), la
                          # auditoría compara el rótulo sin ordinal.
-                         or bool(previas)))
+                         or (bool(previas)
+                             and not re.match(r"\s*o\s+[A-Za-z]", line[am.end(1):]))))
                 if i in marginales:
                     actual.epigrafe = marginales[i]
                 if previas:
