@@ -128,8 +128,14 @@ def de_revision(rev: Path, sha: str) -> list[dict] | None:
     """Hallazgos de la revisión de esta corrida (o de la caché): los de los
     bloques del documento tal como quedó, no los de bloques ya cambiados."""
     resultado, plan = _leer(rev / "resultado.json"), _leer(rev / "plan.json")
-    if not resultado or not plan or resultado.get("pdf") != sha \
+    if not resultado or resultado.get("pdf") != sha \
             or resultado.get("resultado") != "hallazgos":
+        return None
+    if resultado.get("origen") == "forma":
+        # Los encontró el filtro de forma (scripts/forma_alta.py) sin revisión:
+        # no hay veredictos, y los de la caché serían de un texto anterior.
+        return resultado.get("hallazgos") or None
+    if not plan:
         return None
     vigentes = {b["huella"] for b in plan.get("bloques", [])}
     res = []

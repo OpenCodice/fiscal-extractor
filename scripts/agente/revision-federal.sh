@@ -75,6 +75,13 @@ revisar_doc() {
       echo "$previa" > "$REV/previa.json"
       return
     fi
+    # Filtro de forma (scripts/forma_alta.py): si el texto de un alta de ley
+    # estatal ya delata defectos, queda fuera con ellos y no se gasta su
+    # revisión. Solo el código 3 la salta: con cualquier otro (un error
+    # incluido) se revisa como siempre.
+    python scripts/forma_alta.py filtrar --repo "$RAIZ" --fuentes "$OUT/fuentes.json" --plan "$PLAN" \
+      --documento "$doc" --pdf "$PDF_DIR/$doc.pdf"
+    [ "$?" = 3 ] && return
     for sesion in $(seq 1 "${REVISION_SESIONES:-8}"); do
       # Numera el veredicto tras los que ya haya (de una corrida anterior, si la
       # carpeta viene de la caché): ninguno se sobrescribe.
@@ -114,9 +121,16 @@ cerrar() {
       motivo="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["motivo"])' "$REV/previa.json")" \
         && [ -n "$motivo" ] || motivo="APLAZADA"
     else
-      motivo="$(python scripts/revision.py cerrar --repo "$RAIZ" --documento "$doc" \
-        --pdf "$PDF_DIR/$doc.pdf" --trabajo "$REV")"
+      # Primero el filtro de forma: si deja fuera la ley (código 2, con su
+      # motivo), ese es el resultado. Si no decide nada, la revisión completa.
+      motivo="$(python scripts/forma_alta.py cerrar --repo "$RAIZ" --fuentes "$OUT/fuentes.json" \
+        --plan "$PLAN" --documento "$doc" --pdf "$PDF_DIR/$doc.pdf" --trabajo "$REV")"
       rc=$?
+      if [ "$rc" != 2 ] || [ -z "$motivo" ]; then
+        motivo="$(python scripts/revision.py cerrar --repo "$RAIZ" --documento "$doc" \
+          --pdf "$PDF_DIR/$doc.pdf" --trabajo "$REV")"
+        rc=$?
+      fi
       motivo="${motivo#✗ }"
       if [ "$rc" = 0 ]; then
         motivo=""
