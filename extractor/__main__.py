@@ -3,6 +3,7 @@
     python -m extractor build      --doc cff --pdf CFF.pdf --out ../fiscal-mexicano
     python -m extractor actualizar --out ../fiscal-mexicano   # descarga + reconstruye
     python -m extractor validar    --out ../fiscal-mexicano
+    python -m extractor forma      --out ../leyes-estatales   # informe, no compuerta
     python -m extractor verificar  --out ../fiscal-mexicano --pdf-dir /tmp/pdfs
     python -m extractor stats      --doc cff --pdf CFF.pdf
     python -m extractor listar
@@ -190,6 +191,29 @@ def _cmd_auditar(a) -> int:
     return 0
 
 
+def _cmd_forma(a) -> int:
+    """Informe de los chequeos de forma (solo texto) sobre un repo de datos.
+    Es para una persona: no decide nada y siempre sale 0."""
+    import json
+    from . import forma
+    res = forma.informe(a.out, a.doc, tuple(a.chequeo) if a.chequeo else None)
+    if a.json:
+        Path(a.json).write_text(json.dumps(
+            {c: [h.a_dict() for h in hs] for c, hs in res.items()},
+            ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    cuenta = Counter(h.chequeo for hs in res.values() for h in hs)
+    leyes = {n: sum(1 for hs in res.values() if any(h.chequeo == n for h in hs)) for n in cuenta}
+    for clave, hs in res.items():
+        print(f"{clave}:")
+        for h in hs:
+            print(f"  {h.clave} [{h.chequeo}] {h.nota}")
+    print("\nHallazgos por chequeo (* = en el filtro de altas):")
+    for n in a.chequeo or forma.CHEQUEOS:
+        marca = "*" if n in forma.FILTRO else " "
+        print(f"  {marca} {n:28} {cuenta[n]:5} en {leyes.get(n, 0)} leyes")
+    return 0
+
+
 def _cmd_validar(a) -> int:
     ok, checks = validar(a.out)
     print(format_report(checks))
@@ -241,6 +265,14 @@ def main(argv=None) -> int:
                         help="anota los pasajes con referencias legales cruzadas")
     sp.add_argument("--out", required=True, help="repo de datos a anotar")
     sp.set_defaults(fn=_cmd_referencias)
+
+    sp = sub.add_parser("forma",
+                        help="informe de los chequeos de forma (solo texto) de un repo de datos")
+    sp.add_argument("--out", required=True, help="repo de datos")
+    sp.add_argument("--doc", action="append", help="clave(s); omitir = todas las leyes del repo")
+    sp.add_argument("--chequeo", action="append", help="chequeo(s); omitir = todos")
+    sp.add_argument("--json", default=None, help="escribe los hallazgos aquí")
+    sp.set_defaults(fn=_cmd_forma)
 
     sp = sub.add_parser("validar", help="corre los invariantes sobre el repo de datos")
     sp.add_argument("--out", required=True, help="repo de datos a validar")
