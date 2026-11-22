@@ -208,6 +208,18 @@ cualquier commit.
   vigilancia reconstruye y audita todo ese corpus.
 - Prefiere un patrón general a un caso especial por unidad, y agrega una prueba
   de regresión en `tests/`.
+- Lo propio de la fuente de un estado no va en una rama común a todos los
+  estados: cada particularidad es un `Rasgo` con nombre (`extractor/perfil.py`)
+  que el parser consulta (`lee(Rasgo.X)`), y el perfil del estado (`PERFIL` en
+  `extractor/estatales/<estado>.py`) dice cuáles lee. Un arreglo para un
+  estado es, por orden de preferencia: la definición de la ley; un paso
+  `texto -> texto` escrito en el módulo del estado y declarado en su perfil
+  (`ESTATAL_BASE.con(pre_texto=(paso,))`); o un rasgo nuevo que solo declara
+  ese perfil (`ESTATAL_BASE.con(Rasgo.X)`). `HEREDADOS` (lo que leía toda ley
+  estatal antes de que hubiera perfiles, y con lo que empieza un estado nuevo)
+  no crece: `tests/test_perfil.py` lo fija. Así un arreglo para un estado no
+  puede cambiar la lectura de otro ni la de las leyes federales, aunque la
+  medición de impacto lo siga comprobando.
 - Un cambio aquí modifica texto ya publicado, y eso solo se publica como
   corrección (`Tipo: correccion`) si cada unidad que cambia está confirmada
   como mejora contra el PDF en `verificaciones/impacto/`. Al llegar a main,
@@ -310,8 +322,8 @@ de `cerrar` y con su propio tiempo:
    Actions, con `EGRESS_MX_TOKEN`, que el agente no tiene) y los clones de los
    repos de datos. `reparar.sh agente` (solo con `CLAUDE_CODE_OAUTH_TOKEN`)
    corrige `extractor/` y `tests/` con `brief-reparacion.md`: el arreglo más
-   local posible (la definición de la ley, o detrás del flag `estatal` del
-   articulado, con condiciones estrictas; reglas generales como `normalize.py`
+   local posible (en una ley estatal, la definición de la ley o un rasgo o
+   paso del perfil de su estado, ver «Al cambiar un parser»; reglas generales como `normalize.py`
    o la geometría de cortes solo si la medición lo justifica), siempre con una
    prueba nueva `tests/test_reparacion_<tema>.py`. Antes de entregar mide él
    mismo el impacto en lo publicado con `impacto_corpus.py --medir` (solo

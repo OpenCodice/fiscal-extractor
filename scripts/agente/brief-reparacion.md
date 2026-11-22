@@ -74,9 +74,10 @@ si sí, 2 con regresiones de cobertura o errores. Corre los comandos con un
   entonces tu trabajo se pierde.
 - Cada unidad que cambie fuera de tus leyes objetivo tiene que ser
   intencional y una mejora clara contra el PDF (míralo en su página). Si no lo
-  es, acota la regla: detrás del flag `estatal`, con condiciones más estrictas
-  (el patrón exacto de la fuente, no uno parecido) o en la definición de la
-  ley. Ante la duda, no es mejora.
+  es, acota la regla: en una ley estatal, como rasgo o paso del perfil de su
+  estado (ver «Qué hacer»), que los demás no leen; en una federal, con
+  condiciones más estrictas (el patrón exacto de la fuente, no uno parecido).
+  Ante la duda, no es mejora.
 - Esta medición es solo una ayuda: las compuertas la repiten por su cuenta y
   son las que deciden.
 
@@ -86,16 +87,25 @@ si sí, 2 con regresiones de cobertura o errores. Corre los comandos con un
    texto crudo de la página del PDF. Agrupa por causa. Corre la medición
    rápida.
 2. Corrige el extractor con el arreglo más local que resuelva la causa:
-   - Prefiere la definición de la ley en `extractor/estatales/<estado>.py`
-     (`notas`, `notas_previas`, `notas_en_linea`, `huecos`,
-     `titulos_encabezado`) o una regla detrás del flag `estatal` de
-     `extractor/parsers/articulado.py` (`parse_texto(..., estatal=...)`, que
-     vale para toda ley con `medio`), y dentro de ella, condiciones que solo
-     cumpla el formato que falla.
-   - Evita tocar reglas generales (`normalize.py`, `modelo.py`, la geometría de
-     los cortes, lo que no está detrás de `estatal`): las comparten todas las
-     leyes. Hazlo solo si la medición muestra que lo demás no cambia o que
-     cada cambio es una mejora clara.
+   - Ley estatal: lo propio de su fuente vive en el módulo de su estado,
+     `extractor/estatales/<estado>.py`, y así no cambia la lectura de los
+     demás estados ni la de las leyes federales. Por orden de preferencia:
+     1. La definición de la ley (`notas`, `notas_previas`, `notas_en_linea`,
+        `huecos`, `titulos_encabezado`).
+     2. Un paso sobre el texto ya limpio, antes de segmentar: una función
+        `texto -> texto` en el módulo del estado, declarada en su perfil
+        (`PERFIL = ESTATAL_BASE.con(pre_texto=(mi_paso,))`).
+     3. Si hace falta una rama dentro del parser: un `Rasgo` nuevo en
+        `extractor/perfil.py`, la rama en `extractor/parsers/articulado.py`
+        condicionada a `lee(Rasgo.TU_RASGO)` y el rasgo declarado solo en el
+        perfil de ese estado (`PERFIL = ESTATAL_BASE.con(Rasgo.TU_RASGO)`).
+        No lo agregues a `HEREDADOS`: una prueba lo impide.
+     Si el módulo ya tiene `PERFIL`, súmale lo tuyo; no declares otro.
+   - Evita tocar lo que leen todas las leyes (`normalize.py`, `modelo.py`, la
+     geometría de los cortes, las ramas de `articulado.py` que no consultan un
+     rasgo, los rasgos de `HEREDADOS`). Hazlo solo si la causa es de verdad
+     general y la medición muestra que lo demás no cambia o que cada cambio
+     es una mejora clara.
    - Un patrón, no un parche para un artículo.
 3. Agrega una prueba de regresión en un archivo NUEVO,
    `tests/test_reparacion_<tema>.py`, con el renglón o los renglones del PDF
