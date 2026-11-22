@@ -138,7 +138,8 @@ _NOTA_VERBO_PRIMERO = re.compile(rf"\(?\s*{_VERBO}[OA]S?\b", re.IGNORECASE)
 FRACCION = re.compile(r"(?:[IVXLCDM]+|[a-zñ]{1,3}|[A-Z]|\d{1,3})\s*[.)\-]")
 FIN_DE_ORACION = re.compile(r"[.;:)…”\"»!?\]]$|[.;:,]\s*[yoeu]$|\.[”\"»]?\s*_?$")
 
-_SUFIJO = (r"(?:BIS|TER|QU[ÁA]TER|QUINTUS|QUINQUIES|SEXIES|SEPTIES|OCTIES|NONIES|NOVIES"
+_SUFIJO = (r"(?:BIS|TER|QU[ÁA]TER|QUINTUS|QUINQUIES|SEXTUS|SEXIES|S[ÉE]PTIMUS|SEPTIES|OCTAVUS|OCTIES"
+           r"|NONIES|NOVIES"
            r"|[A-Z]*DECIES|[A-Z]|\d{1,2})")
 _ROTULO = (rf"(?:ART[ÍI]CULO|Art[íi]culo|ART\.|Art\.)\s*(?P<n>\d+)[°ºo]?\.?\s*(?:\(SIC\)\s*)?"
            rf"(?P<suf>(?:[\s\-]{{0,2}}(?i:{_SUFIJO})\b){{0,3}})\s*\.?\s*[\-–—.]")

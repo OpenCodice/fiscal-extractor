@@ -37,10 +37,34 @@ NOTA_NORMATECA_RE = re.compile(
 # Marcadores de fracción / inciso / apartado: "I.", "a)", "1.", "A. ".
 STRUCT_MARKER_RE = re.compile(r"^(?:[IVXLCDM]+\.|[a-z]\)|\d+\.|[A-Z]\.\s)")
 SENTENCE_END_RE = re.compile(r"[.:;]$")
+# Un número o un romano con punto que abre el renglón no es un marcador si el
+# renglón de arriba lo deja pendiente: '…lo dispuesto en el artículo' / '457.',
+# '…a partir del 1 de enero de' / '2016.'. Tras una conjunción ('…en los
+# artículos 2027 y' / '2028.') solo si el número va solo o le sigue una
+# minúscula: '…anterior al delito y' / 'VIII.- Los que…' sí abre una fracción.
+NUMERO_AL_INICIO_RE = re.compile(r"^(?:\d+|[IVXLCDM]+)\.")
+NUMERO_SUELTO_RE = re.compile(r"^(?:\d+|[IVXLCDM]+)\.(?:$|\s+[a-záéíóúüñ])")
+DEJA_PENDIENTE_RE = re.compile(
+    r"\b(?:art[íi]culos?|fracci[oó]n|fracciones|p[áa]rrafos?|incisos?|numeral(?:es)?|"
+    r"del?|al|en|entre|los|las|el|la)$", re.IGNORECASE)
+CONJUNCION_FINAL_RE = re.compile(r"(?<![,;])\s[yoeua]$")
+# '…conforme a lo establecido en los artículos 31, 149 o' / '172. La impugnación…':
+# la lista de artículos o fracciones que cierra en conjunción sigue en su último número.
+CITA_ABIERTA_RE = re.compile(
+    r"\b(?:art[íi]culos|fracciones)\s+[\dIVXLC][\dIVXLC°ºo.,\s]*\s[yoeu]$", re.IGNORECASE)
+# '0.75 metros de profundidad;' abre con un decimal, no con el marcador '0.'.
+DECIMAL_AL_INICIO_RE = re.compile(r"^\d+\.\d")
 
 
 # Párrafo que solo dice que el texto fue derogado: 'DEROGADO. P.O. 20 DE MAYO DE 2022.'
 DEROGADO_SUELTO_RE = re.compile(r"DEROGAD[OA]\.\s+P\.\s?O\.\s+\d{1,2}\s+DE\s+[A-ZÁÉÍÓÚ]+\s+DE\s+\d{4}\.?")
+
+
+def _numero_pendiente(anterior: str, s: str) -> bool:
+    if not NUMERO_AL_INICIO_RE.match(s):
+        return False
+    return bool(DEJA_PENDIENTE_RE.search(anterior) or CITA_ABIERTA_RE.search(anterior)
+                or (CONJUNCION_FINAL_RE.search(anterior) and NUMERO_SUELTO_RE.match(s)))
 
 
 def _is_reform_note(line: str) -> bool:
@@ -48,7 +72,8 @@ def _is_reform_note(line: str) -> bool:
 
 
 def _is_struct_marker(line: str) -> bool:
-    return bool(STRUCT_MARKER_RE.match(line.strip()))
+    s = line.strip()
+    return bool(STRUCT_MARKER_RE.match(s)) and not DECIMAL_AL_INICIO_RE.match(s)
 
 
 def _note_is_complete(note: str) -> bool:
@@ -160,6 +185,8 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             corte = cortes.get((f"{rotulo_solo} {anterior}", originales[i]))
         if _is_struct_marker(s):
             sigue = corte is False and not SENTENCE_END_RE.search(buf[-1])
+            if not sigue and corte is None and buf and _numero_pendiente(buf[-1], s):
+                sigue = True
         else:
             sigue = corte is False or (corte is None and not (buf and SENTENCE_END_RE.search(buf[-1])))
             # Ley estatal: un ';' a media oración ('…a su testamento;' / 'si no
@@ -168,9 +195,9 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             if (not sigue and cortes and corte is None and buf and buf[-1].endswith(";")
                     and re.match(r"[a-záéíóúüñ]{2,}\s", s) and not re.match(r"[a-zñ]{1,4}[.)]\s", s)):
                 sigue = True
-            # Ley estatal: la conjunción sola en su renglón ('…que se impugnó;' /
+            # La conjunción sola en su renglón ('…que se impugnó;' /
             # 'y' / 'III. Por consulta…') cierra la fracción de arriba.
-            if (not sigue and cortes and corte is None and buf and buf[-1].endswith(";")
+            if (not sigue and corte is None and buf and buf[-1].endswith(";")
                     and re.fullmatch(r"[yoeu]", s)):
                 sigue = True
             # Ley estatal: el punto de un ordinal abreviado ('…del artículo 3o.' /

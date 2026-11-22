@@ -46,16 +46,31 @@ HEADER_PREFIXES = (
 # - El ordinal (Bis/Ter/...) admite separador espacio, punto o guion, en cualquier caja.
 # - Se tolera un punto espurio tras la palabra ("Artículo. 88.", errata del
 #   Reglamento de la Ley Aduanera): la validación de secuencia filtra falsos positivos.
-ORDINALES = "Bis|Ter|Qu[aá]ter|Quintus|Quinquies|Sexies|Septies|Octies|Nonies|Decies"
+# Los compuestos van antes que su raíz ('Quaterdecies' antes que 'Quáter'): la
+# Ley de Aviación Civil llega a 'Artículo 78 Novodecies'. El Código de Justicia
+# Militar sigue a 'Quintus' con 'Sextus' y 'Séptimus'.
+ORDINALES = ("Undecies|Duodecies|Terdecies|Quaterdecies|Quinquiesdecies|Quindecies|Sexiesdecies|"
+             "Sexdecies|Septiesdecies|Septdecies|Octiesdecies|Octodecies|Noviesdecies|Novodecies|"
+             "Bis|Ter|Qu[aá]ter|Quintus|Quinquies|Sextus|Sexies|S[ée]ptimus|Septies|Octavus|Octies|"
+             "Nonies|Novies|Decies")
 ARTICULO_RE = re.compile(
-    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art[íi]culos(?=\s+\d+\s*[oº°]?\.-))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)\s*(?:/[oº°]|[oº°])?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército)
+    r"^[\"“]?(?:Art[íi]culo|ART[IÍ]CULO|Art[íi]culos(?=\s+\d+\s*[oº°]?\.-))\.?\s+(\d{1,3}(?:,\d{3})+|\d+)(?:\s*(?:/[oº°]|[º°])|o|(?<=\D\d)\s+o)?\.?"  # "Artículo"/"ARTÍCULO" + número ('2/o' de la Ley Orgánica del Ejército; la 'o' separada solo es ordinal tras una cifra: 'Artículo 228 o.-' es la letra)
 
-    r"(?:(?:-(?=[A-Z])|\s(?=[A-Z][.\-]))([A-Z])(?![A-Za-z]))?"  # letra "-A" PEGADA o " A." (118 A.)
+    r"(?:(?:-(?=[A-Z])|(?<=\d)-\s(?=[A-Z]\.-)|\s(?=[A-Z](?:[.\-]|\s+(?i:bis)\b)|[a-z](?:\s+bis)?\.-))"
+    r"([A-Z]|[a-z](?=(?:\s+bis)?\.-))(?![A-Za-z]))?"  # letra "-A" PEGADA, " A." (118 A.), "- B.-", " C Bis" o " a.-" (228 a.-)
     r"(?:-(\d{1,2})(?=[\s.\-(]|$))?"                 # numeral con guion: "58-1", "195-L-4"
     rf"(?:[\s.\-]+(?i:({ORDINALES}))"               # ordinal
     r"(?:[\s\-]+(\d+)(?:\s+([A-Z])(?=[.\-]|\s*$))?)?)?"  # numeral ("Bis 1") y letra ("Bis 35 A.-")
     r"(?:\s*\.?-?(?:\s|$|\()|\.-(?=\S))"             # separador final (o ".-" pegado al texto)
 )
+
+_CITA_DE_ESTA_LEY_RE = re.compile(
+    r"(?:(?:de|del)\s+(?:este|esta|la presente|el presente)\s+"
+    r"(?:c[óo]digo|ley|ordenamiento|reglamento)\b|siguiente\b)", re.IGNORECASE)
+
+# Un renglón con verbo conjugado es una oración del texto, no el nombre de un
+# capítulo ('Las personas morales deberán calcular el impuesto.').
+_ORACION_RE = re.compile(r"\b(?:se|es|son|que|no|\w+rán?|\w+rían?)\b", re.IGNORECASE)
 
 # Las leyes estatales (ver estatal.py) admiten además lo que sus PDF escriben y
 # los de la Cámara no: el rótulo en plural ('ARTÍCULOS 50.-', 'Artículos 175.'),
@@ -253,8 +268,9 @@ TRANSITORIOS_RE = re.compile(
     re.MULTILINE,
 )
 
-# Pie de página: "1 de 377" (Cámara) o "51 / 131" (normateca SAT).
-PAGE_FOOTER_RE = re.compile(r"^\d{1,4}\s*(?:de|/)\s*\d{1,4}$")
+# Pie de página: "1 de 377" (Cámara), "Página 1 de 9" (Ley de Organizaciones
+# Ganaderas) o "51 / 131" (normateca SAT).
+PAGE_FOOTER_RE = re.compile(r"^(?:P[áa]gina\s+)?\d{1,4}\s*(?:de|/)\s*\d{1,4}$")
 
 # Fechas de reforma (DOF). Una cláusula puede encadenar varias con coma.
 DOF_CLAUSE_RE = re.compile(r"DOF\s+(\d{2}-\d{2}-\d{4}(?:\s*,\s*\d{2}-\d{2}-\d{4})*)")
@@ -381,12 +397,29 @@ def _quitar_encabezados(page_text: str, titulos: tuple[str, ...],
                         prefijos: tuple[str, ...] = HEADER_PREFIXES) -> str:
     fuera = tuple(t.strip() for t in titulos)
     lineas = []
+    vistas = 0
     for line in page_text.splitlines():
         s = line.strip()
-        if (prefijos and s.startswith(prefijos)) or PAGE_FOOTER_RE.match(s) or s in fuera:
+        vistas += bool(s)
+        if (_es_membrete(s, prefijos, vistas <= RENGLONES_DE_MEMBRETE)
+                or PAGE_FOOTER_RE.match(s) or s in fuera):
             continue
         lineas.append(line)
     return "\n".join(lineas)
+
+
+# El membrete de la Cámara va en los primeros renglones de cada página. Más
+# abajo, un renglón que empieza igual es texto de la ley ('…a través de la' /
+# 'Secretaría General de Servicios Administrativos.', Reglamento del Senado),
+# salvo que sea el membrete completo (un PDF con dos páginas por hoja).
+RENGLONES_DE_MEMBRETE = 6
+_MEMBRETE_COMPLETO_RE = re.compile(
+    r"CÁMARA DE DIPUTADOS\b|Secretaría General(?:\s+Secretaría de Servicios Parlamentarios.*)?$"
+    r"|Secretaría de Servicios Parlamentarios\b")
+
+
+def _es_membrete(s: str, prefijos: tuple[str, ...], arriba: bool) -> bool:
+    return bool(prefijos) and s.startswith(prefijos) and (arriba or bool(_MEMBRETE_COMPLETO_RE.match(s)))
 
 
 def _titulo_corrido(paginas: list[str]) -> tuple[str, ...]:
@@ -1707,10 +1740,14 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             v = jer[ultimo_nivel]
             jer[ultimo_nivel] = f"{v}{' ' if '. ' in v or ultimo_nivel == 'epigrafe' else '. '}{linea}"
 
+    def es_cita_federal(s: str, am: re.Match) -> bool:
+        return (not estatal and not re.search(r"[.\-:]", s[am.end(1):am.end()])
+                and bool(_CITA_DE_ESTA_LEY_RE.match(s[am.end():])))
+
     def abre_articulo(s: str, i: int | None = None) -> bool:
         """¿`s` (renglón `i`) abre un artículo que la secuencia aceptaría ahora mismo?"""
         am = ART.match(s)
-        if not am:
+        if not am or es_cita_federal(s, am):
             return False
         numero, sufijo = int(am.group(1).replace(",", "")), bool(am.group(2) or am.group(3) or am.group(4))
         return ((numero == esperado and not sufijo)
@@ -1894,6 +1931,18 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     and not stripped.isupper() and not es_nota_bloque(stripped)
                     and ((not estricto and siguiente_abre(i)) or nota_y_articulo(i))):
                 pendiente = (nivel, encabezado, [*partes, stripped])
+                continue
+            # Federal: 'CAPITULO IV' / 'De la Consignación Mercantil.' — el nombre
+            # de un solo renglón que cierra con punto, con el artículo (o la nota
+            # del encabezado y el artículo) justo debajo. Sin esto quedaba como
+            # último párrafo del artículo anterior.
+            if (not estatal and not partes and stripped.endswith(".") and not stripped.endswith("..")
+                    and len(stripped) <= 80 and not re.search(r"[.;:]\s", stripped)
+                    and not _ORACION_RE.search(stripped)
+                    and _es_nombre_encabezado(stripped[:-1], False, True)
+                    and not es_nota_bloque(stripped) and not ART.match(stripped)
+                    and (siguiente_abre(i) or nota_y_articulo(i))):
+                pendiente = (nivel, encabezado, [stripped])
                 continue
             # Estatal: el nombre de un Título en caja normal que cierra con punto
             # ('TÍTULO DÉCIMO' / 'Del Tribunal de Conciliación y Arbitraje.') y al
@@ -2116,6 +2165,12 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     and not re.search(r"[.\-:]", stripped[am.end(1):am.end()])
                     and re.match(r"(?:de|del)\s+(?:este|esta|la presente|el presente)\s+"
                                  r"(?:c[óo]digo|ley|ordenamiento)\b", stripped[am.end():])):
+                es_siguiente = es_variante = False
+            # Federal: la ley que escribe sus citas con mayúscula ('…a que se
+            # refiere el' / 'Artículo 74 de esta Ley, según…', Ley de Ahorro y
+            # Crédito Popular) cita justo el artículo que sigue: sin punto ni
+            # guion tras el número y con 'de esta Ley' o 'siguiente', es la cita.
+            if actual is not None and es_cita_federal(stripped, am):
                 es_siguiente = es_variante = False
             if es_siguiente or es_variante:
                 abiertos.add(clave)

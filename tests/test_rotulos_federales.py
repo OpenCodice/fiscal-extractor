@@ -1,0 +1,116 @@
+"""Rótulos de artículo de las leyes federales que el parser no reconocía y que
+dejaban un artículo dentro del anterior, sin archivo propio, y números que el
+renglón de arriba deja pendientes y se leían como marcador de inciso."""
+import pytest
+
+from extractor.normalize import normalize_body
+from extractor.parsers.articulado import ARTICULO_RE
+
+
+@pytest.mark.parametrize("renglon, grupos", [
+    # LGTOC: la letra en minúscula, con espacio.
+    ("Artículo 228 a.- Los certificados de participación", ("228", "a", None, None)),
+    ("Artículo 228 a bis.- Los “certificados de vivienda”", ("228", "a", None, "bis")),
+    # La «o» separada de un número de varias cifras es la letra, no el ordinal.
+    ("Artículo 228 o.- Los términos y condiciones", ("228", "o", None, None)),
+    # LGOAAC: el guion separado de la letra.
+    ("Artículo 81- B.- Para operar como centro cambiario", ("81", "B", None, None)),
+    # LFPA: letra y ordinal separados por espacios.
+    ("Artículo 69 C Bis.- Asimismo, a efecto de facilitar", ("69", "C", None, "Bis")),
+    # Ley de Aviación Civil, Ley de Aeropuertos, LGAMVLV: ordinales tras Decies.
+    ("Artículo 78 Undecies. La Agencia Federal de Aviación", ("78", None, None, "Undecies")),
+    ("ARTICULO 73 QUINQUIESDECIES. Las personas concesionarias", ("73", None, None, "QUINQUIESDECIES")),
+    ("ARTÍCULO 34 Quaterdecies.- En caso de que la persona", ("34", None, None, "Quaterdecies")),
+    ("Artículo 78 Novodecies. La persona concesionaria", ("78", None, None, "Novodecies")),
+    # Código de Justicia Militar.
+    ("Artículo 30 Séptimus.- Para ser titular de un Juzgado", ("30", None, None, "Séptimus")),
+    ("Artículo 30 Sextus.- Los Juzgados Militares", ("30", None, None, "Sextus")),
+])
+def test_rotulos_que_abren_articulo(renglon, grupos):
+    m = ARTICULO_RE.match(renglon)
+    assert m and m.groups()[:4] == grupos
+
+
+@pytest.mark.parametrize("renglon, grupos", [
+    ("Artículo 14-A.- Texto", ("14", "A", None, None)),
+    ("Artículo 17-H Bis. Texto", ("17", "H", None, "Bis")),
+    ("Artículo 118 A. Texto", ("118", "A", None, None)),
+    ("Artículo 12 Quáter.- Texto", ("12", None, None, "Quáter")),
+    ("Artículo 2 o.- Texto", ("2", None, None, None)),
+    ("Artículo 10o.- Texto", ("10", None, None, None)),
+    # La preposición tras el número no es la letra del artículo.
+    ("Artículo 5 a que se refiere", ("5", None, None, None)),
+    ("Artículo 3 A falta de disposición", ("3", None, None, None)),
+])
+def test_rotulos_que_no_cambian(renglon, grupos):
+    assert ARTICULO_RE.match(renglon).groups()[:4] == grupos
+
+
+def test_numero_que_el_renglon_anterior_deja_pendiente():
+    cuerpo = ("Artículo 474.- Se aplicará, observándose, en su caso, lo dispuesto en el artículo\n"
+              "457.\nEl juez resolverá.")
+    assert normalize_body(cuerpo, "x") == (
+        "Se aplicará, observándose, en su caso, lo dispuesto en el artículo 457.\n\nEl juez resolverá.")
+    cuerpo = "Artículo 1983.- Se regirá por lo dispuesto en los artículos 2027 y\n2028."
+    assert normalize_body(cuerpo, "x") == "Se regirá por lo dispuesto en los artículos 2027 y 2028."
+    cuerpo = "Artículo 82.- La multa de la fracción\nXXXIV. se aplicará así."
+    assert normalize_body(cuerpo, "x") == "La multa de la fracción XXXIV. se aplicará así."
+
+
+def test_la_fraccion_tras_una_conjuncion_sigue_abriendo_parrafo():
+    cuerpo = ("Artículo 13.- Son autores:\nVII.- Los que auxilien al delincuente, en cumplimiento de una promesa anterior al delito y\n"
+              "VIII.- Los que sin acuerdo previo, intervengan con otros.")
+    assert normalize_body(cuerpo, "x").split("\n\n")[-1].startswith("VIII.- Los que")
+
+
+def test_un_inciso_numerado_sigue_abriendo_parrafo():
+    cuerpo = "Artículo 1.- Son entidades:\n1. Aguascalientes, y\n2. Baja California\n3. Colima;\nI. Otra cosa"
+    assert normalize_body(cuerpo, "x") == (
+        "Son entidades:\n\n1. Aguascalientes, y\n\n2. Baja California\n\n3. Colima;\n\nI. Otra cosa")
+
+
+def test_nombre_de_capitulo_con_punto_no_es_texto_del_articulo_anterior():
+    from extractor.parsers.articulado import parse_texto
+    texto = ("Artículo 391.- Salvo pacto en contrario, el cedente responderá de la legitimidad del crédito.\n"
+             "CAPITULO IV\nDe la Consignación Mercantil.\nCapítulo adicionado DOF 05-06-2000\n"
+             "Artículo 392.- La consignación mercantil es el contrato.")
+    us = parse_texto(texto, start=391)
+    assert [u.clave for u in us] == ["391", "392"]
+    assert "Consignación" not in us[0].cuerpo
+    assert "Consignación Mercantil" in us[1].capitulo
+
+
+def test_cita_con_mayuscula_del_articulo_siguiente_no_lo_abre():
+    from extractor.parsers.articulado import parse_texto
+    texto = ("Artículo 73.- El Comité clasificará a las Sociedades en las categorías a que se refiere el\n"
+             "Artículo 74 de esta Ley, según su adecuación a los Niveles de Capitalización.\n"
+             "Artículo 74.- De manera enunciativa y no limitativa, deberán cumplir con las medidas.")
+    us = parse_texto(texto, start=73)
+    assert [u.clave for u in us] == ["073", "074"]
+    assert "según su adecuación" in us[0].cuerpo
+    assert us[1].cuerpo.startswith("Artículo 74.- De manera enunciativa")
+
+
+def test_conjuncion_sola_cierra_la_fraccion_de_arriba():
+    cuerpo = "Artículo 242.- Se impondrá:\nVII.- Al que haga uso indebido de ellos;\ny\nVIII.- Al que a sabiendas hiciere uso."
+    assert normalize_body(cuerpo, "x") == (
+        "Se impondrá:\n\nVII.- Al que haga uso indebido de ellos; y\n\nVIII.- Al que a sabiendas hiciere uso.")
+
+
+def test_decimal_y_lista_de_articulos_no_abren_parrafo():
+    cuerpo = "Artículo 3.- El recipiente deberá ser de cuando menos de 2.0 metros de ancho por\n0.75 metros de profundidad;"
+    assert normalize_body(cuerpo, "x").count("\n\n") == 0
+    cuerpo = "Artículo 56.- Conforme a lo establecido en los artículos 31, 149 o\n172. La impugnación sólo se admitirá."
+    assert normalize_body(cuerpo, "x") == "Conforme a lo establecido en los artículos 31, 149 o 172. La impugnación sólo se admitirá."
+
+
+def test_cita_del_articulo_siguiente_tras_un_parrafo_sin_punto():
+    from extractor.parsers.articulado import parse_texto
+    texto = ("Artículo 10.- Las Sociedades que tengan registrados un monto.\n"
+             "Las Sociedades deberán cumplir con lo dispuesto en el\nArtículo 11 de la presente Ley.\n"
+             "Las Sociedades, una vez autorizadas, podrán solicitar el cambio.\n"
+             "Artículo 11.- La solicitud de autorización deberá acompañarse de lo siguiente:\nI. Las bases.")
+    us = parse_texto(texto, start=10)
+    assert [u.clave for u in us] == ["010", "011"]
+    assert "lo dispuesto en el\nArtículo 11 de la presente Ley." in us[0].cuerpo
+    assert us[1].cuerpo.startswith("Artículo 11.- La solicitud")
