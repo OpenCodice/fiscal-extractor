@@ -190,6 +190,7 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             continue
         if cortes and buf and re.match(r"\*N\. de E\.", s):
             flush_buf()                 # la nota del editor es su propio párrafo
+        conjuncion_final = False
         corte = cortes.get((anterior, originales[i])) if cortes and buf else None
         if (corte is None and cortes and buf and rotulo_solo and len(buf) == 1
                 and not blocks_texto(blocks)):
@@ -211,6 +212,9 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             if (not sigue and corte is None and buf and buf[-1].endswith(";")
                     and re.fullmatch(r"[yoeu]", s)):
                 sigue = True
+                # …y con ella acaba ese párrafo: lo que sigue es el inciso
+                # siguiente aunque su marcador no se reconozca ('c. Preparará…').
+                conjuncion_final = not cortes
             # Ley estatal: el punto de un ordinal abreviado ('…del artículo 3o.' /
             # 'de la Constitución…') no cierra la oración si sigue una minúscula.
             if (not sigue and cortes and corte is None and buf
@@ -239,6 +243,8 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
         buf.append(s)
         anterior = originales[i]
         i += 1
+        if conjuncion_final:
+            flush_buf()
 
     flush_buf()
     # Ley estatal: un renglón de tarifa que cierra el artículo ('Unidad Fiscal

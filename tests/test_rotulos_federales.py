@@ -226,3 +226,11 @@ def test_una_formula_sigue_siendo_formula():
     from extractor.parsers.articulado import MARCA_FORMULA, bloques_ilegibles
     formula = "Donde:\n" + "\n".join(["C", "i,t", "\uf03d", "x1", "b", "c", "d", "x2", "f", "g", "h", "i", "j", "k"])
     assert [m for _, _, m in bloques_ilegibles(formula)] == [MARCA_FORMULA]
+
+
+def test_tras_la_conjuncion_sola_empieza_otro_parrafo():
+    cuerpo = ("Artículo 58.- La Secretaría:\nb. Entregará las credenciales, en los términos del inciso anterior;\n"
+              "y\nc. Preparará la lista de los Senadores electos.")
+    assert normalize_body(cuerpo, "x").split("\n\n")[1:] == [
+        "b. Entregará las credenciales, en los términos del inciso anterior; y",
+        "c. Preparará la lista de los Senadores electos."]
