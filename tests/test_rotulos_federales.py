@@ -3,8 +3,13 @@ dejaban un artículo dentro del anterior, sin archivo propio, y números que el
 renglón de arriba deja pendientes y se leían como marcador de inciso."""
 import pytest
 
-from extractor.normalize import normalize_body
+from extractor.normalize import normalize_body as _normalize_body
 from extractor.parsers.articulado import ARTICULO_RE
+
+
+def normalize_body(cuerpo, etiqueta):
+    """Como normaliza el articulado de una ley federal."""
+    return _normalize_body(cuerpo, etiqueta, citas_pendientes=True)
 
 
 @pytest.mark.parametrize("renglon, grupos", [
@@ -100,6 +105,9 @@ def test_conjuncion_sola_cierra_la_fraccion_de_arriba():
 def test_decimal_y_lista_de_articulos_no_abren_parrafo():
     cuerpo = "Artículo 3.- El recipiente deberá ser de cuando menos de 2.0 metros de ancho por\n0.75 metros de profundidad;"
     assert normalize_body(cuerpo, "x").count("\n\n") == 0
+    # Las filas de una tarifa que abren con un decimal siguen una por renglón.
+    tarifa = "Artículo 168.- Salario base de cotización del trabajador Cuota Patronal\n1.00 SM* 3.150%\n1.01 SM a 1.50 UMA** 4.202%\n1.51 a 2.00 UMA 6.552%"
+    assert normalize_body(tarifa, "x").count("\n\n") == 3
     cuerpo = "Artículo 56.- Conforme a lo establecido en los artículos 31, 149 o\n172. La impugnación sólo se admitirá."
     assert normalize_body(cuerpo, "x") == "Conforme a lo establecido en los artículos 31, 149 o 172. La impugnación sólo se admitirá."
 
@@ -234,3 +242,10 @@ def test_tras_la_conjuncion_sola_empieza_otro_parrafo():
     assert normalize_body(cuerpo, "x").split("\n\n")[1:] == [
         "b. Entregará las credenciales, en los términos del inciso anterior; y",
         "c. Preparará la lista de los Senadores electos."]
+
+
+def test_las_reglas_y_anexos_no_unen_sus_numeros():
+    # Sin `citas_pendientes` (reglas, anexos y criterios del SAT) nada cambia.
+    cuerpo = "Regla 2.1.- Para los efectos de la\n2.1.1. Los contribuyentes podrán optar;\ny\n2.1.2. Otra cosa."
+    assert _normalize_body(cuerpo, "x").split("\n\n") == [
+        "Regla 2.1.- Para los efectos de la", "2.1.1. Los contribuyentes podrán optar;", "y", "2.1.2. Otra cosa."]

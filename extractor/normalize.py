@@ -46,14 +46,13 @@ NUMERO_AL_INICIO_RE = re.compile(r"^(?:\d+|[IVXLCDM]+)\.")
 NUMERO_SUELTO_RE = re.compile(r"^(?:\d+|[IVXLCDM]+)\.(?:$|\s+[a-záéíóúüñ])")
 DEJA_PENDIENTE_RE = re.compile(
     r"\b(?:art[íi]culos?|fracci[oó]n|fracciones|p[áa]rrafos?|incisos?|numeral(?:es)?|"
-    r"del?|al|en|entre|los|las|el|la)$", re.IGNORECASE)
+    r"del?|al|en|entre|por|los|las|el|la|(?:mayor|menor|igual|superior|inferior|equivalente) a)$",
+    re.IGNORECASE)
 CONJUNCION_FINAL_RE = re.compile(r"(?<![,;])\s[yoeua]$")
 # '…conforme a lo establecido en los artículos 31, 149 o' / '172. La impugnación…':
 # la lista de artículos o fracciones que cierra en conjunción sigue en su último número.
 CITA_ABIERTA_RE = re.compile(
     r"\b(?:art[íi]culos|fracciones)\s+[\dIVXLC][\dIVXLC°ºo.,\s]*\s[yoeu]$", re.IGNORECASE)
-# '0.75 metros de profundidad;' abre con un decimal, no con el marcador '0.'.
-DECIMAL_AL_INICIO_RE = re.compile(r"^\d+\.\d")
 
 
 # Párrafo que solo dice que el texto fue derogado: 'DEROGADO. P.O. 20 DE MAYO DE 2022.'
@@ -83,8 +82,7 @@ def _is_reform_note(line: str) -> bool:
 
 
 def _is_struct_marker(line: str) -> bool:
-    s = line.strip()
-    return bool(STRUCT_MARKER_RE.match(s)) and not DECIMAL_AL_INICIO_RE.match(s)
+    return bool(STRUCT_MARKER_RE.match(line.strip()))
 
 
 def _note_is_complete(note: str) -> bool:
@@ -102,7 +100,8 @@ def blocks_texto(blocks: list[str]) -> bool:
 
 def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = None,
                    rotulo: re.Pattern = ARTICULO_RE,
-                   cortes: dict[tuple[str, str], bool] | None = None) -> str:
+                   cortes: dict[tuple[str, str], bool] | None = None,
+                   citas_pendientes: bool = False) -> str:
     """Devuelve el cuerpo de la unidad como párrafos, sin la línea de encabezado.
 
     Las notas de reforma quedan en *cursiva* como anotación al pie de su bloque.
@@ -118,6 +117,11 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
     con marcador ('406. Para tal efecto…') solo se une si el anterior no cerró
     con puntuación: un inciso que cierra justo en el margen no se une al
     siguiente.
+
+    `citas_pendientes` (el articulado de las leyes) une el número que el renglón
+    de arriba deja pendiente ('…en el artículo' / '457.') y cierra la fracción
+    con su conjunción sola. Las reglas, los anexos y los criterios del SAT
+    numeran sus renglones ('2.1.1.', las filas de una tarifa) y no lo usan.
     """
     lines = [ln.rstrip() for ln in body.splitlines()]
     originales = [ln.strip() for ln in lines]
@@ -197,7 +201,8 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
             corte = cortes.get((f"{rotulo_solo} {anterior}", originales[i]))
         if _is_struct_marker(s):
             sigue = corte is False and not SENTENCE_END_RE.search(buf[-1])
-            if not sigue and corte is None and buf and _numero_pendiente(buf[-1], s):
+            if (not sigue and citas_pendientes and corte is None and buf
+                    and _numero_pendiente(buf[-1], s)):
                 sigue = True
         else:
             sigue = corte is False or (corte is None and not (buf and SENTENCE_END_RE.search(buf[-1])))
@@ -209,8 +214,8 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
                 sigue = True
             # La conjunción sola en su renglón ('…que se impugnó;' /
             # 'y' / 'III. Por consulta…') cierra la fracción de arriba.
-            if (not sigue and corte is None and buf and buf[-1].endswith(";")
-                    and re.fullmatch(r"[yoeu]", s)):
+            if (not sigue and (cortes or citas_pendientes) and corte is None and buf
+                    and buf[-1].endswith(";") and re.fullmatch(r"[yoeu]", s)):
                 sigue = True
                 # …y con ella acaba ese párrafo: lo que sigue es el inciso
                 # siguiente aunque su marcador no se reconozca ('c. Preparará…').
