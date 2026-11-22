@@ -62,7 +62,7 @@ hay_objetivo() { [ -s "$REP/objetivo.json" ]; }
 
 # Lo que el agente no debe cambiar dentro de extractor/ y tests/: las pruebas
 # que ya existen y la compuerta de fidelidad.
-protegidos() { git ls-files -z -- tests extractor/verificar.py extractor/validate.py; }
+protegidos() { git ls-files -z -- tests extractor/verificar.py extractor/validate.py extractor/forma.py; }
 
 # Sin permiso de escritura, un intento de editarlos falla en el momento y el
 # agente lo ve; el dueño de un archivo puede devolverse el permiso, así que
@@ -202,8 +202,8 @@ comprobaciones() {
   if [ -z "$(git status --porcelain)" ]; then
     MOTIVO="el agente no cambió el extractor"; return 1
   fi
-  if [ -n "$(git status --porcelain -- extractor/verificar.py extractor/validate.py)" ]; then
-    MOTIVO="cambió extractor/verificar.py o extractor/validate.py, que son la compuerta"; return 1
+  if [ -n "$(git status --porcelain -- extractor/verificar.py extractor/validate.py extractor/forma.py)" ]; then
+    MOTIVO="cambió extractor/verificar.py, extractor/validate.py o extractor/forma.py, que son la compuerta"; return 1
   fi
   if [ -n "$(git diff --name-only HEAD -- tests)" ]; then
     MOTIVO="cambió pruebas existentes: $(git diff --name-only HEAD -- tests | head -3 | tr '\n' ' ')"; return 1

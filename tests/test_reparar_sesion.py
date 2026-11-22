@@ -214,7 +214,7 @@ def _descarte(correr, repo, rep) -> str:
     (lambda repo: (repo / "scripts" / "nota.txt").write_text("x"),
      "tocó archivos fuera de extractor/ y tests/: scripts/nota.txt"),
     (lambda repo: (repo / "extractor" / "verificar.py").open("a").write("# x\n"),
-     "cambió extractor/verificar.py o extractor/validate.py, que son la compuerta"),
+     "cambió extractor/verificar.py, extractor/validate.py o extractor/forma.py, que son la compuerta"),
     (lambda repo: (repo / "tests" / "test_existente.py").open("a").write("# x\n"),
      "cambió pruebas existentes: tests/test_existente.py"),
     (lambda repo: (repo / "extractor" / "normalize.py").open("a").write("# x\n"),

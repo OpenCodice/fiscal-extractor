@@ -424,7 +424,7 @@ de `cerrar` y con su propio tiempo:
 4. Un paso del workflow (fuera del alcance del agente) deshace todo si el agente
    tocó algo fuera de `extractor/` y `tests/` o hizo commits, y comprueba que
    el objetivo, los PDF y el repo de datos no cambiaron. `reparar.sh compuertas` (sin secretos)
-   exige: ni `verificar.py` ni `validate.py` ni pruebas existentes tocadas, una
+   exige: ni `verificar.py` ni `validate.py` ni `forma.py` ni pruebas existentes tocadas, una
    prueba nueva, `pytest` en verde, otra huella del extractor (si no, ninguna
    ley se reintentaría), las leyes elegidas reconstruidas con el extractor de
    partida (un `git worktree`) y con el arreglo sin unidades con problemas

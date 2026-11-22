@@ -133,7 +133,7 @@ publicado, con el mismo código que después decide:
 `__COMPROBAR__`
 
 Comprueba que solo tocaste `extractor/` y `tests/`, que no cambiaste pruebas
-existentes ni `verificar.py`/`validate.py`, que hay una prueba nueva, que
+existentes ni `verificar.py`/`validate.py`/`forma.py`, que hay una prueba nueva, que
 `python -m pytest -q` pasa, que el extractor cambió de verdad y que tus leyes,
 reconstruidas con el extractor de partida y con tu arreglo, cambian de texto
 sin ninguna unidad con problemas de auditoría nueva. No modifica tu arreglo.
@@ -154,8 +154,8 @@ la primera vez y una las siguientes: córrelo con un `timeout` de Bash amplio
 ## Compuertas que vienen después de ti
 
 No las controlas y no puedes cambiarlas. El pipeline descarta tu arreglo entero
-si: tocas algo fuera de `extractor/` y `tests/`; tocas `extractor/verificar.py`
-o `extractor/validate.py`; cambias o borras pruebas existentes; no agregas una
+si: tocas algo fuera de `extractor/` y `tests/`; tocas `extractor/verificar.py`,
+`extractor/validate.py` o `extractor/forma.py`; cambias o borras pruebas existentes; no agregas una
 prueba nueva; las pruebas no pasan; el texto de ninguna de estas leyes cambia;
 alguna suma unidades con problemas de auditoría; o cualquier artículo ya
 publicado (federal, fiscal o estatal) cambia y otro agente, que solo juzga
@@ -167,8 +167,8 @@ corrida.
 
 - Solo modificas `extractor/` y `tests/`. Nada en `scripts/`, `.github/`,
   `verificaciones/` ni los briefs: son las compuertas.
-- No modifiques `extractor/verificar.py`, `extractor/validate.py` ni las
-  pruebas existentes para que algo pase. Durante tu sesión están sin permiso
+- No modifiques `extractor/verificar.py`, `extractor/validate.py`,
+  `extractor/forma.py` ni las pruebas existentes para que algo pase. Durante tu sesión están sin permiso
   de escritura; no se lo devuelvas. Tu prueba va en un archivo nuevo.
 - Nunca edites a mano un texto extraído: solo cuenta lo que salga del
   extractor.
