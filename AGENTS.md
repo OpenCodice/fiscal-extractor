@@ -25,6 +25,10 @@ unidad está mal, se corrige aquí.
   (en el articulado, un último párrafo con forma de encabezado: es texto literal
   del PDF pero fuera de lugar) y `auditar`. Guarda el
   texto por página junto al PDF (`*.paginas.json`) porque extraerlo es lo lento.
+- `extractor/forma.py` — chequeos de forma de solo texto (un pie de página
+  colado, un artículo absorbido, una nota pegada): el informe `extractor forma`
+  y, con `scripts/forma_alta.py`, el filtro previo a la revisión completa de un
+  alta de ley estatal. No es parte de `auditar`. Ver «Filtro de forma».
 - `extractor/federal.py` y `cli_federal.py` — el corpus federal: su registro
   se genera del índice de LeyesBiblio y vive en `leyes-federales/fuentes.json`
   (no en `registro.py`). `--registro <archivo>` (o un `fuentes.json` en el repo
@@ -122,6 +126,7 @@ unidad está mal, se corrige aquí.
 .venv/bin/python -m extractor validar --out ../fiscal-mexicano
 .venv/bin/python -m extractor auditar --out ../fiscal-mexicano --pdf-dir /tmp/pdfs
 .venv/bin/python -m extractor verificar --sin-llm --out ../fiscal-mexicano --pdf-dir /tmp/pdfs
+.venv/bin/python -m extractor forma --out ../leyes-estatales   # informe de forma; no es compuerta
 .venv/bin/python -m pytest -q            # rápido, sin PDFs
 ```
 
@@ -273,6 +278,76 @@ cuando cambia el PDF o el extractor. `federal cerrar` solo publica un alta con
 la marca positiva de su revisión (`revisada`, la pone `revision-federal.sh
 cerrar`): sin ella, se aplaza.
 
+## Filtro de forma
+
+Buena parte de lo que encuentra la revisión completa de un alta se ve en el
+texto solo, sin el PDF. `extractor/forma.py` tiene esos chequeos; cada uno
+devuelve hallazgos con la forma de los de la revisión (`clave`, `nota`, más
+`chequeo`) y la nota cita el texto.
+
+**No son parte de `auditar`.** La auditoría es la compuerta de «sin
+regresiones» de todo lo publicado, y varios chequeos señalan defectos en leyes
+ya publicadas (sobre todo federales): sumarlos mandaría a reparar medio corpus
+de golpe. Tienen dos usos:
+
+- **Filtro de altas** (`scripts/forma_alta.py`, desde
+  `revision-federal.sh`): antes de la revisión completa de una ley estatal
+  que no está publicada (un alta o el reintento de una excluida) corre los
+  chequeos de `forma.FILTRO`. Si encuentran algo, la ley se trata como si la
+  revisión hubiera devuelto esos hallazgos: en `revisar` no se lanza el agente
+  (código 3 de `forma_alta.py filtrar`) y en `cerrar` queda `revision` con su
+  motivo («El filtro de forma… encontró defectos de extracción: …»), se anota
+  en `verificaciones/altas/` con `origen: forma` y en
+  `revision/<ley>/resultado.json`, y entra a la reparación por la vía normal
+  (`reparacion.de_revision` toma de ahí los hallazgos). Si no encuentran nada,
+  la revisión corre como siempre: el filtro ahorra revisiones, nunca pone
+  `revisada`. Las dos fases no guardan estado y deciden lo mismo; un error del
+  filtro cuenta como «no decidió» y la ley pasa por la revisión. No aplica a
+  lo publicado (reformas, `revisar`, `revision_pendiente`) ni al corpus federal.
+- **Informe** (`python -m extractor forma --out <repo de datos> [--doc …]
+  [--chequeo …] [--json …]`): todos los chequeos sobre un repo de datos, para
+  una persona. Siempre sale 0 y ningún workflow lo llama.
+
+**Un falso positivo no deja una ley fuera para siempre.** Un hallazgo del
+filtro (`chequeo` y artículo) que sigue ahí después de un intento de
+reparación de esa ley con el mismo PDF deja de bloquear; cuando todos los que
+quedan son así, el filtro cede y decide la revisión completa
+(`forma_alta.ya_intentados`, comparando el `momento` del registro con el
+identificador del intento en `verificaciones/reparaciones/`). Un falso positivo
+cuesta, a lo más, uno de los 3 intentos de reparación de esa ley y PDF.
+
+**Qué entra al filtro:** solo chequeos sin falsos positivos conocidos en lo
+publicado. Medición del 2026-11-22 sobre las 56 leyes de `leyes-estatales`
+(15,418 artículos), cada acierto revisado contra el PDF:
+
+| Chequeo | Aciertos | En el filtro |
+|---|---|---|
+| `pie_pagina`, `rotulo_interno`, `nota_de_encabezado`, `nota_previa_al_final`, `corte_a_media_oracion`, `epigrafe_siguiente_colado` | 0 | sí |
+| `nota_en_cuerpo` | 2, reales (Querétaro, Colegio de Bachilleres 4 y 8: «(Adición, P.O. No. 19…)» pegada, con la «(Ref. …)» vecina sí separada) | sí |
+| `nota_con_texto` | 1, real (Ley Electoral de Nuevo León 79: un párrafo de la ley marcado como nota; juzgado por el texto, sin su PDF a la mano) | sí |
+| `epigrafe_final_con_punto` | 1, real (Código Electoral de Jalisco 445-N: el nombre del Título siguiente) | sí |
+| `derogado_pegado` | 1, real (CIPE de la CDMX 111, ya con `revision_pendiente`) | sí |
+| `fraccion_huerfana` | 1, real (LIPE de Guanajuato 101: «:» suelto) | sí |
+| `salto_numeracion` | 1, texto fiel (Código Civil de Jalisco 567: el PDF dice «Artículo Niñas, niños…», sin número) | no |
+| `nota_sin_cerrar` | 4, todos en Nuevo León; al menos el del Código Penal 387 Bis es texto fiel (su PDF no cierra el paréntesis, según la revisión de esa ley) | no |
+
+Sobre 18 leyes reconstruidas con el extractor del día de su primera revisión
+con hallazgos (mismo PDF), el filtro habría dejado fuera 15 sin gastar esa
+revisión, y coincidió con el revisor en 201 de sus 270 artículos. Un chequeo
+nuevo, o uno que cambia, se mide igual antes de entrar a `FILTRO`
+(`tests/test_forma.py` fija qué chequeos quedan fuera y por qué). Lo que el
+filtro no ve (notas previas mal asignadas, párrafos unidos, tablas, texto
+faltante) lo sigue encontrando la revisión.
+
+Convenciones que los chequeos respetan, porque marcarlas sería señalar texto
+fiel: la prosa entre paréntesis a renglón seguido (Jalisco: «(Esta porción
+normativa fue reformada por Decreto…)»); una nota pegada al párrafo solo es
+defecto si la definición de la ley las separa (`notas_en_linea`) y una nota
+sin cursiva solo si las marca (`notas`); un salto de numeración sin indicio no
+se señala (`huecos`, o un «(SIC)» de la fuente); el rótulo «Artículo N.-» de un
+artículo que sí tiene archivo es una cita; y un numeral solo seguido de su nota
+(«IV.» y «(DEROGADA…)») es una fracción derogada.
+
 ## Uso del agente
 
 Cada sesión (`claude -p`) pasa por `sesion_agente` (`scripts/agente/sesion.sh`),
@@ -363,7 +438,8 @@ de `cerrar` y con su propio tiempo:
    cambió, así que `planear` reintenta las leyes excluidas
    (`reintento`) y manda a revisar otra vez lo publicado con
    `revision_pendiente` (`plan["revisar"]`). Sus bloques sin cambios reusan sus
-   veredictos; solo se paga lo que cambió.
+   veredictos; solo se paga lo que cambió. Una excluida que se reintenta pasa
+   antes por el filtro de forma (ver «Filtro de forma»).
 
 **Las leyes estatales en `FUERA`** (las que la ronda de expansión o su agente
 dejaron fuera porque su extracción no quedaba fiel) tampoco esperan a nadie:
@@ -514,7 +590,9 @@ fase (2026-11-17):
   revisión completa por bloques (`revision-federal.sh` con
   `brief-revision-estatal.md`), de la más corta a la más larga, hasta 2.5
   millones de caracteres por corrida y 4 a la vez; una revisión a medias se
-  aplaza y retoma sus veredictos de la caché de Actions. Los hallazgos de esa
+  aplaza y retoma sus veredictos de la caché de Actions. Antes de gastar la
+  revisión, el filtro de forma deja fuera las que ya delatan defectos en su
+  texto (ver «Filtro de forma»). Los hallazgos de esa
   revisión (y las fallas de la auditoría) los repara un agente en el job
   `reparar` (ver «Reparación autónoma»); un arreglo a mano entra por main y
   pasa por `impacto.yml`, que mide ya también estas leyes
