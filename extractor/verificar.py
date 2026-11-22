@@ -219,8 +219,8 @@ def cobertura(md: str, flujo: Flujo, notas_previas: bool = False) -> list[dict]:
             # El hueco que cubre una marca debe ser fórmula y nada más, según el
             # mismo detector que puso la marca.
             crudo = flujo.texto[flujo.idx[a - 1] + 1:flujo.idx[b]] if b > a else ""
-            if not articulado.bloques_de_formula(crudo) or _norm(
-                    articulado.sustituir_formulas(crudo).replace(_MARCA_SIN_PAGINA, "")):
+            if not articulado.bloques_ilegibles(crudo) or _norm(_sin_marcas(
+                    articulado.sustituir_formulas(crudo))):
                 problemas.append({"tipo": "formula_no_verificada",
                                   "fragmento": " ".join(crudo.split())[:300]})
             return
@@ -258,7 +258,10 @@ def cobertura(md: str, flujo: Flujo, notas_previas: bool = False) -> list[dict]:
     return problemas
 
 
-_MARCA_SIN_PAGINA = articulado.MARCA_FORMULA.replace(", página {pagina}", "")
+def _sin_marcas(texto: str) -> str:
+    for marca in articulado.MARCAS_SIN_PAGINA:
+        texto = texto.replace(marca, "")
+    return texto
 
 
 def encabezado_pegado(md: str, estatal: bool = False) -> list[dict]:

@@ -1012,7 +1012,13 @@ def texto_y_cortes(pdf_path: str, doc: Documento) -> tuple[str, dict[tuple[str, 
 # que remite a la página del PDF; el texto legible alrededor ('Donde:' y las
 # definiciones de variables) se conserva tal cual.
 MARCA_FORMULA = "[Fórmula: consultar el PDF oficial, página {pagina}]"
-MARCA_FORMULA_RE = re.compile(r"^\[Fórmula: consultar el PDF oficial(?:, página \d+)?\]$")
+# Una tabla con los rótulos de sus columnas girados (las cuotas por zona de
+# disponibilidad de la Ley Federal de Derechos) sale igual de desarmada: letras
+# y cifras sueltas, una por renglón, entre las cuotas. Lleva su propia marca.
+MARCA_TABLA = "[Tabla: consultar el PDF oficial, página {pagina}]"
+# Las dos marcas: lo que el PDF no deja leer como texto.
+MARCA_FORMULA_RE = re.compile(r"^\[(?:Fórmula|Tabla): consultar el PDF oficial(?:, página \d+)?\]$")
+MARCAS_SIN_PAGINA = tuple(m.replace(", página {pagina}", "") for m in (MARCA_FORMULA, MARCA_TABLA))
 # Viñetas de las fuentes Symbol y Wingdings (zona de uso privado): no son álgebra.
 _VINETAS = set("\uf0b7\uf0a7\uf0a8\uf0d8\uf076")
 # Signos de operación de la fuente Symbol ('(', ')', '*', '+', '−', '=', '×', '÷',
@@ -1051,6 +1057,65 @@ def es_formula(lineas: list[str]) -> bool:
     return any(_SIMBOLO_RE.search(t) for t in toks)
 
 
+MIN_LINEAS_TABLA = 12
+MIN_SUELTOS_TABLA = 6
+MIN_LETRAS_TABLA = 5
+MAX_RENGLON_TABLA = 45
+_LETRAS_SUELTAS_RE = re.compile(r"[a-zñ]{1,4}(?: [a-zñ]{1,3})*")
+
+
+def _renglon_de_tabla(s: str) -> bool:
+    """Renglón corto que puede ser de una tabla desarmada: ni rótulo de
+    artículo, ni encabezado, ni nota de reforma, ni el cierre de una oración."""
+    s = s.strip()
+    return (bool(s) and len(s) <= MAX_RENGLON_TABLA and "DOF" not in s
+            and not ARTICULO_RE.match(s) and not _es_encabezado(s)
+            and not re.search(r"[a-záéíóúñ]{4,}[.;:]$", s))
+
+
+def es_tabla_girada(lineas: list[str]) -> bool:
+    """¿Un grupo de renglones cortos es una tabla con rótulos girados? Muchos
+    renglones, varios de un solo carácter y varios de letras minúsculas sueltas
+    ('d', 'n a', 'bili'): los pedazos de un rótulo vertical. Una tabla legible
+    no trae letras sueltas, y una lista numerada no llega a los mínimos."""
+    lineas = [s.strip() for s in lineas if s.strip()]
+    if len(lineas) < MIN_LINEAS_TABLA:
+        return False
+    # Con signos de la fuente de símbolos es una fórmula, que tiene su marca.
+    if any(_SIMBOLO_RE.search(s) for s in lineas):
+        return False
+    sueltos = sum(len(s) == 1 for s in lineas)
+    letras = sum(len(s) <= 6 and bool(_LETRAS_SUELTAS_RE.fullmatch(s)) for s in lineas)
+    return sueltos >= MIN_SUELTOS_TABLA and letras >= MIN_LETRAS_TABLA
+
+
+def bloques_de_tabla(texto: str) -> list[tuple[int, int]]:
+    """Rangos de renglones [ini, fin) de cada tabla girada del texto."""
+    lineas = texto.split("\n")
+    bloques: list[tuple[int, int]] = []
+    i = 0
+    while i < len(lineas):
+        if not _renglon_de_tabla(lineas[i]):
+            i += 1
+            continue
+        j = i
+        while j < len(lineas) and _renglon_de_tabla(lineas[j]):
+            j += 1
+        if es_tabla_girada(lineas[i:j]):
+            bloques.append((i, j))
+        i = j
+    return bloques
+
+
+def bloques_ilegibles(texto: str) -> list[tuple[int, int, str]]:
+    """Cada fórmula y cada tabla girada del texto, con su marca. Una fórmula
+    dentro de una tabla es de la tabla."""
+    tablas = bloques_de_tabla(texto)
+    formulas = [(a, b) for a, b in bloques_de_formula(texto)
+                if not any(a < fin and ini < b for ini, fin in tablas)]
+    return sorted([(a, b, MARCA_FORMULA) for a, b in formulas] + [(a, b, MARCA_TABLA) for a, b in tablas])
+
+
 def bloques_de_formula(texto: str) -> list[tuple[int, int]]:
     """Rangos de renglones [ini, fin) que forman cada fórmula del texto."""
     lineas = texto.split("\n")
@@ -1072,13 +1137,13 @@ def bloques_de_formula(texto: str) -> list[tuple[int, int]]:
 
 
 def sustituir_formulas(texto: str, pagina: int | list[int] | None = None) -> str:
-    """El texto con cada fórmula en un párrafo propio con su marca. `pagina` es
+    """El texto con cada fórmula y cada tabla girada en un párrafo propio con su marca. `pagina` es
     la página del texto o, renglón por renglón, la de cada uno."""
     lineas = texto.split("\n")
-    for ini, fin in reversed(bloques_de_formula(texto)):
+    for ini, fin, plantilla in reversed(bloques_ilegibles(texto)):
         n = pagina[ini] if isinstance(pagina, list) else pagina
-        marca = (MARCA_FORMULA.format(pagina=n) if n is not None
-                 else MARCA_FORMULA.replace(", página {pagina}", ""))
+        marca = (plantilla.format(pagina=n) if n is not None
+                 else plantilla.replace(", página {pagina}", ""))
         lineas[ini:fin] = ["", marca, ""]
     return "\n".join(lineas)
 

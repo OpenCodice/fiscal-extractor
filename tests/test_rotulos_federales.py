@@ -169,3 +169,60 @@ def test_inciso_y_numero_solos_tras_un_renglon_sin_puntuacion():
     assert normalize_body(cuerpo, "x") == "Sólo podrá realizarse por las uniones que se ubiquen en el nivel de operaciones III."
     cuerpo = "Artículo 5.- Son requisitos:\nI. Ser mexicano;\nII.\nTener treinta años."
     assert normalize_body(cuerpo, "x").split("\n\n")[2].startswith("II.")
+
+
+TABLA_GIRADA = """Apartado A, del artículo 223 de esta Ley, fuente de extracción aguas superficiales
+e d a
+d
+o r a ZD 1
+Zona de dispon
+2
+ib ilidad importador
+3
+a
+4
+n a
+d
+ni
+bili
+rt a
+d 1
+2
+$
+$
+4
+2
+.
+.
+3 $1.9 759
+ooo
+Z s p x p 3 $1.5829 $0.9174 $0.6475
+die
+4 $1.5102 $0.8306 $0.5062 $0.4954
+Apartado B, fracción I del artículo 223 de esta Ley, fuente de extracción aguas subterráneas"""
+
+
+def test_tabla_con_rotulos_girados_lleva_su_marca():
+    from extractor.parsers.articulado import bloques_ilegibles, sustituir_formulas
+    assert [(a, b) for a, b, _ in bloques_ilegibles(TABLA_GIRADA)] == [(1, 28)]
+    limpio = sustituir_formulas(TABLA_GIRADA, 201).split("\n")
+    assert [x for x in limpio if x] == [
+        "Apartado A, del artículo 223 de esta Ley, fuente de extracción aguas superficiales",
+        "[Tabla: consultar el PDF oficial, página 201]",
+        "Apartado B, fracción I del artículo 223 de esta Ley, fuente de extracción aguas subterráneas"]
+
+
+def test_una_tabla_legible_o_una_lista_no_llevan_marca():
+    from extractor.parsers.articulado import bloques_ilegibles
+    tarifa = "\n".join(["Zona de disponibilidad", "ZD 1 2 3 4"] + [f"{n} $1.{n}599 $0.9174" for n in range(1, 15)])
+    assert bloques_ilegibles(tarifa) == []
+    lista = "Son entidades:\n" + "\n".join(f"{n}. Estado número {n};" for n in range(1, 20))
+    assert bloques_ilegibles(lista) == []
+    cifras = "\n".join(str(n % 10) for n in range(30))
+    assert bloques_ilegibles(cifras) == []
+
+
+def test_una_formula_sigue_siendo_formula():
+    from extractor.parsers.articulado import MARCA_FORMULA, bloques_ilegibles
+    formula = "Donde:\n" + "\n".join(["C", "i,t", "\uf03d", "x1", "b", "c", "d", "x2", "f", "g", "h", "i", "j", "k"])
+    assert [m for _, _, m in bloques_ilegibles(formula)] == [MARCA_FORMULA]

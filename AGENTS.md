@@ -263,6 +263,15 @@ fragmentos sueltos. `articulado` sustituye cada una por un párrafo
 variables) se conserva. `cobertura` no busca la marca literal: exige que el
 texto del PDF que sustituye sea fórmula para el mismo detector.
 
+Una tabla con los rótulos de sus columnas girados sale igual de desarmada
+(letras y cifras sueltas, una por renglón: las cuotas por zona de la Ley
+Federal de Derechos, artículo 223 Bis) y lleva su marca,
+`[Tabla: consultar el PDF oficial, página N]` (`bloques_de_tabla`): muchos
+renglones cortos seguidos, varios de un solo carácter y varios de letras
+minúsculas sueltas, sin signos de la fuente de símbolos. Una tabla legible o
+una lista numerada no llegan a esos mínimos. `cobertura` la comprueba igual
+que la de fórmula (`bloques_ilegibles`).
+
 ## Agregar un documento
 
 Una entrada en `extractor/registro.py`. Las leyes y reglamentos de la Cámara de
