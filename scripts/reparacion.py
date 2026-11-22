@@ -177,6 +177,22 @@ def de_auditoria(r: dict) -> list[dict]:
 
 # ------------------------------------------------------------------ objetivo
 
+def descartes_previos(documento: str, pdf_sha: str, registros: list[dict],
+                      maximo: int = 3, largo: int = 300) -> list[dict]:
+    """Por qué se descartaron los intentos anteriores de reparar `documento`
+    con ese PDF, del más antiguo al más reciente (los últimos `maximo`). El
+    agente los recibe con sus hallazgos para no entregar otra vez lo mismo."""
+    res = []
+    for e in registros:
+        if e["documento"] == documento and e.get("pdf") == pdf_sha \
+                and e.get("resultado") == "descartado":
+            motivo = " ".join(str(e.get("motivo") or "").split())
+            if len(motivo) > largo:
+                motivo = motivo[:largo].rstrip() + "…"
+            res.append({"intento": e["intento"], "fecha": e.get("fecha"), "motivo": motivo})
+    return res[-maximo:]
+
+
 def _corpus_docs(corpus: str, fuentes: dict) -> set[str]:
     if corpus == "estatal":
         from extractor.estatales import documentos, fuera
@@ -244,6 +260,7 @@ def candidatos(corpus: str, out: Path, trabajo: Path, con_auditoria: bool,
         e["intentos"] = reparaciones.intentos(c, e["pdf_sha256"], registros)
         if e["intentos"] >= reparaciones.TOPE:
             continue
+        e["descartes"] = descartes_previos(c, e["pdf_sha256"], registros)
         for h in e["hallazgos"]:
             h["categoria"] = categoria(h["nota"])
         res.append(e)

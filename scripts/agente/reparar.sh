@@ -11,7 +11,12 @@
 #   reparar.sh agente — con CLAUDE_CODE_OAUTH_TOKEN y nada más. El agente
 #     cambia extractor/ y tests/ para que desaparezcan los hallazgos, y mide lo
 #     que su arreglo cambia en lo publicado. Esa medición solo le ayuda: deciden
-#     las compuertas.
+#     las compuertas. Durante la sesión las pruebas existentes, verificar.py y
+#     validate.py quedan sin permiso de escritura.
+#   reparar.sh comprobar — lo corre el agente dentro de su sesión, antes de
+#     entregar: las mismas comprobaciones de `compuertas` que no dependen de lo
+#     publicado (la función `comprobaciones`), sobre sus PDF y en su carpeta.
+#     Solo informa (sale 0 si pasan, 1 si no): no descarta ni deja estado.
 #   reparar.sh compuertas — sin secretos ni agente. Alcance (solo extractor/ y
 #     tests/, ni verificar.py ni validate.py ni pruebas existentes, y una prueba
 #     nueva), pruebas, huella del extractor, las leyes elegidas reconstruidas
@@ -38,7 +43,7 @@
 # EXTRACTOR_SLUG o EXTRACTOR_PUSH_URL (pruebas).
 set -uo pipefail
 
-FASE="${1:?uso: reparar.sh medicion|agente|compuertas|publicar|promover}"
+FASE="${1:?uso: reparar.sh medicion|agente|comprobar|compuertas|publicar|promover}"
 EXTRACTOR="$(cd "$(dirname "$0")/../.." && pwd)"
 TRABAJO="${AGENTE_DIR:-/tmp/agente}"
 REP="$TRABAJO/reparacion"
@@ -51,7 +56,19 @@ case "$CORPUS" in
   *)       NOMBRE="leyes federales" ;;
 esac
 
+source "$EXTRACTOR/scripts/agente/sesion.sh"
+
 hay_objetivo() { [ -s "$REP/objetivo.json" ]; }
+
+# Lo que el agente no debe cambiar dentro de extractor/ y tests/: las pruebas
+# que ya existen y la compuerta de fidelidad.
+protegidos() { git ls-files -z -- tests extractor/verificar.py extractor/validate.py; }
+
+# Sin permiso de escritura, un intento de editarlos falla en el momento y el
+# agente lo ve; el dueño de un archivo puede devolverse el permiso, así que
+# quien decide sigue siendo `compuertas`.
+proteger() { protegidos | xargs -0 chmod a-w 2>/dev/null || true; }
+desproteger() { protegidos | xargs -0 chmod u+w 2>/dev/null || true; }
 
 MEDICION="$REP/medicion"
 CACHE="${PDF_CACHE:-/tmp/pdfs-corpus}"
@@ -94,25 +111,46 @@ for e in o["leyes"]:
     if otros:
         lineas.append("  otros hallazgos de esta ley (si comparten causa, también):")
         lineas += [f"  {h['clave']}: {h['nota']}" for h in otros[:10]]
+    if e.get("descartes"):
+        lineas.append("  intentos anteriores con este mismo PDF, descartados (no repitas ese arreglo):")
+        lineas += [f"  - {d.get('fecha') or 's/f'}: {d.get('motivo') or 'sin motivo anotado'}"
+                   for d in e["descartes"]]
 brief = pathlib.Path(extractor, "scripts/agente/brief-reparacion.md").read_text(encoding="utf-8")
 for k, v in {"__EXTRACTOR__": extractor, "__PDFS__": str(rep / "pdfs"),
              "__REGISTRO__": str(rep / "registro.json"), "__TRABAJO__": str(rep),
              "__VEREDICTO__": str(rep / "veredicto.json"), "__DESCRIPCION__": o["descripcion"],
              "__HALLAZGOS__": "\n".join(lineas), "__MEDIR_RAPIDO__": rapido,
              "__MEDIR_COMPLETO__": medir, "__MEDICION__": str(rep / "medicion"),
+             "__COMPROBAR__": f"bash {shlex.quote(extractor + '/scripts/agente/reparar.sh')} comprobar",
+             "__COMPROBACION__": str(rep / "comprobacion"),
              "__LIMITE__": hora(minutos - 5), "__ULTIMA_COMPLETA__": hora(minutos - 50)}.items():
     brief = brief.replace(k, v)
 (rep / "brief.md").write_text(brief, encoding="utf-8")
 PY
   command -v claude > /dev/null || npm install -g @anthropic-ai/claude-code > /dev/null
-  # La medición completa tarda ~30 min: más que el tope de Bash por omisión.
-  BASH_DEFAULT_TIMEOUT_MS=1200000 BASH_MAX_TIMEOUT_MS=3000000 \
-  claude -p "$(cat "$REP/brief.md")" \
-    --max-turns "${AGENTE_MAX_TURNOS:-200}" \
-    --permission-mode acceptEdits \
-    --allowedTools Bash Read Edit Write Glob Grep \
-    ${AGENTE_MODELO:+--model "$AGENTE_MODELO"} \
-    > "$REP/agente.log" 2>&1 || echo "::warning::El agente de reparación terminó con error (ver $REP/agente.log)."
+  local grupo claves
+  grupo="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["grupo"])' \
+    "$REP/objetivo.json" 2>/dev/null || true)"
+  claves="$(python3 -c 'import json, sys; print(" ".join(e["clave"] for e in json.load(open(sys.argv[1], encoding="utf-8"))["leyes"]))' \
+    "$REP/objetivo.json" 2>/dev/null || true)"
+  # Los permisos vuelven pase lo que pase con la sesión.
+  trap desproteger EXIT
+  trap 'exit 143' HUP INT TERM
+  proteger
+  (
+    # La medición completa tarda ~30 min: más que el tope de Bash por omisión.
+    export BASH_DEFAULT_TIMEOUT_MS=1200000 BASH_MAX_TIMEOUT_MS=3000000
+    # `comprobar`, que el agente corre en su sesión, parte del mismo commit
+    # que las compuertas.
+    export REPARACION_PARTIDA="${REPARACION_PARTIDA:-$(git rev-parse HEAD)}"
+    export SESION_GRUPO="$grupo"
+    sesion_agente reparacion "$REP/uso.jsonl" "$REP/brief.md" "$claves" \
+      --max-turns "${AGENTE_MAX_TURNOS:-200}" \
+      --permission-mode acceptEdits \
+      --allowedTools Bash Read Edit Write Glob Grep \
+      > "$REP/agente.log" 2>&1
+  ) || echo "::warning::El agente de reparación terminó con error (ver $REP/agente.log)."
+  desproteger
   tail -n 30 "$REP/agente.log" || true
 }
 
@@ -136,69 +174,114 @@ from extractor.estatal import ESTATAL
 print(federal.huella_extractor(ESTATAL.fuentes_extractor if sys.argv[1] == "estatal" else ()))' "$CORPUS")
 }
 
+# Las comprobaciones del arreglo que no dependen de lo publicado: alcance,
+# pruebas, huella y las leyes elegidas reconstruidas con el extractor de
+# partida y con el arreglo. Es el mismo código para `compuertas`, que decide, y
+# para `comprobar`, con el que el agente se adelanta: no cambia nada del
+# arreglo ni deja estado.
+#
+#   comprobaciones PDFS DIR PYTEST_LOG [REUSAR]
+#
+# PDFS: los PDF de las leyes elegidas. DIR: donde quedan el extractor de
+# partida (base/) y las dos reconstrucciones (antes/, despues/). REUSAR=true
+# conserva antes/ entre llamadas mientras no cambien el commit de partida ni el
+# objetivo. Devuelve 0 con las leyes que cambian en CAMBIAN, o 1 con el motivo
+# en MOTIVO (y HIZO_COMMITS=true si el motivo son commits en el extractor).
+comprobaciones() {
+  local pdfs="$1" dir="$2" pytest_log="$3" reusar="${4:-false}"
+  local fuera nuevas h_antes h_despues sello veredicto rc
+  MOTIVO=""; CAMBIAN=""; HIZO_COMMITS=false
+  if [ -n "${REPARACION_PARTIDA:-}" ] && [ "$(git rev-parse HEAD)" != "$REPARACION_PARTIDA" ]; then
+    HIZO_COMMITS=true
+    MOTIVO="hizo commits en el extractor"; return 1
+  fi
+  fuera=$(git status --porcelain=v1 -uall --no-renames | cut -c4- | tr -d '"' | grep -vE '^(extractor|tests)/' || true)
+  if [ -n "$fuera" ]; then
+    MOTIVO="tocó archivos fuera de extractor/ y tests/: $(echo "$fuera" | head -3 | tr '\n' ' ')"; return 1
+  fi
+  if [ -z "$(git status --porcelain)" ]; then
+    MOTIVO="el agente no cambió el extractor"; return 1
+  fi
+  if [ -n "$(git status --porcelain -- extractor/verificar.py extractor/validate.py)" ]; then
+    MOTIVO="cambió extractor/verificar.py o extractor/validate.py, que son la compuerta"; return 1
+  fi
+  if [ -n "$(git diff --name-only HEAD -- tests)" ]; then
+    MOTIVO="cambió pruebas existentes: $(git diff --name-only HEAD -- tests | head -3 | tr '\n' ' ')"; return 1
+  fi
+  nuevas=$(git ls-files --others --exclude-standard -- tests | grep -E '^tests/test_[^/]+\.py$' \
+             | xargs -r grep -lE '^def test_' 2>/dev/null || true)
+  if [ -z "$nuevas" ]; then
+    MOTIVO="no agregó una prueba nueva en tests/"; return 1
+  fi
+  pip install -q pytest > /dev/null 2>&1 || true
+  if ! python -m pytest -q > "$pytest_log" 2>&1; then
+    tail -n 30 "$pytest_log"
+    MOTIVO="las pruebas no pasan"; return 1
+  fi
+  # El extractor de partida, intacto, para comparar.
+  rm -rf "$dir/base"
+  git worktree prune
+  git worktree add -q --detach "$dir/base" HEAD || { MOTIVO="no se pudo preparar el extractor de partida"; return 1; }
+  h_antes="$(huella "$dir/base")"; h_despues="$(huella "$EXTRACTOR")"
+  if [ -z "$h_antes" ] || [ -z "$h_despues" ]; then
+    MOTIVO="no se pudo calcular la huella del extractor"; return 1
+  elif [ "$h_antes" = "$h_despues" ]; then
+    # Sin otra huella la vigilancia no reintentaría ninguna ley.
+    MOTIVO="no cambia ningún archivo de la huella del extractor"; return 1
+  fi
+  sello="$(git rev-parse HEAD) $(git hash-object "$REP/objetivo.json")"
+  if [ "$reusar" != true ] || [ ! -s "$dir/antes/resultado.json" ] \
+      || [ "$(cat "$dir/antes.sello" 2>/dev/null)" != "$sello" ]; then
+    rm -f "$dir/antes.sello"
+    python scripts/reparacion.py construir --trabajo "$TRABAJO" --extractor-dir "$dir/base" \
+      --pdfs "$pdfs" --out "$dir/antes" \
+      || { MOTIVO="no se pudieron reconstruir las leyes elegidas"; return 1; }
+    echo "$sello" > "$dir/antes.sello"
+  fi
+  python scripts/reparacion.py construir --trabajo "$TRABAJO" --extractor-dir "$EXTRACTOR" \
+    --pdfs "$pdfs" --out "$dir/despues" \
+    || { MOTIVO="no se pudieron reconstruir las leyes elegidas"; return 1; }
+  veredicto="$(python scripts/reparacion.py comparar --trabajo "$TRABAJO" --antes "$dir/antes" --despues "$dir/despues")"
+  rc=$?
+  echo "$veredicto"
+  if [ "$rc" != 0 ] || [ "${veredicto%% *}" != OK ]; then
+    MOTIVO="${veredicto#NO }"; return 1
+  fi
+  CAMBIAN="${veredicto#OK }"
+}
+
+comprobar() {
+  hay_objetivo || { echo "Sin leyes que reparar."; return 0; }
+  local dir="$REP/comprobacion" rc=0
+  mkdir -p "$dir"
+  if comprobaciones "$REP/pdfs" "$dir" "$dir/pytest.log" true; then
+    echo "PASA: alcance, prueba nueva, pytest, huella y leyes objetivo (cambian: $CAMBIAN)."
+    echo "Falta lo que solo deciden las compuertas: el impacto en todo lo publicado y su juez."
+  else
+    rc=1
+    echo "NO PASA: $MOTIVO"
+    echo "Con esto las compuertas descartan el arreglo entero. Auditoría de cada ley con el"
+    echo "extractor de partida y con tu arreglo: $dir/antes/ y $dir/despues/ (auditoria-*.json)."
+  fi
+  git worktree remove --force "$dir/base" 2>/dev/null || true
+  git worktree prune
+  return "$rc"
+}
+
 compuertas() {
   rm -f "$REP/estado.txt" "$REP/descarte.txt" "$REP/cambian.txt"
+  desproteger
   hay_objetivo || { estado ninguno; return 0; }
   if [ -s "$GATE/fuera.txt" ]; then
     descartar "tocó archivos fuera de extractor/ y tests/: $(head -3 "$GATE/fuera.txt" | tr '\n' ' ')"
     return 0
   fi
-  if [ -n "${REPARACION_PARTIDA:-}" ] && [ "$(git rev-parse HEAD)" != "$REPARACION_PARTIDA" ]; then
-    git reset -q --hard "$REPARACION_PARTIDA"
-    descartar "hizo commits en el extractor"
+  if ! comprobaciones "$GATE/pdfs" "$GATE" "$REP/pytest.log"; then
+    [ "$HIZO_COMMITS" = true ] && git reset -q --hard "$REPARACION_PARTIDA"
+    descartar "$MOTIVO"
     return 0
   fi
-  fuera=$(git status --porcelain=v1 -uall --no-renames | cut -c4- | tr -d '"' | grep -vE '^(extractor|tests)/' || true)
-  if [ -n "$fuera" ]; then
-    descartar "tocó archivos fuera de extractor/ y tests/: $(echo "$fuera" | head -3 | tr '\n' ' ')"
-    return 0
-  fi
-  if [ -z "$(git status --porcelain)" ]; then
-    descartar "el agente no cambió el extractor"
-    return 0
-  fi
-  if [ -n "$(git status --porcelain -- extractor/verificar.py extractor/validate.py)" ]; then
-    descartar "cambió extractor/verificar.py o extractor/validate.py, que son la compuerta"
-    return 0
-  fi
-  if [ -n "$(git diff --name-only HEAD -- tests)" ]; then
-    descartar "cambió pruebas existentes: $(git diff --name-only HEAD -- tests | head -3 | tr '\n' ' ')"
-    return 0
-  fi
-  nuevas=$(git ls-files --others --exclude-standard -- tests | grep -E '^tests/test_[^/]+\.py$' \
-             | xargs -r grep -lE '^def test_' 2>/dev/null || true)
-  if [ -z "$nuevas" ]; then
-    descartar "no agregó una prueba nueva en tests/"
-    return 0
-  fi
-  pip install -q pytest > /dev/null 2>&1 || true
-  if ! python -m pytest -q > "$REP/pytest.log" 2>&1; then
-    tail -n 30 "$REP/pytest.log"
-    descartar "las pruebas no pasan"
-    return 0
-  fi
-  # El extractor de partida, intacto, para comparar.
-  rm -rf "$GATE/base"
-  git worktree add -q --detach "$GATE/base" HEAD || { descartar "no se pudo preparar el extractor de partida"; return 0; }
-  h_antes="$(huella "$GATE/base")"; h_despues="$(huella "$EXTRACTOR")"
-  if [ -z "$h_antes" ] || [ -z "$h_despues" ]; then
-    descartar "no se pudo calcular la huella del extractor"; return 0
-  elif [ "$h_antes" = "$h_despues" ]; then
-    # Sin otra huella la vigilancia no reintentaría ninguna ley.
-    descartar "no cambia ningún archivo de la huella del extractor"; return 0
-  fi
-  python scripts/reparacion.py construir --trabajo "$TRABAJO" --extractor-dir "$GATE/base" \
-    --pdfs "$GATE/pdfs" --out "$GATE/antes" \
-    && python scripts/reparacion.py construir --trabajo "$TRABAJO" --extractor-dir "$EXTRACTOR" \
-      --pdfs "$GATE/pdfs" --out "$GATE/despues" \
-    || { descartar "no se pudieron reconstruir las leyes elegidas"; return 0; }
-  veredicto="$(python scripts/reparacion.py comparar --trabajo "$TRABAJO" --antes "$GATE/antes" --despues "$GATE/despues")"
-  rc=$?
-  echo "$veredicto"
-  if [ "$rc" != 0 ] || [ "${veredicto%% *}" != OK ]; then
-    descartar "${veredicto#NO }"; return 0
-  fi
-  echo "${veredicto#OK }" > "$REP/cambian.txt"
+  echo "$CAMBIAN" > "$REP/cambian.txt"
   # El arreglo cambia el extractor de todo lo publicado: cada artículo que
   # cambie tiene que confirmarse como mejora antes de que entre.
   rm -rf "$REP/impacto"
@@ -374,6 +457,7 @@ case "$FASE" in
   promover) promover ;;
   medicion) medicion ;;
   agente) agente ;;
+  comprobar) comprobar; exit $? ;;
   compuertas) compuertas ;;
   publicar) publicar ;;
   *) echo "fase desconocida: $FASE" >&2; exit 64 ;;

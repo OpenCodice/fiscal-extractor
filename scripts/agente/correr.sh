@@ -14,6 +14,7 @@ rm -f "$TRABAJO/veredicto.json"
 cd "$EXTRACTOR"
 export PYTHONPATH="$EXTRACTOR"
 source scripts/agente/comun.sh
+source scripts/agente/sesion.sh
 
 # Documentos nuevos: se revisan enteros, por bloques (scripts/revision.py), no
 # por sus unidades cambiadas.
@@ -40,12 +41,12 @@ python -m extractor verificar --sin-llm --out "$OUT" --pdf-dir "$PDF_DIR" \
 
 command -v claude > /dev/null || npm install -g @anthropic-ai/claude-code > /dev/null
 
+# lanzar PASO DOCUMENTOS BRIEF
 lanzar() {
-  claude -p "$(cat "$1")" \
+  sesion_agente "$1" "$TRABAJO/uso.jsonl" "$3" "$2" \
     --max-turns "${AGENTE_MAX_TURNOS:-150}" \
     --permission-mode acceptEdits \
     --allowedTools Bash Read Edit Write Glob Grep \
-    ${AGENTE_MODELO:+--model "$AGENTE_MODELO"} \
     >> "$TRABAJO/agente.log" 2>&1 || echo "::warning::El agente terminó con error (ver $TRABAJO/agente.log)."
 }
 
@@ -68,7 +69,7 @@ while IFS= read -r doc; do
       __EXTRACTOR__="$EXTRACTOR" __OUT__="$OUT" __PDF__="$PDF_DIR/$doc.pdf" __BUILD__="$BUILD" \
       __PLANEAR__="$PLANEAR" __TRABAJO_AGENTE__="$TRABAJO" __DOCUMENTO__="$doc"
     [ -s "$REV/brief.md" ] || break
-    lanzar "$REV/brief.md"
+    lanzar revision-alta "$doc" "$REV/brief.md"
   done
 done < "$TRABAJO/altas.txt"
 huella_datos > "$TRABAJO/datos.sha"
@@ -104,5 +105,5 @@ for clave, valor in {
 (t / "brief.md").write_text(brief, encoding="utf-8")
 PY
 
-lanzar "$TRABAJO/brief.md"
+lanzar verificacion "$(sed -E 's/^.. "?([^/]+)\/.*/\1/' "$TRABAJO/cambiados.txt" | sort -u | tr '\n' ' ')" "$TRABAJO/brief.md"
 tail -n 40 "$TRABAJO/agente.log" || true

@@ -427,6 +427,20 @@ jobs:
         run: |
           { echo "## Versión anterior conservada"; cat /tmp/agente/pr.md; } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Uso del agente
+        # Telemetría (scripts/uso.py): tokens y costo de cada sesión, por paso.
+        if: always()
+        run: python3 -I /tmp/extractor/scripts/uso.py resumir /tmp/agente >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Guardar el uso del agente
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uso-cerrar
+          path: /tmp/agente/**/uso.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
+
   fuentes:
     # Una fuente caída deja la corrida en rojo (el supervisor la reintenta),
     # pero desde un job aparte: `cerrar` termina bien y lo demás de la corrida
@@ -630,6 +644,10 @@ jobs:
         id: reintentar
         if: ${{ !cancelled() && steps.publicar.outputs.reparado == 'true' }}
         run: echo 'pedir={"workflow":"vigilar-federal.yml","inputs":{}}' >> "$GITHUB_OUTPUT"
+      - name: Uso del agente
+        # Telemetría (scripts/uso.py): tokens y costo de cada sesión, por paso.
+        if: always()
+        run: python3 -I /tmp/extractor/scripts/uso.py resumir /tmp/agente/reparacion >> "$GITHUB_STEP_SUMMARY" || true
       - name: Guardar el trabajo de la reparación
         if: always() && steps.objetivo.outputs.hay == 'true'
         uses: actions/upload-artifact@v4
@@ -637,6 +655,8 @@ jobs:
           name: reparacion
           path: |
             /tmp/agente/reparacion/*.json
+            /tmp/agente/reparacion/uso.jsonl
+            /tmp/agente/reparacion/impacto/uso.jsonl
             /tmp/agente/reparacion/*.md
             /tmp/agente/reparacion/*.txt
             /tmp/agente/reparacion/*.log

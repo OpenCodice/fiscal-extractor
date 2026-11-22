@@ -334,6 +334,20 @@ jobs:
           echo "::error::Alguna fuente no se pudo resolver o descargar (URL muerta o cambió la página del SAT). Revisa el log del paso de descarga."
           exit 1
 
+      - name: Uso del agente
+        # Telemetría (scripts/uso.py): tokens y costo de cada sesión, por paso.
+        if: always()
+        run: python3 -I /tmp/extractor/scripts/uso.py resumir /tmp/agente >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Guardar el uso del agente
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uso-vigilar
+          path: /tmp/agente/**/uso.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
+
   revisar:
     # Valida el PR en un job sin secretos y, si pasó y quedó verificado, lo
     # fusiona (revisar-pr.yml). Corre aunque la vigilancia haya fallado

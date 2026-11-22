@@ -57,6 +57,7 @@ FASE="${1:?uso: expandir.sh intento|agente|publicar|anotar|impacto|egress|codigo
 shift
 EXTRACTOR="$(cd "$(dirname "$0")/../.." && pwd)"
 TRABAJO="${TRABAJO:-/tmp/expansion}"
+source "$EXTRACTOR/scripts/agente/sesion.sh"
 mkdir -p "$TRABAJO"
 
 identidad() {
@@ -116,6 +117,21 @@ intento() {
   subir "$EXTRACTOR"
 }
 
+# sesion_sin_secretos PASO CARPETA BRIEF TURNOS — la sesión del agente sin los
+# secretos de la ronda en su entorno. Deja en CARPETA la salida JSON del CLI
+# (agente.json), su stderr (agente.err) y la línea de uso (uso.jsonl).
+sesion_sin_secretos() {
+  (
+    unset EGRESS_MX_TOKEN EXTRACTOR_TOKEN GH_TOKEN GITHUB_TOKEN
+    export BASH_DEFAULT_TIMEOUT_MS=1200000 BASH_MAX_TIMEOUT_MS=2400000
+    SESION_CRUDO="$2/agente.json" sesion_agente "$1" "$2/uso.jsonl" "$3" "${ESTADO:-}" \
+      --max-turns "$4" \
+      --permission-mode acceptEdits \
+      --allowedTools Bash Read Edit Write Glob Grep WebFetch WebSearch \
+      > /dev/null 2> "$2/agente.err"
+  )
+}
+
 agente() {
   rm -f "$TRABAJO/veredicto.json"
   mkdir -p "$TRABAJO/agente"
@@ -154,15 +170,9 @@ for k, v in {"__OBJETIVO__": objetivo, "__EXTRACTOR__": extractor, "__ESTADO__":
 PY
   command -v claude > /dev/null || npm install -g @anthropic-ai/claude-code > /dev/null
   cd "$EXTRACTOR"
-  env -u EGRESS_MX_TOKEN -u EXTRACTOR_TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
-    BASH_DEFAULT_TIMEOUT_MS=1200000 BASH_MAX_TIMEOUT_MS=2400000 \
-    claude -p "$(cat "$TRABAJO/brief.md")" \
-      --max-turns "${AGENTE_MAX_TURNOS:-300}" \
-      --permission-mode acceptEdits \
-      --allowedTools Bash Read Edit Write Glob Grep WebFetch WebSearch \
-      ${AGENTE_MODELO:+--model "$AGENTE_MODELO"} \
-      --output-format json \
-      > "$TRABAJO/agente.json" 2> "$TRABAJO/agente.err" \
+  local paso=expansion
+  [ ${#REDECL[@]} -gt 0 ] && paso=redeclaracion
+  sesion_sin_secretos "$paso" "$TRABAJO" "$TRABAJO/brief.md" "${AGENTE_MAX_TURNOS:-300}" \
     || echo "::warning::El agente de expansión terminó con error (ver agente.err)."
   python3 - "$TRABAJO/agente.json" <<'PY' || true
 import json, sys
@@ -329,15 +339,7 @@ for k, val in {"__EXTRACTOR__": extractor, "__ESTADO__": os.environ["ESTADO"],
 PY
   command -v claude > /dev/null || npm install -g @anthropic-ai/claude-code > /dev/null
   cd "$EXTRACTOR"
-  env -u EGRESS_MX_TOKEN -u EXTRACTOR_TOKEN -u GH_TOKEN -u GITHUB_TOKEN \
-    BASH_DEFAULT_TIMEOUT_MS=1200000 BASH_MAX_TIMEOUT_MS=2400000 \
-    claude -p "$(cat "$CODIGO/brief.md")" \
-      --max-turns "${AGENTE_MAX_TURNOS:-200}" \
-      --permission-mode acceptEdits \
-      --allowedTools Bash Read Edit Write Glob Grep WebFetch WebSearch \
-      ${AGENTE_MODELO:+--model "$AGENTE_MODELO"} \
-      --output-format json \
-      > "$CODIGO/agente.json" 2> "$CODIGO/agente.err" \
+  sesion_sin_secretos expansion-codigo "$CODIGO" "$CODIGO/brief.md" "${AGENTE_MAX_TURNOS:-200}" \
     || echo "::warning::El agente de código terminó con error (ver codigo/agente.err)."
   python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print((r.get("result") or "")[-1500:])' \
     "$CODIGO/agente.json" 2>/dev/null || true

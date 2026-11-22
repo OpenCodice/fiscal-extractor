@@ -85,7 +85,9 @@ unidad está mal, se corrige aquí.
   repara el extractor a partir de los hallazgos de la revisión completa (ver
   «Reparación autónoma»). `publicar_registro.sh` sube a main los registros de
   `verificaciones/` (y falla si no puede: lo que dependa de ese registro se
-  aplaza).
+  aplaza). Todos lanzan al agente por `sesion.sh` (`sesion_agente`), que deja
+  una línea por sesión en el `uso.jsonl` de su carpeta de trabajo (ver «Uso
+  del agente»).
 - `scripts/reparacion.py` y `extractor/reparaciones.py` — la parte
   determinista de esa reparación: qué leyes y qué defecto, sus PDF, las
   compuertas sobre las leyes elegidas y el registro de intentos
@@ -259,6 +261,28 @@ cuando cambia el PDF o el extractor. `federal cerrar` solo publica un alta con
 la marca positiva de su revisión (`revisada`, la pone `revision-federal.sh
 cerrar`): sin ella, se aplaza.
 
+## Uso del agente
+
+Cada sesión (`claude -p`) pasa por `sesion_agente` (`scripts/agente/sesion.sh`),
+que la lanza con `--output-format json`, deja en el log el mismo texto final
+de siempre y agrega una línea a `uso.jsonl` (`scripts/uso.py registrar`):
+`paso` (`reparacion`, `impacto`, `revision-alta`, `verificacion`,
+`auditoria-federal`, `expansion`, `redeclaracion`, `expansion-codigo`),
+`documentos`, `grupo`, `modelo`, tokens de entrada, salida y caché, `costo_usd`
+(el equivalente que calcula el CLI), `turnos`, duración y código de salida. Es
+telemetría: ninguna compuerta la lee, y si el uso no se puede leer la línea se
+anota con null. Una sesión que el límite de tiempo del paso mata no deja línea.
+
+Dónde queda: `uso.jsonl` en la carpeta de trabajo de cada script
+(`/tmp/agente/`, `/tmp/agente/reparacion/`, la de `IMPACTO`, `/tmp/expansion/`
+y `/tmp/expansion/codigo/`). Los jobs `reparar`, `ronda` y `codigo` lo suben
+dentro de su artefacto; `cerrar`, `vigilar` (fiscal) e `impacto.yml`, que
+siguen lanzando sesiones después de guardar su trabajo, en uno propio
+(`uso-cerrar`, `uso-vigilar`, `uso`). El paso «Uso del agente» de cada job
+escribe la tabla por paso en su resumen (`uso.py resumir <carpeta o archivo>`).
+`impacto.sh` depende de `sesion.sh` y `uso.py`: en constitucion-extractor van
+los tres.
+
 ## Reparación autónoma
 
 Cuando la revisión completa de una ley (o, en las estatales, su auditoría)
@@ -274,6 +298,9 @@ de `cerrar` y con su propio tiempo:
    (artículo absorbido, nota de reforma, corte de párrafo, pie de página,
    estructura, auditoría) y elige el tipo que más leyes comparten, hasta 4
    leyes: un solo arreglo para varias, y una sola sesión del agente por corrida.
+   Cada ley lleva el motivo de sus intentos descartados con ese mismo PDF
+   (`descartes`, los últimos 3, recortados), que el agente recibe junto a sus
+   hallazgos para no entregar otra vez el mismo arreglo.
 2. `preparar` descarga sus PDF (si ya no es el que se revisó, la ley sale: la
    vigilancia la reprocesa) y anota el intento como `iniciado` en
    `verificaciones/reparaciones/` antes de que trabaje el agente: un intento que
@@ -297,6 +324,16 @@ de `cerrar` y con su propio tiempo:
    los primeros intentos (corrida 44093775468) arreglaban sus 4 leyes tocando
    reglas generales y el juez rechazó 70 de 74 unidades cambiadas en otras
    leyes. Esa medición es solo una ayuda: las compuertas la repiten y deciden.
+   Antes de entregar corre también `reparar.sh comprobar`: las comprobaciones
+   del paso 4 que no dependen de lo publicado (alcance, pruebas existentes y
+   compuerta intactas, prueba nueva, `pytest`, otra huella y sus leyes
+   reconstruidas sin unidades con problemas nuevas), con el mismo código que
+   las compuertas (la función `comprobaciones` de `reparar.sh`), sobre sus PDF
+   y en `reparacion/comprobacion/`. Solo informa (`PASA` / `NO PASA: motivo`).
+   Mientras dura la sesión, las pruebas que ya existían, `verificar.py` y
+   `validate.py` no tienen permiso de escritura (se restaura al terminar, con
+   un `trap`, y otra vez al empezar las compuertas). El agente corre con el
+   mismo usuario y podría devolvérselo: es un aviso inmediato, no un cerco.
 4. Un paso del workflow (fuera del alcance del agente) deshace todo si el agente
    tocó algo fuera de `extractor/` y `tests/` o hizo commits, y comprueba que
    el objetivo, los PDF y el repo de datos no cambiaron. `reparar.sh compuertas` (sin secretos)

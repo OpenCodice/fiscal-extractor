@@ -32,6 +32,14 @@ Hallazgos de la revisión (`clave del artículo: qué tiene`):
 __HALLAZGOS__
 ```
 
+Si una ley trae «intentos anteriores con este mismo PDF, descartados», ese es
+el motivo por el que las compuertas tiraron el arreglo de otra sesión como la
+tuya, con estos mismos hallazgos. No lo repitas: si fue por unidades con
+problemas nuevos, tu arreglo no puede volver a dejarlas así (míralas primero);
+si fue por lo que cambiaba en lo publicado, acota más la regla; si la sesión
+anterior no entregó nada, busca otra causa o una parte más pequeña que sí sea
+segura.
+
 ## Medir el impacto en lo publicado
 
 Tu arreglo cambia el extractor de todo lo publicado: unas 330 leyes federales,
@@ -104,7 +112,34 @@ si sí, 2 con regresiones de cobertura o errores. Corre los comandos con un
    estaba (`git checkout -- extractor tests` y borra tus archivos nuevos) y
    entrega `"reparado": false`. Una parte segura que entra ya ayuda a la
    siguiente corrida; un arreglo con daños se descarta entero.
-7. Antes de terminar: `python -m pytest -q` debe pasar.
+7. Antes de entregar, corre la comprobación (siguiente sección) hasta que
+   diga `PASA`.
+
+## Comprueba antes de entregar
+
+Un solo comando repite las compuertas deterministas que no dependen de lo
+publicado, con el mismo código que después decide:
+
+`__COMPROBAR__`
+
+Comprueba que solo tocaste `extractor/` y `tests/`, que no cambiaste pruebas
+existentes ni `verificar.py`/`validate.py`, que hay una prueba nueva, que
+`python -m pytest -q` pasa, que el extractor cambió de verdad y que tus leyes,
+reconstruidas con el extractor de partida y con tu arreglo, cambian de texto
+sin ninguna unidad con problemas de auditoría nueva. No modifica tu arreglo.
+Imprime `PASA` (sale 0) o `NO PASA: <motivo>` (sale 1), y deja la auditoría de
+cada ley antes y después en `__COMPROBACION__`. Reconstruye tus leyes dos veces
+la primera vez y una las siguientes: córrelo con un `timeout` de Bash amplio
+(1800000 ms).
+
+- Es obligatorio: no escribas el veredicto con `"reparado": true` si la última
+  comprobación, corrida después de tu último cambio, no dijo `PASA`. Con un
+  `NO PASA` las compuertas descartan el arreglo entero y cada ley gasta un
+  intento.
+- Si no logras que pase, quita la parte que falla (paso 6) y vuelve a correrlo;
+  si no queda nada, entrega `"reparado": false` con el extractor como estaba.
+- `PASA` no es la última palabra: falta el impacto en todo lo publicado, que
+  mides con la medición completa y que juzga otro agente.
 
 ## Compuertas que vienen después de ti
 
@@ -123,7 +158,8 @@ corrida.
 - Solo modificas `extractor/` y `tests/`. Nada en `scripts/`, `.github/`,
   `verificaciones/` ni los briefs: son las compuertas.
 - No modifiques `extractor/verificar.py`, `extractor/validate.py` ni las
-  pruebas existentes para que algo pase.
+  pruebas existentes para que algo pase. Durante tu sesión están sin permiso
+  de escritura; no se lo devuelvas. Tu prueba va en un archivo nuevo.
 - Nunca edites a mano un texto extraído: solo cuenta lo que salga del
   extractor.
 - No hagas commit ni push.
@@ -141,6 +177,7 @@ Escribe `__VEREDICTO__` con esta forma, y nada más como salida final:
   "titulo_commit": "si cambiaste código: una línea que describa el arreglo",
   "resumen": "dos o tres frases: qué causa encontraste y cómo la arreglaste",
   "leyes": [{"clave": "queretaro/codigo-penal", "nota": "qué hallazgos quedaron resueltos y cuáles no, y por qué"}],
-  "medicion": "resultado de tu última medición completa: unidades que cambian en tus leyes y fuera, y por qué las de fuera son mejora (o que no la corriste y por qué)"
+  "medicion": "resultado de tu última medición completa: unidades que cambian en tus leyes y fuera, y por qué las de fuera son mejora (o que no la corriste y por qué)",
+  "comprobacion": "la última línea PASA / NO PASA de la comprobación, corrida después de tu último cambio"
 }
 ```

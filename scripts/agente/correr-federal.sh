@@ -70,10 +70,12 @@ PY
 
 command -v claude > /dev/null || npm install -g @anthropic-ai/claude-code > /dev/null
 
-claude -p "$(cat "$TRABAJO/brief.md")" \
+source scripts/agente/sesion.sh
+documentos="$(python3 -c 'import json, sys; print(" ".join(json.load(open(sys.argv[1], encoding="utf-8"))))' \
+  "$TRABAJO/fallas.json" 2>/dev/null || true)"
+sesion_agente auditoria-federal "$TRABAJO/uso.jsonl" "$TRABAJO/brief.md" "$documentos" \
   --max-turns "${AGENTE_MAX_TURNOS:-200}" \
   --permission-mode acceptEdits \
   --allowedTools Bash Read Edit Write Glob Grep \
-  ${AGENTE_MODELO:+--model "$AGENTE_MODELO"} \
   > "$TRABAJO/agente.log" 2>&1 || echo "::warning::El agente terminó con error (ver $TRABAJO/agente.log)."
 tail -n 40 "$TRABAJO/agente.log" || true

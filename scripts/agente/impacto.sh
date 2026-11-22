@@ -21,6 +21,7 @@ if [ ! -s "$IMPACTO/pendientes.json" ]; then
   exit 0
 fi
 command -v claude > /dev/null || npm install -g @anthropic-ai/claude-code > /dev/null
+source "$EXTRACTOR/scripts/agente/sesion.sh"
 
 for n in $(seq 1 "$SESIONES"); do
   # El brief de la sesión: los grupos que aún no tienen veredicto.
@@ -39,6 +40,8 @@ brief_p = t / "brief.md"
 brief_p.unlink(missing_ok=True)
 if not lote:
     sys.exit(0)
+(t / "documentos-sesion.txt").write_text(
+    " ".join(sorted({m["documento"] for g in lote for m in g["miembros"]})), encoding="utf-8")
 lineas = [f"{len(lote)} grupos en esta sesión ({p['resumen']['grupos']} en total):"]
 for g in lote:
     docs = sorted({m["documento"] for m in g["miembros"]})
@@ -55,11 +58,11 @@ PY
   [ -s "$IMPACTO/brief.md" ] || break
   # Desde el directorio de trabajo, no desde el extractor: este agente no
   # edita código.
-  (cd "$IMPACTO" && claude -p "$(cat "$IMPACTO/brief.md")" \
+  (cd "$IMPACTO" && sesion_agente impacto "$IMPACTO/uso.jsonl" "$IMPACTO/brief.md" \
+      "$(cat "$IMPACTO/documentos-sesion.txt" 2>/dev/null || true)" \
     --max-turns "${AGENTE_MAX_TURNOS:-120}" \
     --permission-mode acceptEdits \
     --allowedTools Bash Read Write Glob Grep \
-    ${AGENTE_MODELO:+--model "$AGENTE_MODELO"} \
     > "$IMPACTO/agente-$n.log" 2>&1) || echo "::warning::El agente de impacto terminó con error (ver $IMPACTO/agente-$n.log)."
   tail -n 5 "$IMPACTO/agente-$n.log" || true
 done

@@ -514,6 +514,11 @@ jobs:
           esac
           expandir anotar --resultado fallido --motivo "$motivo" --corrida "$CORRIDA"
 
+      - name: Uso del agente
+        # Telemetría (scripts/uso.py): tokens y costo de cada sesión, por paso.
+        if: always()
+        run: python3 -I /tmp/extractor/scripts/uso.py resumir /tmp/expansion/uso.jsonl >> "$GITHUB_STEP_SUMMARY" || true
+
       - name: Guardar el trabajo de la ronda
         if: always() && steps.elegir.outputs.hay == 'true'
         uses: actions/upload-artifact@v4
@@ -521,6 +526,7 @@ jobs:
           name: expansion
           path: |
             /tmp/expansion/*.json
+            /tmp/expansion/uso.jsonl
             /tmp/expansion/*.md
             /tmp/expansion/*.log
             /tmp/expansion/*.err
@@ -679,6 +685,11 @@ jobs:
           echo "pedir=$(jq -cn --arg k "$clave" --arg e "$ESTADO" '{workflow: "expandir-estatales.yml", inputs: {($k): $e}}')" >> "$GITHUB_OUTPUT"
           echo "Arreglo publicado ($(cat "$TRABAJO/codigo/publicado.txt")); ronda pedida ($clave=$ESTADO)." | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Uso del agente
+        # Telemetría (scripts/uso.py): tokens y costo de cada sesión, por paso.
+        if: always()
+        run: python3 -I /tmp/extractor/scripts/uso.py resumir /tmp/expansion/codigo/uso.jsonl >> "$GITHUB_STEP_SUMMARY" || true
+
       - name: Guardar el trabajo del arreglo
         if: always()
         uses: actions/upload-artifact@v4
@@ -686,6 +697,7 @@ jobs:
           name: codigo
           path: |
             /tmp/expansion/codigo/*.json
+            /tmp/expansion/codigo/uso.jsonl
             /tmp/expansion/codigo/*.md
             /tmp/expansion/codigo/*.txt
             /tmp/expansion/codigo/*.log

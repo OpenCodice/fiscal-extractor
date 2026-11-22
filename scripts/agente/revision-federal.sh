@@ -25,6 +25,7 @@ EXTRACTOR="$(cd "$(dirname "$0")/../.." && pwd)"
 TRABAJO="${AGENTE_DIR:-/tmp/agente}"
 cd "$EXTRACTOR"
 export PYTHONPATH="$EXTRACTOR"
+source scripts/agente/sesion.sh
 
 # Altas fieles de esta corrida, en orden; se revisan ahora las primeras
 # REVISION_MAX_ALTAS mientras su texto no pase de REVISION_MAX_CARACTERES.
@@ -83,11 +84,10 @@ revisar_doc() {
         __BRIEF__="${REVISION_BRIEF:-brief-revision-federal.md}" __EXTRACTOR__="$EXTRACTOR" __OUT__="$RAIZ" \
         __PDF__="$PDF_DIR/$doc.pdf" __DOCUMENTO__="$doc"
       [ -s "$REV/brief.md" ] || break
-      (cd "$REV" && claude -p "$(cat "$REV/brief.md")" \
+      (cd "$REV" && sesion_agente revision-alta "$TRABAJO/uso.jsonl" "$REV/brief.md" "$doc" \
         --max-turns "${AGENTE_MAX_TURNOS:-120}" \
         --permission-mode acceptEdits \
         --allowedTools Bash Read Write Glob Grep \
-        ${AGENTE_MODELO:+--model "$AGENTE_MODELO"} \
         >> "$REV/agente.log" 2>&1) || echo "::warning::La revisión de $doc terminó con error."
     done
 }
