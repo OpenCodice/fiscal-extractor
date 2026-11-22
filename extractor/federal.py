@@ -58,7 +58,7 @@ FUERA_DEL_CORPUS = {
 
 # Archivos del extractor cuyo cambio puede cambiar el texto o la metadata que se
 # genera. Si su huella cambia, todo el corpus se reconstruye.
-_FUENTES_EXTRACTOR = ("parsers/*.py", "build.py", "modelo.py", "normalize.py",
+_FUENTES_EXTRACTOR = ("parsers/*.py", "build.py", "modelo.py", "normalize.py", "perfil.py",
                       # Una compuerta más estricta también obliga a reauditar.
                       "verificar.py", "validate.py")
 

@@ -34,6 +34,7 @@ import pkgutil
 import re
 import unicodedata
 
+from ..perfil import ESTATAL_BASE, Perfil
 from ..registro import Documento
 
 # Las 32 entidades (las mismas carpetas que usa constitucion-extractor).
@@ -91,6 +92,15 @@ def _modulos():
     for m in sorted(pkgutil.iter_modules(__path__), key=lambda m: m.name):
         if not m.name.startswith("_"):
             yield m.name.replace("_", "-"), importlib.import_module(f"{__name__}.{m.name}")
+
+
+def perfil_de_estado(estado: str) -> Perfil:
+    """El perfil de lectura de las leyes de `estado`: el `PERFIL` de su módulo
+    o, si no declara ninguno, el que heredan todos los estados."""
+    for e, mod in _modulos():
+        if e == estado:
+            return getattr(mod, "PERFIL", ESTATAL_BASE)
+    return ESTATAL_BASE
 
 
 def documentos(estados: list[str] | None = None) -> list[Documento]:
