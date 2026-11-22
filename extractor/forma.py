@@ -388,7 +388,9 @@ def epigrafe_siguiente_colado(ley: Ley) -> list[Hallazgo]:
         if not a.cuerpo or sig.meta.get("epigrafe") or sig.meta.get("derogado"):
             continue
         b = a.cuerpo[-1]
-        if not FIN_DE_ORACION.search(b) and re.search(r"[^\W\d_]$", b) and not b.startswith("["):
+        # «Se deroga», sin punto, es el texto del artículo derogado.
+        if (not FIN_DE_ORACION.search(b) and re.search(r"[^\W\d_]$", b) and not b.startswith("[")
+                and not re.search(r"derog", b, re.IGNORECASE)):
             res.append(Hallazgo("epigrafe_siguiente_colado", a.clave,
                                 f"el epígrafe del artículo siguiente ({sig.clave}, que no tiene) "
                                 f"quedó al final de este: «…{b[-140:]}»"))
@@ -416,6 +418,12 @@ def epigrafe_final_con_punto(ley: Ley) -> list[Hallazgo]:
         b = c[-1]
         if len(b) > 110 or FRACCION.match(b) or re.search(r"\d", b) or "," in b \
                 or re.search(r"derog", b, re.IGNORECASE):
+            continue
+        # «IX. Del Cuerpo Especial de Aerotropas.» / «De Soldado a Sargento
+        # Primero.»: el renglón bajo una fracción con la misma forma es de ella.
+        # Entre ambos puede haber otro renglón igual de corto («Armamento Aéreo.»).
+        previos = [p for p in c[-3:-1] if len(p) <= 80][-2:]
+        if any((f := FRACCION.match(p)) and _EPIGRAFE.match(p[f.end():].lstrip()) for p in previos):
             continue
         sin_punto = b.rstrip(".")
         rotulo = _EPIGRAFE.match(b) and len(b.split()) <= 12 and not _VERBO_CONJUGADO.search(sin_punto)

@@ -64,6 +64,23 @@ ARTICULO_RE = re.compile(
     r"(?:\s*\.?-?(?:\s|$|\()|\.-(?=\S))"             # separador final (o ".-" pegado al texto)
 )
 
+# Encabezados que la Cámara escribe con una marca o un punto de más:
+# 'CAPÍTULO V (sic DOF 20-03-2014)' (LFPED) y 'Sección Primera.' (Ley de la
+# Policía Federal). El punto solo se quita si el renglón de arriba cerró su
+# oración: '…en el Título Segundo del' / 'Libro Primero.' es una cita.
+_SIC_DE_ENCABEZADO_RE = re.compile(r"\s+\(sic DOF \d{2}-\d{2}-\d{4}\)$")
+_ENCABEZADO_CON_PUNTO_RE = re.compile(
+    r"(?:Secci[óo]n|Cap[íi]tulo|T[íi]tulo)\s+[A-Za-zÁÉÍÓÚáéíóú]+\.")
+
+
+def _encabezado_llano(s: str, anterior: str) -> str:
+    s = _SIC_DE_ENCABEZADO_RE.sub("", s)
+    if _ENCABEZADO_CON_PUNTO_RE.fullmatch(s) and (
+            not anterior or anterior.endswith((".", ";", ":")) or _es_nota_de_bloque(anterior)):
+        return s[:-1]
+    return s
+
+
 _CITA_DE_ESTA_LEY_RE = re.compile(
     r"(?:(?:de|del)\s+(?:este|esta|la presente|el presente)\s+"
     r"(?:c[óo]digo|ley|ordenamiento|reglamento)\b|siguiente\b)", re.IGNORECASE)
@@ -1876,6 +1893,17 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     stripped, continuacion=bool(partes)) and desemboca_en_articulo(i):
                 pendiente = (nivel, encabezado, partes + [stripped])
                 continue
+            # Federal: el nombre en mayúsculas que envuelve y cierra con punto
+            # ('DE LAS AUTORIDADES … DE LA AGROINDUSTRIA DE' / 'LA CAÑA DE
+            # AZÚCAR.'), con otro encabezado o el artículo justo debajo.
+            if (not estatal and estricto and partes and len(partes) < MAX_LINEAS_NOMBRE
+                    and partes[-1].isupper() and not partes[-1].endswith((".", ";", ":"))
+                    and stripped.isupper() and stripped.endswith(".") and not stripped.endswith("..")
+                    and _es_nombre_encabezado(stripped[:-1], True, False)
+                    and (siguiente_abre(i) or nivel_de(
+                        next((x.strip() for x in lineas[i + 1:] if x.strip()), "")))):
+                pendiente = (nivel, encabezado, partes + [stripped])
+                continue
             # Un rótulo de dos partes que cierra con punto ('De los contratos
             # preparatorios.- La promesa.') también es nombre si el artículo sigue
             # justo debajo; una oración ('Las personas morales deberán …') no.
@@ -1935,13 +1963,18 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             # Federal: 'CAPITULO IV' / 'De la Consignación Mercantil.' — el nombre
             # de un solo renglón que cierra con punto, con el artículo (o la nota
             # del encabezado y el artículo) justo debajo. Sin esto quedaba como
-            # último párrafo del artículo anterior.
+            # último párrafo del artículo anterior. La inicial de una abreviatura
+            # ('Del H. Consejo Universitario y sus Comisiones.') no cierra oración.
             if (not estatal and not partes and stripped.endswith(".") and not stripped.endswith("..")
-                    and len(stripped) <= 80 and not re.search(r"[.;:]\s", stripped)
+                    and len(stripped) <= 80 and not re.search(r"(?<!\b[A-Z])\.\s|[;:]\s", stripped)
                     and not _ORACION_RE.search(stripped)
                     and _es_nombre_encabezado(stripped[:-1], False, True)
                     and not es_nota_bloque(stripped) and not ART.match(stripped)
-                    and (siguiente_abre(i) or nota_y_articulo(i))):
+                    and (siguiente_abre(i) or nota_y_articulo(i)
+                         # …o el encabezado de su primera sección ('Capítulo VII' /
+                         # 'Del Consejo Federal de Desarrollo Policial.' / 'Sección Primera.').
+                         or nivel_de(_encabezado_llano(
+                             next((x.strip() for x in lineas[i + 1:] if x.strip()), ""), stripped)))):
                 pendiente = (nivel, encabezado, [stripped])
                 continue
             # Estatal: el nombre de un Título en caja normal que cierra con punto
@@ -1962,7 +1995,7 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
             fijar(nivel, f"{encabezado}. {nombre}" if nombre else encabezado)
             # no 'continue': esta línea puede ser un artículo u otro encabezado
 
-        nivel = nivel_de(stripped)
+        nivel = nivel_de(_encabezado_llano(stripped, anterior) if not estatal else stripped)
         # 'Sección XVI' en Title-case dentro de una tabla (LIGIE) que no desemboca
         # en un artículo no es estructura: es texto del artículo en curso. Sacarlo
         # dejaría un hueco en medio de un párrafo.

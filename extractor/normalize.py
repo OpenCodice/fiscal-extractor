@@ -60,9 +60,20 @@ DECIMAL_AL_INICIO_RE = re.compile(r"^\d+\.\d")
 DEROGADO_SUELTO_RE = re.compile(r"DEROGAD[OA]\.\s+P\.\s?O\.\s+\d{1,2}\s+DE\s+[A-ZÁÉÍÓÚ]+\s+DE\s+\d{4}\.?")
 
 
+# '…por el beneficio señalado en el inciso' / 'a).'
+INCISO_SUELTO_RE = re.compile(r"^[a-z]\)\.?$")
+# '…que se ubiquen en el nivel de operaciones' / 'III.': el número solo en su
+# renglón tras uno que no cerró con puntuación.
+NUMERO_SOLO_RE = re.compile(r"^(?:\d+|[IVXLCDM]+)\.$")
+
+
 def _numero_pendiente(anterior: str, s: str) -> bool:
+    if INCISO_SUELTO_RE.match(s):
+        return bool(re.search(r"\bincisos?$", anterior, re.IGNORECASE))
     if not NUMERO_AL_INICIO_RE.match(s):
         return False
+    if NUMERO_SOLO_RE.match(s) and re.search(r"[^\W\d_]$", anterior):
+        return True
     return bool(DEJA_PENDIENTE_RE.search(anterior) or CITA_ABIERTA_RE.search(anterior)
                 or (CONJUNCION_FINAL_RE.search(anterior) and NUMERO_SUELTO_RE.match(s)))
 
