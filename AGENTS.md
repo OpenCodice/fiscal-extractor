@@ -251,8 +251,11 @@ es estructura: el nombre va al contexto de la unidad y nada se queda en el
 cuerpo del artículo anterior. Debajo de la sección está el `epigrafe`: un
 `APARTADO`, un numeral romano solo o un rótulo sin palabra clave ('Del
 Consentimiento' en el Código Civil) que sigue a un fin de oración y desemboca
-en el siguiente artículo. `PARTE` cuenta como nivel de título, igual que
-`LIBRO`.
+en el siguiente artículo. Un párrafo al que el PDF le dejó caer el punto
+final no es un rótulo aunque desemboque en un artículo (`es_prosa`): lleva un
+verbo en futuro o, salvo en las leyes donde casi todo artículo tiene epígrafe,
+más de 16 palabras; se queda en su artículo. `PARTE` cuenta como nivel de
+título, igual que `LIBRO`.
 
 ## Fórmulas
 

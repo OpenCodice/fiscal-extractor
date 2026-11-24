@@ -585,6 +585,22 @@ _EPIGRAFE_FRACCION_RE = re.compile(r"(?:[IVXLCDM]+|\d+|[A-Za-z])\s*[.)\-]")
 _FIN_DE_ORACION_ABIERTA_RE = re.compile(
     r"\b(?:de|del|la|las|el|los|lo|en|y|e|o|u|a|al|con|por|para|que|se|su|sus|este|esta)$",
     re.IGNORECASE)
+# Un rótulo es una frase nominal corta ('Del Consentimiento', 'De la Unidad de
+# Administración de la Suprema Corte de Justicia de la Nación'). Un párrafo al
+# que el PDF le dejó caer el punto final es más largo o lleva un verbo en
+# futuro, el tiempo en que la ley manda ('se deberá pagar', 'podrá acreditarlo').
+EPIGRAFE_MAX_PALABRAS = 16
+_VERBO_EN_FUTURO_RE = re.compile(r"\b[a-záéíóúñ]{2,}r(?:á|án)\b")
+
+
+def es_prosa(texto: str, rotulos_largos: bool = False) -> bool:
+    """¿`texto` (los renglones de un posible rótulo, juntos) es un párrafo? Con
+    `rotulos_largos` (una ley donde casi todo artículo lleva su epígrafe, que
+    puede ocupar dos renglones) el largo no decide: solo el verbo."""
+    return (bool(_VERBO_EN_FUTURO_RE.search(texto))
+            or (not rotulos_largos and len(texto.split()) > EPIGRAFE_MAX_PALABRAS))
+
+
 _ENCABEZADO_SOLO_RE = re.compile(
     r"(?:T[ÍI]TULO|CAP[ÍI]TULO|SECCI[ÓO]N|LIBRO|PARTE)\s+\S+(?:\s+BIS)?\.?", re.IGNORECASE)
 
@@ -1872,6 +1888,21 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 return False
         return False
 
+    def parrafo_hasta_articulo(i: int) -> bool:
+        """¿Los renglones desde `i` hasta el siguiente artículo, encabezado o
+        nota forman un párrafo sin punto final, y no un rótulo? Una nota de la
+        Cámara sobre el título que sigue ('Nota: Por Decreto DOF …') es prosa,
+        pero no del artículo anterior."""
+        if lineas[i].strip().startswith("Nota:"):
+            return False
+        renglones = []
+        for j in range(i, len(lineas)):
+            s = lineas[j].strip()
+            if j > i and (abre_articulo(s, j) or _es_encabezado(s) or es_nota_bloque(s)):
+                break
+            renglones.append(s)
+        return es_prosa(" ".join(renglones), rotulos_largos=usa_epigrafes())
+
     def oraciones_hasta_articulo(i: int) -> bool:
         """Estatal: ¿entre el renglón `i` y el siguiente artículo hay un renglón
         con un fin de oración a media línea ('…supervisión. Las personas …')? Un
@@ -2127,6 +2158,7 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     # La segunda línea de una nota envuelta ('DE 2024)') no es un rótulo.
                     and not (lee(Rasgo.NOTA_ENVUELTA_NO_ES_ROTULO) and es_nota_bloque(anterior) and _nota_abierta(anterior))
                     and not (lee(Rasgo.EPIGRAFE_SIN_ORACIONES) and oraciones_hasta_articulo(i))
+                    and not parrafo_hasta_articulo(i)
                     and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))):
             fijar("epigrafe", stripped)
             entra_bloque()
