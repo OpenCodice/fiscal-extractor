@@ -24,6 +24,11 @@ REFORM_NOTE_START_RE = re.compile(
     r"Abrogad[oa]s?|Renumerad[oa]s?)\b.*DOF\s+\d{2}-\d{2}-\d{4}",
 )
 NOTE_COMPLETE_RE = re.compile(r"\d{2}-\d{2}-\d{4}[.)]?$")
+# 'Reforma DOF 11-12-2013: Derogó de la fracción el entonces párrafo cuarto' no
+# cierra con una fecha. Si envuelve, sigue en minúscula, con un paréntesis o
+# con cifras; un renglón que abre con mayúscula y todos los paréntesis de la
+# nota cerrados es ya el texto de la ley.
+NOTA_DE_SUPRESION_RE = re.compile(r"^Reforma DOF \d{2}-\d{2}-\d{4}:")
 MAX_NOTE_CONT_LINES = 4
 # Las notas estatales cierran con su paréntesis; las del editor ('(las porciones
 # normativas resaltadas fueron reformadas mediante Decreto…)') ocupan más renglones.
@@ -87,6 +92,12 @@ def _is_struct_marker(line: str) -> bool:
 
 def _note_is_complete(note: str) -> bool:
     return bool(NOTE_COMPLETE_RE.search(note.strip()))
+
+
+def _texto_tras_nota(note: str, siguiente: str) -> bool:
+    """¿`siguiente` es texto de la ley y no la continuación de la nota?"""
+    return (bool(NOTA_DE_SUPRESION_RE.match(note)) and note.count("(") <= note.count(")")
+            and siguiente.strip()[:1].isupper())
 
 
 IMPORTE_SUELTO_RE = re.compile(r"\$?\s?\d[\d.,]*(?:\s+(?:cuotas?|veces))?")
@@ -186,6 +197,7 @@ def normalize_body(body: str, heading_label: str, notas: re.Pattern | None = Non
                 and lines[j].strip()
                 and not _is_struct_marker(lines[j])
                 and not _is_reform_note(lines[j])
+                and not _texto_tras_nota(note, lines[j])
             ):
                 note = f"{note} {lines[j].strip()}"
                 j += 1
