@@ -435,8 +435,19 @@ _MEMBRETE_COMPLETO_RE = re.compile(
     r"|Secretaría de Servicios Parlamentarios\b")
 
 
+# En el membrete, a 'Secretaría General' no le sigue nada o le sigue otro
+# nombre propio. Seguida de minúscula es una frase de la ley que cayó en el
+# primer renglón de la página ('Secretaría General de Gobierno o cualquier
+# otra oficina…', CNPCF 810).
+_FRASE_TRAS_SECRETARIA_RE = re.compile(r"Secretaría General\s+[a-záéíóúñ]")
+
+
 def _es_membrete(s: str, prefijos: tuple[str, ...], arriba: bool) -> bool:
-    return bool(prefijos) and s.startswith(prefijos) and (arriba or bool(_MEMBRETE_COMPLETO_RE.match(s)))
+    if not prefijos or not s.startswith(prefijos):
+        return False
+    if _MEMBRETE_COMPLETO_RE.match(s):
+        return True
+    return arriba and not _FRASE_TRAS_SECRETARIA_RE.match(s)
 
 
 def _titulo_corrido(paginas: list[str]) -> tuple[str, ...]:
