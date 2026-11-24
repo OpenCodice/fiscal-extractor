@@ -34,3 +34,24 @@ def test_prosa_y_rotulos():
     assert es_prosa("En las permutas y pagos en especie, el impuesto se deberá pagar por cada bien")
     assert not es_prosa("Del Centro Público de Mecanismos Alternativos de Solución de Controversias "
                         "del Poder Judicial de la Federación")
+
+
+CAPITULO = """Artículo 1. Primer artículo.
+Capítulo III BIS
+Suspensión, Extinción, Revocación, Restricciones y Servidumbres de la Concesión,
+Asignación y de Permiso de Descarga del Agua de las Cuencas y de los Acuíferos
+Artículo 2. Segundo artículo.
+"""
+
+
+def test_un_encabezado_con_nombre_largo_sigue_siendo_estructura():
+    unidades = parse_texto(CAPITULO)
+    assert "Suspensión" not in unidades[0].cuerpo and "Capítulo" not in unidades[0].cuerpo
+
+
+def test_la_porcion_invalidada_entre_corchetes_no_es_encabezado_pegado():
+    from extractor.verificar import encabezado_pegado
+    md = ("# Artículo 125.\n\n[Para la resolución de las controversias azucareras deberán someterse a la Junta.\n\n"
+          "Las partes deberán cumplir con las resoluciones que dicte la Junta Permanente, una vez que causen estado.]\n\n"
+          "_Artículo declarado inválido por sentencia de la SCJN DOF 07-12-2007_\n")
+    assert encabezado_pegado(md) == []

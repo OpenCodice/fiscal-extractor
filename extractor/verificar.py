@@ -281,7 +281,9 @@ def encabezado_pegado(md: str, estatal: bool = False) -> list[dict]:
     if len(bloques) < 2:
         return []
     b = bloques[-1]
-    if (len(b) > 150 or "DOF" in b or re.search(r"[.;:)…”\"»]$", b)
+    # '…una vez que causen estado.]' cierra la porción invalidada que la Cámara
+    # deja entre corchetes: es una oración, no un rótulo.
+    if (len(b) > 150 or "DOF" in b or re.search(r"[.;:)…”\"»]$", b) or b.endswith(".]")
             or (estatal and (re.search(r";\s*[yoeu]$", b) or re.fullmatch(
                 r"\(?\s*(?:SE\s+DEROGA|DEROGADO)\b.*", b, re.IGNORECASE)
                 # El último párrafo sin punto que no puede ser rótulo (el parser

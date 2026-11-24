@@ -604,6 +604,10 @@ EPIGRAFE_MAX_PALABRAS = 16
 _VERBO_EN_FUTURO_RE = re.compile(r"\b[a-záéíóúñ]{2,}r(?:á|án)\b")
 
 
+_ABRE_ENCABEZADO_RE = re.compile(
+    r"(?:T[ÍIíi]tulo|T[ÍI]TULO|Cap[íi]tulo|CAP[ÍI]TULO|Secci[óo]n|SECCI[ÓO]N|Libro|LIBRO|Apartado|APARTADO)\s+\S")
+
+
 def es_prosa(texto: str, rotulos_largos: bool = False) -> bool:
     """¿`texto` (los renglones de un posible rótulo, juntos) es un párrafo? Con
     `rotulos_largos` (una ley donde casi todo artículo lleva su epígrafe, que
@@ -1903,8 +1907,9 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
         """¿Los renglones desde `i` hasta el siguiente artículo, encabezado o
         nota forman un párrafo sin punto final, y no un rótulo? Una nota de la
         Cámara sobre el título que sigue ('Nota: Por Decreto DOF …') es prosa,
-        pero no del artículo anterior."""
-        if lineas[i].strip().startswith("Nota:"):
+        pero no del artículo anterior; un encabezado con su nombre largo
+        ('Capítulo III BIS' / 'Suspensión, Extinción, Revocación…') tampoco."""
+        if lineas[i].strip().startswith("Nota:") or _ABRE_ENCABEZADO_RE.match(lineas[i].strip()):
             return False
         renglones = []
         for j in range(i, len(lineas)):
@@ -2169,8 +2174,8 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     # La segunda línea de una nota envuelta ('DE 2024)') no es un rótulo.
                     and not (lee(Rasgo.NOTA_ENVUELTA_NO_ES_ROTULO) and es_nota_bloque(anterior) and _nota_abierta(anterior))
                     and not (lee(Rasgo.EPIGRAFE_SIN_ORACIONES) and oraciones_hasta_articulo(i))
-                    and not parrafo_hasta_articulo(i)
-                    and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True))):
+                    and desemboca_en_articulo(i, MAX_LINEAS_ENCABEZADO, solo_estructura=True)
+                    and not parrafo_hasta_articulo(i))):
             fijar("epigrafe", stripped)
             entra_bloque()
             en_bloque = True
