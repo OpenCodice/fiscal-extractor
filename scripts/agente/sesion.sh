@@ -10,10 +10,22 @@
 # espacio) para saber a qué se fue. Devuelve el código de salida de claude: el
 # registro de uso nunca lo cambia.
 #
+# El modelo sale del paso (`modelo_del_paso`), salvo que AGENTE_MODELO diga otro.
+#
 # Entorno opcional: AGENTE_MODELO; SESION_GRUPO (el grupo o tanda de la sesión,
 # para la línea de uso); SESION_CRUDO (conserva ahí la salida JSON del CLI).
 
 SESION_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Escribir código del extractor es lo que más cuesta cuando sale mal (cada
+# intento fallido de una reparación gasta uno de sus tres); leer y comparar
+# texto contra el PDF, que es casi todo el volumen, lo hace bien el modelo chico.
+modelo_del_paso() {
+  case "$1" in
+    reparacion*|expansion-codigo*) echo claude-opus-5-5 ;;
+    *) echo claude-sonnet-5-5 ;;
+  esac
+}
 
 sesion_agente() {
   local paso="$1" uso="$2" brief="$3" documentos="$4"
@@ -25,7 +37,7 @@ sesion_agente() {
   fi
   inicio="$(date +%s)"
   claude -p "$(cat "$brief")" "$@" \
-    ${AGENTE_MODELO:+--model "$AGENTE_MODELO"} \
+    --model "${AGENTE_MODELO:-$(modelo_del_paso "$paso")}" \
     --output-format json > "$crudo" || rc=$?
   # -I: solo la biblioteca estándar, sin PYTHONPATH ni la carpeta del script.
   python3 -I "$SESION_SCRIPTS/uso.py" registrar --uso "$uso" --paso "$paso" \

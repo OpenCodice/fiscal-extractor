@@ -172,3 +172,17 @@ def test_todas_las_sesiones_pasan_por_la_funcion_comun():
         if p.name != "sesion.sh" and re.search(r"^\s*[^#\n]*\bclaude\s+-p\b", texto, re.M):
             directas.append(p.name)
     assert not directas
+
+
+def test_el_modelo_sale_del_paso_si_nadie_dice_otro(tmp_path):
+    def modelo(paso: str) -> str:
+        guion = f'source "{RAIZ}/scripts/agente/sesion.sh"\nmodelo_del_paso {paso}\n'
+        return subprocess.run(["bash", "-c", guion], capture_output=True, text=True).stdout.strip()
+    assert modelo("reparacion") == modelo("expansion-codigo") == "claude-opus-5-5"
+    for paso in ("verificacion", "revision-alta", "auditoria-federal", "impacto", "expansion"):
+        assert modelo(paso) == "claude-sonnet-5-5"
+    cuerpo = (f'printf "%s\\n" "$@" > "{tmp_path}/args.txt"\n'
+              f"cat <<'JSON'\n{json.dumps(RESULTADO)}\nJSON\n")
+    _sesion(tmp_path, cuerpo)
+    args = (tmp_path / "args.txt").read_text(encoding="utf-8").splitlines()
+    assert args[args.index("--model") + 1] == "claude-sonnet-5-5"

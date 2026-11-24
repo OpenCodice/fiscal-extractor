@@ -369,6 +369,12 @@ de siempre y agrega una línea a `uso.jsonl` (`scripts/uso.py registrar`):
 telemetría: ninguna compuerta la lee, y si el uso no se puede leer la línea se
 anota con null. Una sesión que el límite de tiempo del paso mata no deja línea.
 
+El modelo lo fija el paso (`modelo_del_paso` en `sesion.sh`): Opus 5.5 para
+los que escriben código del extractor (`reparacion`, `expansion-codigo`), que
+es donde un intento fallido cuesta más; Sonnet 5.5 para los demás, que leen y
+comparan contra el PDF y son casi todo el volumen. `AGENTE_MODELO` lo cambia
+para una corrida.
+
 Dónde queda: `uso.jsonl` en la carpeta de trabajo de cada script
 (`/tmp/agente/`, `/tmp/agente/reparacion/`, la de `IMPACTO`, `/tmp/expansion/`
 y `/tmp/expansion/codigo/`). Los jobs `reparar`, `ronda` y `codigo` lo suben
