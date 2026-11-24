@@ -249,3 +249,15 @@ def test_las_reglas_y_anexos_no_unen_sus_numeros():
     cuerpo = "Regla 2.1.- Para los efectos de la\n2.1.1. Los contribuyentes podrán optar;\ny\n2.1.2. Otra cosa."
     assert _normalize_body(cuerpo, "x").split("\n\n") == [
         "Regla 2.1.- Para los efectos de la", "2.1.1. Los contribuyentes podrán optar;", "y", "2.1.2. Otra cosa."]
+
+
+def test_tabla_con_rotulos_sobreimpresos():
+    from extractor.parsers.articulado import MARCA_TABLA, bloques_ilegibles
+    tabla = ("Apartado B, fracción IV del artículo 223 de esta Ley, fuente de extracción aguas superficiales\n"
+             "Zona de d isponZoinab dei dlispiondibilaidadd impeorxtadporoa rtadora\n"
+             "ZD 1 2 3 4\n1 $3.1599\n2 $1.9500 $1.7635\n3 $1.3452 $0.9744 $0.8224\n"
+             "4 $1.1004 $0.6869 $0.4250 $0.3394\n"
+             "Apartado C, del artículo 223 de esta Ley, fuente de extracción aguas superficiales")
+    assert bloques_ilegibles(tabla) == [(1, 7, MARCA_TABLA)]
+    legible = ("Zona de disponibilidad importadora\nZD 1 2 3 4\n1 $3.1599\n2 $1.9500 $1.7635")
+    assert bloques_ilegibles(legible) == []

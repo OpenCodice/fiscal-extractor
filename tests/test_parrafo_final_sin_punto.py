@@ -55,3 +55,19 @@ def test_la_porcion_invalidada_entre_corchetes_no_es_encabezado_pegado():
           "Las partes deberán cumplir con las resoluciones que dicte la Junta Permanente, una vez que causen estado.]\n\n"
           "_Artículo declarado inválido por sentencia de la SCJN DOF 07-12-2007_\n")
     assert encabezado_pegado(md) == []
+
+
+ORDENANZA = """Artículo 1,334.- (Se deroga).
+Artículo derogado DOF 19-10-2000
+Artículo 1,335.- (Se deroga).
+Artículo derogado DOF 19-10-2000
+Contraalmirante subordinado, Comodoro con mando, Comodoro subordinado, Capitán
+de Navío con mando de División, Capitán de Fragata con mando de División
+Artículo 1,336.- (Se deroga).
+Artículo derogado DOF 19-10-2000
+"""
+
+
+def test_un_articulo_derogado_no_tiene_parrafos():
+    unidades = parse_texto(ORDENANZA, start=1334)
+    assert all("Contraalmirante" not in u.cuerpo for u in unidades)

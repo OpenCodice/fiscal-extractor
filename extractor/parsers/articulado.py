@@ -608,6 +608,11 @@ _ABRE_ENCABEZADO_RE = re.compile(
     r"(?:T[ÍIíi]tulo|T[ÍI]TULO|Cap[íi]tulo|CAP[ÍI]TULO|Secci[óo]n|SECCI[ÓO]N|Libro|LIBRO|Apartado|APARTADO)\s+\S")
 
 
+# El artículo cuyo texto es solo la marca: 'Artículo 1,335.- (Se deroga).'
+_ARTICULO_DEROGADO_RE = re.compile(r"\d\S*\s*\(?\s*Se\s+deroga\s*\)?\.?$", re.IGNORECASE)
+_NOTA_DE_DEROGADO_RE = re.compile(r"Art[íi]culo derogado\b", re.IGNORECASE)
+
+
 def es_prosa(texto: str, rotulos_largos: bool = False) -> bool:
     """¿`texto` (los renglones de un posible rótulo, juntos) es un párrafo? Con
     `rotulos_largos` (una ley donde casi todo artículo lleva su epígrafe, que
@@ -1120,12 +1125,34 @@ def es_tabla_girada(lineas: list[str]) -> bool:
     return sueltos >= MIN_SUELTOS_TABLA and letras >= MIN_LETRAS_TABLA
 
 
+# Dos rótulos de columna impresos uno sobre el otro salen con las letras
+# intercaladas: 'Zona de d isponZoinab dei dlispiondibilaidadd impeorxtadporoa
+# rtadora'. Lo delatan una mayúscula a media palabra y una palabra imposible
+# de larga, encima de las filas de cifras de su tabla.
+_MAYUSCULA_A_MEDIA_PALABRA_RE = re.compile(r"[a-záéíóúñ]{2}[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2}")
+_PALABRA_SOBREIMPRESA_RE = re.compile(r"[a-záéíóúñ]{14,}")
+MIN_FILAS_SOBREIMPRESA = 2
+
+
+def _renglon_sobreimpreso(s: str) -> bool:
+    return bool(_MAYUSCULA_A_MEDIA_PALABRA_RE.search(s) and _PALABRA_SOBREIMPRESA_RE.search(s))
+
+
 def bloques_de_tabla(texto: str) -> list[tuple[int, int]]:
-    """Rangos de renglones [ini, fin) de cada tabla girada del texto."""
+    """Rangos de renglones [ini, fin) de cada tabla girada del texto, y de cada
+    tabla con sus rótulos sobreimpresos."""
     lineas = texto.split("\n")
     bloques: list[tuple[int, int]] = []
     i = 0
     while i < len(lineas):
+        if _renglon_sobreimpreso(lineas[i]):
+            j = i + 1
+            while j < len(lineas) and _linea_de_formula(lineas[j]):
+                j += 1
+            if j - i > MIN_FILAS_SOBREIMPRESA:
+                bloques.append((i, j))
+                i = j
+                continue
         if not _renglon_de_tabla(lineas[i]):
             i += 1
             continue
@@ -1903,6 +1930,19 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                 return False
         return False
 
+    def sigue_a_derogado(i: int) -> bool:
+        """¿El artículo que precede al renglón `i` está derogado entero
+        ('Artículo 1,335.- (Se deroga).' y su nota)? No tiene párrafos: lo que
+        le sigue es un rótulo, por largo que sea."""
+        cuerpo = []
+        for k in range(i - 1, max(i - 1 - MAX_LINEAS_ENCABEZADO, -1), -1):
+            s = lineas[k].strip()
+            if ART.match(s):
+                return bool(_ARTICULO_DEROGADO_RE.search(" ".join([s] + cuerpo[::-1])))
+            if s and not es_nota_bloque(s) and not _NOTA_DE_DEROGADO_RE.match(s):
+                cuerpo.append(s)
+        return False
+
     def parrafo_hasta_articulo(i: int) -> bool:
         """¿Los renglones desde `i` hasta el siguiente artículo, encabezado o
         nota forman un párrafo sin punto final, y no un rótulo? Una nota de la
@@ -1910,6 +1950,8 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
         pero no del artículo anterior; un encabezado con su nombre largo
         ('Capítulo III BIS' / 'Suspensión, Extinción, Revocación…') tampoco."""
         if lineas[i].strip().startswith("Nota:") or _ABRE_ENCABEZADO_RE.match(lineas[i].strip()):
+            return False
+        if sigue_a_derogado(i):
             return False
         renglones = []
         for j in range(i, len(lineas)):
