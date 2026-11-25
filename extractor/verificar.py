@@ -26,6 +26,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
+from . import tablas
 from .parsers import articulado, criterios, reglas
 from .disposicion import dir_metadata, dir_unidades, unidad_de_ruta
 from .registro import POR_CLAVE, Documento
@@ -57,19 +58,26 @@ def _es_encabezado(texto: str) -> bool:
                 and not re.search(r"\bArt[íi]culo\s+\d", texto))
 
 
-def paginas_crudas(pdf_path: str) -> list[str]:
-    """Texto crudo por página. Extraerlo es lo caro de toda la verificación, así
-    que se guarda junto al PDF y se reutiliza mientras el PDF no cambie."""
+def lee_por_celdas(doc: Documento) -> bool:
+    """Las leyes de la Cámara de Diputados leen sus tablas por celdas, igual
+    que el parser (`articulado.texto_limpio`)."""
+    return doc.parser == "articulado" and not doc.medio
+
+
+def paginas_crudas(pdf_path: str, celdas: bool = False) -> list[str]:
+    """Texto crudo por página; con `celdas`, las tablas con bordes leídas por
+    celdas (`extractor.tablas`). Extraerlo es lo caro de toda la verificación,
+    así que se guarda junto al PDF y se reutiliza mientras el PDF no cambie."""
     pdf = Path(pdf_path)
-    cache = pdf.with_suffix(".paginas.json")
-    firma = [pdf.stat().st_size, pdf.stat().st_mtime_ns]
+    cache = pdf.with_suffix(".celdas.json" if celdas else ".paginas.json")
+    firma = [pdf.stat().st_size, pdf.stat().st_mtime_ns] + ([tablas.VERSION] if celdas else [])
     if cache.exists():
         guardado = json.loads(cache.read_text(encoding="utf-8"))
         if guardado.get("firma") == firma:
             return guardado["paginas"]
     import pdfplumber
     with pdfplumber.open(pdf_path) as doc:
-        paginas = [page.extract_text() or "" for page in doc.pages]
+        paginas = tablas.textos(doc) if celdas else [page.extract_text() or "" for page in doc.pages]
     cache.write_text(json.dumps({"firma": firma, "paginas": paginas}, ensure_ascii=False),
                      encoding="utf-8")
     return paginas
@@ -77,7 +85,7 @@ def paginas_crudas(pdf_path: str) -> list[str]:
 
 def texto_limpio(doc: Documento, pdf_path: str) -> str:
     """El mismo texto sin encabezados/pies que consume el parser del documento."""
-    paginas = paginas_crudas(pdf_path)
+    paginas = paginas_crudas(pdf_path, lee_por_celdas(doc))
     if doc.parser == "articulado":
         return articulado.limpiar_paginas(paginas, doc)
     if doc.parser == "reglas":

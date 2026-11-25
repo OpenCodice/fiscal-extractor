@@ -266,9 +266,21 @@ fragmentos sueltos. `articulado` sustituye cada una por un párrafo
 variables) se conserva. `cobertura` no busca la marca literal: exige que el
 texto del PDF que sustituye sea fórmula para el mismo detector.
 
-Una tabla con los rótulos de sus columnas girados sale igual de desarmada
-(letras y cifras sueltas, una por renglón: las cuotas por zona de la Ley
-Federal de Derechos, artículo 223 Bis) y lleva su marca,
+Las tablas con bordes de las leyes de la Cámara se leen por celdas
+(`extractor/tablas.py`), no por renglones: `extract_text` arma renglones por
+altura, y en una fila cuya descripción ocupa varios renglones el número y el
+porcentaje, centrados a su lado, caían en un renglón u otro según dónde
+cortara la página (el 513 de la LFT cambiaba de un PDF al siguiente sin
+reforma); un rótulo de columna girado salía letra por letra entre las cifras
+(las cuotas del 223 Bis de la LFD). Solo se releen las tablas que lo necesitan
+(una celda de varios renglones junto a otra, texto girado, o una fila que
+sigue de la página anterior, que vuelve a su fila); cada fila sale en un
+renglón, sus celdas de izquierda a derecha. Dos textos impresos uno sobre el
+otro se leen en el orden en que el PDF los escribe. `cobertura` lee el PDF
+igual (`paginas_crudas(pdf, celdas=True)`).
+
+Una tabla sin bordes con los rótulos de sus columnas girados sale desarmada
+(letras y cifras sueltas, una por renglón) y lleva su marca,
 `[Tabla: consultar el PDF oficial, página N]` (`bloques_de_tabla`): muchos
 renglones cortos seguidos, varios de un solo carácter y varios de letras
 minúsculas sueltas, sin signos de la fuente de símbolos. Una tabla legible o

@@ -20,6 +20,7 @@ from datetime import date
 
 import pdfplumber
 
+from .. import tablas
 from ..modelo import Unidad
 from ..perfil import FEDERAL, Perfil, Rasgo, de as _perfil
 from ..registro import Documento
@@ -787,7 +788,8 @@ def texto_limpio(pdf_path: str, doc: Documento) -> str:
     """Texto que segmenta el parser: sin encabezados/pies y con las fórmulas
     ilegibles ya sustituidas por su marca."""
     with pdfplumber.open(pdf_path) as pdf:
-        paginas = [page.extract_text() or "" for page in pdf.pages]
+        paginas = ([page.extract_text() or "" for page in pdf.pages] if doc.medio
+                   else tablas.textos(pdf))
     return limpiar_paginas(paginas, doc, formulas=True)
 
 
@@ -1125,34 +1127,12 @@ def es_tabla_girada(lineas: list[str]) -> bool:
     return sueltos >= MIN_SUELTOS_TABLA and letras >= MIN_LETRAS_TABLA
 
 
-# Dos rótulos de columna impresos uno sobre el otro salen con las letras
-# intercaladas: 'Zona de d isponZoinab dei dlispiondibilaidadd impeorxtadporoa
-# rtadora'. Lo delatan una mayúscula a media palabra y una palabra imposible
-# de larga, encima de las filas de cifras de su tabla.
-_MAYUSCULA_A_MEDIA_PALABRA_RE = re.compile(r"[a-záéíóúñ]{2}[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2}")
-_PALABRA_SOBREIMPRESA_RE = re.compile(r"[a-záéíóúñ]{14,}")
-MIN_FILAS_SOBREIMPRESA = 2
-
-
-def _renglon_sobreimpreso(s: str) -> bool:
-    return bool(_MAYUSCULA_A_MEDIA_PALABRA_RE.search(s) and _PALABRA_SOBREIMPRESA_RE.search(s))
-
-
 def bloques_de_tabla(texto: str) -> list[tuple[int, int]]:
-    """Rangos de renglones [ini, fin) de cada tabla girada del texto, y de cada
-    tabla con sus rótulos sobreimpresos."""
+    """Rangos de renglones [ini, fin) de cada tabla girada del texto."""
     lineas = texto.split("\n")
     bloques: list[tuple[int, int]] = []
     i = 0
     while i < len(lineas):
-        if _renglon_sobreimpreso(lineas[i]):
-            j = i + 1
-            while j < len(lineas) and _linea_de_formula(lineas[j]):
-                j += 1
-            if j - i > MIN_FILAS_SOBREIMPRESA:
-                bloques.append((i, j))
-                i = j
-                continue
         if not _renglon_de_tabla(lineas[i]):
             i += 1
             continue
