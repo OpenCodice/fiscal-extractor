@@ -44,8 +44,9 @@
     {
       "estado": "yucatan",
       "situacion": "pendiente",
-      "intentos": 0,
-      "pista": "La constitución del estado se descarga de https://www.congresoyucatan.gob.mx/storage/documentos/constitucion.pdf."
+      "intentos": 1,
+      "pista": "La constitución del estado se descarga de https://www.congresoyucatan.gob.mx/storage/documentos/constitucion.pdf.",
+      "ultimo_intento": "2026-11-25"
     },
     {
       "estado": "edomex",
