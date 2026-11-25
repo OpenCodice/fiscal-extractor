@@ -20,10 +20,11 @@ from collections import Counter
 
 # Cambiar la lectura invalida el texto por página que `verificar` guarda junto
 # al PDF.
-VERSION = 2
+VERSION = 4
 MIN_BORDES = 4
 MIN_SOBREIMPRESO = 4
 MIN_ANCHO_CELDA = 6
+TOLERANCIA_COLUMNA = 2
 # Dos textos impresos uno sobre el otro salen con las letras intercaladas
 # ('isponZoinab dei dlispiondibilaidadd'): una mayúscula a media palabra los
 # delata, y la geometría lo confirma.
@@ -155,12 +156,16 @@ def _renglon(fila: dict) -> str:
     return " ".join(c[1] for c in fila["celdas"] if c and c[1])
 
 
+def _mismas_columnas(a: list[int], b: list[int]) -> bool:
+    return len(a) == len(b) and all(abs(x - y) <= TOLERANCIA_COLUMNA for x, y in zip(a, b))
+
+
 def _sigue(anterior: dict, tabla: dict) -> bool:
     """¿La primera fila de `tabla` es el resto de la última de `anterior`,
     partida por el salto de página? Mismas columnas, le faltan celdas que la
     fila anterior sí tiene, y o bien viene vacía la que identifica la fila (la
     primera) o su texto sigue en minúscula."""
-    if anterior["bordes"] != tabla["bordes"] or not anterior["filas"]:
+    if not anterior["filas"] or not _mismas_columnas(anterior["bordes"], tabla["bordes"]):
         return False
     primera, ultima = tabla["filas"][0]["celdas"], anterior["filas"][-1]["celdas"]
     if len(primera) != len(ultima) or not primera or primera[0] is None:
@@ -227,17 +232,47 @@ def textos(pdf) -> list[str]:
                         ln["text"] = _sin_sobreimpresion(page, ln)
                 renglones[n] = lineas
                 paginas[n] = "\n".join(ln["text"] for ln in lineas)
+    abre: dict[int, int] = {}
     for n, lista in enumerate(tablas):
-        if not any(t["necesita"] for t in lista):
+        corte = abre.pop(n, None)
+        if not lista:
+            if corte is not None:
+                lineas = paginas[n].split("\n")
+                paginas[n] = "\n".join(lineas[:corte] + [""] + lineas[corte:])
             continue
-        salida, puestas = [], set()
-        for r in renglones[n]:
-            k = next((k for k, t in enumerate(lista) if t["necesita"] and _dentro(r, t)), None)
+        salida, puestas, cierra = [], set(), False
+        originales = paginas[n].split("\n")
+        for i, r in enumerate(renglones[n]):
+            if i == corte:
+                salida.append("")
+            k = next((k for k, t in enumerate(lista) if _dentro(r, t)), None)
             if k is None:
+                # El renglón en blanco cierra la tabla, se haya releído o no:
+                # su última fila acaba en una cifra, no en punto, y el párrafo
+                # que sigue no es suyo. Al pie de la página no se pone: la
+                # tabla puede seguir en la otra.
+                if not _pie(r["text"]):
+                    if cierra:
+                        salida.append("")
+                    cierra = False
+                salida.append(r["text"])
+                continue
+            cierra = True
+            if not lista[k]["necesita"]:
                 salida.append(r["text"])
             elif k not in puestas:
                 puestas.add(k)
                 salida += [s for s in map(_renglon, lista[k]["filas"]) if s]
+        # La tabla que llega al pie de la página se cierra igual si la página
+        # siguiente no la continúa: bajo su membrete (los renglones con que
+        # empiezan las dos páginas) hay texto antes de cualquier tabla.
+        if cierra and n + 1 < len(paginas):
+            sigue = renglones.get(n + 1) or [{"text": s} for s in paginas[n + 1].split("\n")]
+            membrete = next((k for k, (x, y) in enumerate(zip(originales, (r["text"] for r in sigue)))
+                             if x != y), 0)
+            cuerpo = sigue[membrete:]
+            if cuerpo and not any(_dentro(cuerpo[0], t) for t in tablas[n + 1]):
+                abre[n + 1] = membrete
         paginas[n] = "\n".join(salida)
     return paginas
 

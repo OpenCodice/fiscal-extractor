@@ -60,3 +60,9 @@ def test_el_resto_de_una_fila_puede_traer_su_primera_celda():
                   "filas": [_fila((123, "2"), (300, "$2.35"), (360, "$1.97"), (420, ""))]}
     assert tablas._sigue(anterior, resto)
     assert not tablas._sigue(anterior, escalonada)
+
+
+def test_las_columnas_coinciden_aunque_el_borde_baile_un_punto():
+    anterior = {"bordes": [67, 121, 465], "filas": [_fila((67, "377"), (121, "Diplopía que limita los movimientos de ambos"), (465, "60%"))]}
+    resto = {"bordes": [67, 121, 464], "filas": [_fila((67, ""), (121, "ojos y reduce el campo visual."), (464, ""))]}
+    assert tablas._sigue(anterior, resto)

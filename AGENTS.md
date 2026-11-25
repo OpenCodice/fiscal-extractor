@@ -279,7 +279,10 @@ renglón, sus celdas de izquierda a derecha. Una tabla que no se puede leer
 con certeza queda como la da `extract_text`: una cuadrícula dudosa (columnas
 de un par de puntos, otra tabla encima), una celda que abarca varias filas o
 mezcla texto girado y derecho, o un resultado que no tenga, letra por letra,
-lo que hay en la tabla. Dos textos impresos uno sobre el
+lo que hay en la tabla. Tras cualquier tabla con bordes, releída o no, va
+un corte de párrafo cuando lo que sigue ya no es tabla (su última fila acaba
+en una cifra, no en punto), también si la tabla termina al pie de la página.
+Dos textos impresos uno sobre el
 otro se leen en el orden en que el PDF los escribe. `cobertura` lee el PDF
 igual (`paginas_crudas(pdf, celdas=True)`).
 
