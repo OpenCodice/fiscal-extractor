@@ -275,7 +275,11 @@ reforma); un rótulo de columna girado salía letra por letra entre las cifras
 (las cuotas del 223 Bis de la LFD). Solo se releen las tablas que lo necesitan
 (una celda de varios renglones junto a otra, texto girado, o una fila que
 sigue de la página anterior, que vuelve a su fila); cada fila sale en un
-renglón, sus celdas de izquierda a derecha. Dos textos impresos uno sobre el
+renglón, sus celdas de izquierda a derecha. Una tabla que no se puede leer
+con certeza queda como la da `extract_text`: una cuadrícula dudosa (columnas
+de un par de puntos, otra tabla encima), una celda que abarca varias filas o
+mezcla texto girado y derecho, o un resultado que no tenga, letra por letra,
+lo que hay en la tabla. Dos textos impresos uno sobre el
 otro se leen en el orden en que el PDF los escribe. `cobertura` lee el PDF
 igual (`paginas_crudas(pdf, celdas=True)`).
 
