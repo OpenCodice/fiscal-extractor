@@ -109,3 +109,14 @@ FUERA = [
      "Los títulos de sus secciones quedan pegados al artículo anterior y el último artículo "
      "absorbe los decretos de reforma que siguen a la ley."),
 ]
+
+# Reparación autónoma (scripts/reparacion.py promover, 2026-11-25): estas leyes
+# de FUERA ya quedan con build y auditar limpios sobre su PDF; la vigilancia
+# las da de alta tras su revisión completa.
+_A_LEYES = {
+    "yucatan/codigo-de-la-administracion-publica",
+    "yucatan/ley-de-asentamientos-humanos-ordenamiento-territorial-y-desarrollo-urbano",
+    "yucatan/ley-organica-del-poder-judicial",
+}
+LEYES = list(LEYES) + [d for d, _ in FUERA if d.clave in _A_LEYES]
+FUERA = [(d, m) for d, m in FUERA if d.clave not in _A_LEYES]
