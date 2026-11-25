@@ -20,11 +20,12 @@ from collections import Counter
 
 # Cambiar la lectura invalida el texto por página que `verificar` guarda junto
 # al PDF.
-VERSION = 4
+VERSION = 5
 MIN_BORDES = 4
 MIN_SOBREIMPRESO = 4
 MIN_ANCHO_CELDA = 6
 TOLERANCIA_COLUMNA = 2
+_CIERRA_ORACION = ".;:"
 # Dos textos impresos uno sobre el otro salen con las letras intercaladas
 # ('isponZoinab dei dlispiondibilaidadd'): una mayúscula a media palabra los
 # delata, y la geometría lo confirma.
@@ -164,7 +165,8 @@ def _sigue(anterior: dict, tabla: dict) -> bool:
     """¿La primera fila de `tabla` es el resto de la última de `anterior`,
     partida por el salto de página? Mismas columnas, le faltan celdas que la
     fila anterior sí tiene, y o bien viene vacía la que identifica la fila (la
-    primera) o su texto sigue en minúscula."""
+    primera), o su texto sigue en minúscula, o el de la fila anterior no había
+    cerrado la oración."""
     if not anterior["filas"] or not _mismas_columnas(anterior["bordes"], tabla["bordes"]):
         return False
     primera, ultima = tabla["filas"][0]["celdas"], anterior["filas"][-1]["celdas"]
@@ -174,7 +176,9 @@ def _sigue(anterior: dict, tabla: dict) -> bool:
     vacias = [k for k, c in enumerate(primera) if c and not c[1]]
     if not llenas or not vacias or any(not (ultima[k] and ultima[k][1]) for k in llenas):
         return False
-    return 0 in vacias or primera[llenas[0]][1][:1].islower()
+    k = llenas[0]
+    return (0 in vacias or primera[k][1][:1].islower()
+            or ultima[k][1][-1:] not in _CIERRA_ORACION)
 
 
 def _unir(resto: dict, fila: dict) -> None:

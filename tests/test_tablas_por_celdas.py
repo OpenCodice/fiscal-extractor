@@ -66,3 +66,12 @@ def test_las_columnas_coinciden_aunque_el_borde_baile_un_punto():
     anterior = {"bordes": [67, 121, 465], "filas": [_fila((67, "377"), (121, "Diplopía que limita los movimientos de ambos"), (465, "60%"))]}
     resto = {"bordes": [67, 121, 464], "filas": [_fila((67, ""), (121, "ojos y reduce el campo visual."), (464, ""))]}
     assert tablas._sigue(anterior, resto)
+
+
+def test_el_resto_puede_empezar_con_mayuscula_si_la_fila_no_habia_cerrado():
+    bordes = [120, 357, 410, 463]
+    anterior = {"bordes": bordes, "filas": [_fila((120, "Descargas preponderantemente biodegradables"), (357, "1,000"), (410, "3,000"), (463, "1,000"))]}
+    resto = {"bordes": bordes, "filas": [_fila((120, "Cría y explotación de animales."), (357, ""), (410, ""), (463, ""))]}
+    cerrada = {"bordes": bordes, "filas": [_fila((120, "Descargas de comercio y servicios."), (357, "360"), (410, "1,000"), (463, "333"))]}
+    assert tablas._sigue(anterior, resto)
+    assert not tablas._sigue(cerrada, resto)
