@@ -213,7 +213,10 @@ def _es_nombre_suelto(s: str, continuacion: bool = False,
     estatal = perfil.estatal
     if not s or len(s) > 150 or "DOF" in s or s.startswith("("):
         return False
-    if NOTA_REFORMA_RE.match(s):
+    if NOTA_REFORMA_RE.match(s) and not (
+            # Yucatán: toda nota lleva su fecha; sin cifras, 'Heredero declarado
+            # proveniente de legatario…' es el epígrafe del artículo.
+            perfil.lee(Rasgo.NOTA_SIN_FECHA_NO_ES_NOTA) and not re.search(r"\d", s)):
         return False                      # 'Numeral declarado inválido …' es nota, no nombre
     if MARCA_FORMULA_RE.match(s):
         return False
@@ -904,13 +907,15 @@ def _interlineado(paginas: list[list[dict]]) -> float | None:
                      if veces >= _MIN_FRECUENCIA_INTERLINEADO * mayor))
 
 
-def cortes_geometricos(paginas: list[list[dict]], texto: str) -> dict[tuple[str, str], bool]:
+def cortes_geometricos(paginas: list[list[dict]], texto: str,
+                       paso: float | None = None) -> dict[tuple[str, str], bool]:
     """(renglón, renglón siguiente) del texto limpio → True si el PDF abre ahí
     un párrafo, False si el primero sigue en el segundo. Solo los pares que la
     geometría decide; un par que aparece dos veces con decisiones distintas se
     descarta. Cada renglón del texto se busca, en orden, entre los renglones de
-    las páginas (los encabezados y pies quitados no tienen pareja)."""
-    paso = _interlineado(paginas)
+    las páginas (los encabezados y pies quitados no tienen pareja). `paso`, si
+    se da, es el interlineado; si no, se mide en todas las páginas."""
+    paso = paso or _interlineado(paginas)
     if not paso:
         return {}
     crudos = [(n, k, r) for n, p in enumerate(paginas) for k, r in enumerate(p)]
@@ -1042,7 +1047,39 @@ def texto_y_cortes(pdf_path: str, doc: Documento) -> tuple[str, dict[tuple[str, 
         paginas = [page.extract_text() or "" for page in pdf.pages]
         geometria = _renglones_con_geometria(pdf)
     texto = limpiar_paginas(paginas, doc, formulas=True)
-    return texto, cortes_geometricos(geometria, texto)
+    paso = None
+    perfil = perfil_de(doc)
+    if perfil.lee(Rasgo.INTERLINEADO_DE_LA_LEY):
+        paso = _interlineado_de_la_ley(paginas, geometria, texto, perfil)
+    return texto, cortes_geometricos(geometria, texto, paso)
+
+
+def _interlineado_de_la_ley(paginas: list[str], geometria: list[list[dict]], texto: str,
+                            perfil: Perfil) -> float | None:
+    """Yucatán (`Rasgo.INTERLINEADO_DE_LA_LEY`): tras los transitorios, el PDF
+    compila los decretos de reforma con un interlineado más cerrado (12 puntos
+    contra 19 o 21 de la ley) y en un código con muchas reformas son la mayoría
+    de los renglones: medido en todo el PDF, el paso de renglón a renglón de la
+    ley parecería de párrafo a párrafo. Se mide solo en las páginas que van del
+    rótulo del artículo primero al último renglón antes de los transitorios.
+    Si no se ubican, None (se mide en todo el PDF, como siempre)."""
+    ley = texto
+    if perfil.lee(Rasgo.PREAMBULO_ANTES_DEL_ARTICULO_1):
+        ley = _desde_el_articulo_1(ley, ARTICULO_ESTATAL_RE)
+    ley = _solo_articulado(ley, perfil)
+    renglones = [ln.strip() for ln in ley.split("\n") if len(ln.strip()) >= 20]
+    if not renglones:
+        return None
+    primero = next((ln for ln in renglones if ARTICULO_ESTATAL_RE.match(ln)), None)
+    if primero is None:
+        return None
+    desde = next((n for n, p in enumerate(paginas) if primero[:40] in p), None)
+    if desde is None:
+        return None
+    hasta = next((n for n in range(desde, len(paginas)) if renglones[-1][:40] in paginas[n]), None)
+    if hasta is None:
+        return None
+    return _interlineado(geometria[desde:hasta + 1])
 
 
 # Fórmulas matemáticas compuestas en el PDF con fuentes de símbolos: pdfplumber
@@ -1324,6 +1361,41 @@ def _solo_articulado(texto: str, estatal: bool | Perfil = False) -> str:
     return texto
 
 
+def _desde_el_articulo_1(texto: str, ART: re.Pattern, start: int = 1) -> str:
+    """Yucatán (`Rasgo.PREAMBULO_ANTES_DEL_ARTICULO_1`): el PDF abre con la
+    portada, un índice que repite cada rótulo con su epígrafe ('ARTÍCULO 1.
+    Objeto' / 'ARTÍCULO 2. Supletoriedad' … y al final 'TRANSITORIOS') y el
+    decreto de expedición con su exposición de motivos, que puede citar otro
+    'Artículo 1o.'. Nada de eso es la ley, y el 'TRANSITORIOS' del índice
+    cortaría todo el texto. La ley empieza en el primer rótulo del artículo
+    `start` cuyo siguiente rótulo es el del artículo que sigue y que tiene
+    entre los dos texto de un artículo (un renglón que cierra con punto y al
+    menos 150 caracteres; en el índice no hay ninguno), con los
+    encabezados que lo preceden (renglones sin puntuación final). Sin ese
+    rótulo, el texto queda igual."""
+    lineas = texto.split("\n")
+    rotulos = []
+    for i, ln in enumerate(lineas):
+        m = ART.match(ln.strip())
+        if m and not (m.group(2) or m.group(3) or m.group(4)):
+            rotulos.append((i, int(m.group(1).replace(",", ""))))
+    for (i, n), (j, sig) in zip(rotulos, rotulos[1:]):
+        if n != start or sig != start + 1:
+            continue
+        cuerpo = [lineas[k].strip() for k in range(i, j)]
+        if (sum(len(c) for c in cuerpo) < 150
+                or not any(c.endswith((".", ";", ":")) for c in cuerpo)):
+            continue
+        inicio = i
+        while (inicio > 0 and i - inicio < 15
+               and not lineas[inicio - 1].strip().endswith((".", ";", ":", ","))):
+            inicio -= 1
+        while inicio < i and not lineas[inicio].strip():
+            inicio += 1
+        return "\n".join(lineas[inicio:])
+    return texto
+
+
 def _sin_rotulo_final(texto: str) -> str:
     """Quita los renglones finales que solo son el rótulo en mayúsculas del
     artículo del decreto que sigue ('DISPOSICIONES DE VIGENCIA TEMPORAL DE LA
@@ -1362,9 +1434,13 @@ def _articulo_justo_despues(lineas: list[str], i: int, abre_articulo) -> bool:
     return j is not None and abre_articulo(lineas[j].strip(), j)
 
 
+_EPIGRAFE_ACABA_EN_PARTICULA_RE = re.compile(
+    r"\b(?:como|de|del|la|las|el|los|y|e|o|u|en|a|al|para|por|con|sobre|entre)$")
+
+
 def _rotulo_con_comas_antes_de_articulo(s: str, anterior: str, lineas: list[str], i: int,
                                         ART: re.Pattern, estatal: bool,
-                                        es_nota=None) -> bool:
+                                        es_nota=None, tras_particula: bool = False) -> bool:
     """Estatal: un epígrafe con comas ('Universalidad, laicidad y gratuidad en la
     educación pública') pegado al rótulo del artículo que encabeza. Solo si cierra
     una oración del artículo anterior, no acaba en puntuación y el renglón
@@ -1388,6 +1464,17 @@ def _rotulo_con_comas_antes_de_articulo(s: str, anterior: str, lineas: list[str]
     sig = resto[0] if resto else ""
     if ART.match(sig):
         return True
+    # Yucatán (`Rasgo.EPIGRAFE_PARTIDO_TRAS_PARTICULA`): el primer renglón acaba
+    # en una palabra que no cierra un nombre y el segundo abre con mayúscula
+    # ('Atribuciones del Tribunal Superior de Justicia del Estado, erigido como' /
+    # 'Tribunal Constitucional'). El rótulo va justo debajo del segundo renglón
+    # (aunque sea 'Artículo 34.- Se deroga.', que `es_nota` salta).
+    if tras_particula and _EPIGRAFE_ACABA_EN_PARTICULA_RE.search(s):
+        siguientes = [ln.strip() for ln in lineas[i + 1:i + 4] if ln.strip()]
+        if (len(siguientes) > 1 and siguientes[0][:1].isupper() and len(siguientes[0]) <= 100
+                and not re.search(r"[.;:,]", siguientes[0]) and "(" not in siguientes[0]
+                and ART.match(siguientes[1])):
+            return True
     # Epígrafe envuelto a un segundo renglón en minúscula ('Procedimiento para la
     # revisión, modificación' / 'y actualización de los programas municipales').
     return bool(sig[:1].islower() and len(sig) <= 100 and not sig.endswith((".", ";", ":"))
@@ -1730,6 +1817,8 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
     perfil = perfil or _perfil(estatal)
     estatal, lee = perfil.estatal, perfil.lee
     ART = ARTICULO_ESTATAL_RE if estatal else ARTICULO_RE
+    if lee(Rasgo.PREAMBULO_ANTES_DEL_ARTICULO_1):
+        clean_text = _desde_el_articulo_1(clean_text, ART, start)
     texto = _solo_articulado(_articulos_ordinales(clean_text), perfil)
     if lee(Rasgo.UNO_COMO_I):
         # El PDF escribe a veces la 'I' por el 1 en el número ('ARTÍCULO 22I BIS').
@@ -2175,13 +2264,19 @@ def parse_texto(clean_text: str, start: int = 1, *, huecos: bool = False,
                     and (not stripped.endswith(",")
                          # Epígrafe envuelto que cierra su primer renglón con coma.
                          or (usa_epigrafes() and _rotulo_con_comas_antes_de_articulo(
-                             stripped, anterior, lineas, i, ART, lee(Rasgo.EPIGRAFE_CON_COMAS), es_nota_bloque)))
+                             stripped, anterior, lineas, i, ART, lee(Rasgo.EPIGRAFE_CON_COMAS), es_nota_bloque,
+                             tras_particula=lee(Rasgo.EPIGRAFE_PARTIDO_TRAS_PARTICULA))))
                     # 'Derogado' tras la última fracción es texto del artículo.
                     and not (lee(Rasgo.DEROGADO_FINAL_ES_TEXTO) and MARCA_DEROGADO_RE.fullmatch(stripped))
                     and (epigrafe_max is None or es_rotulo_corto(stripped, epigrafe_max)
                          or (usa_epigrafes() and _rotulo_con_comas_antes_de_articulo(
-                             stripped, anterior, lineas, i, ART, lee(Rasgo.EPIGRAFE_CON_COMAS), es_nota_bloque)))
+                             stripped, anterior, lineas, i, ART, lee(Rasgo.EPIGRAFE_CON_COMAS), es_nota_bloque,
+                             tras_particula=lee(Rasgo.EPIGRAFE_PARTIDO_TRAS_PARTICULA))))
                     and (anterior.endswith((".", ";", ":")) or es_nota_bloque(anterior)
+                         # Yucatán: '…después de verificada la partición.”' (la
+                         # comilla de cierre de la fuente) también cierra la oración.
+                         or (lee(Rasgo.EPIGRAFE_TRAS_COMILLA_DE_CIERRE)
+                             and anterior.endswith((".”", '."')))
                          # Estatal: un artículo derogado en una sola línea
                          # ('Artículo 28. (DEROGADO, P.O. …)') y su epígrafe
                          # marginal, con el artículo siguiente debajo.

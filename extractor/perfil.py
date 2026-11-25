@@ -51,6 +51,9 @@ class Rasgo(Enum):
     EPIGRAFE_TRAS_PARRAFO_SIN_PUNTO = "epigrafe-tras-parrafo-sin-punto"
     NOTA_ENVUELTA_NO_ES_ROTULO = "nota-envuelta-no-es-rotulo"
     EPIGRAFE_SIN_ORACIONES = "epigrafe-sin-oraciones"
+    EPIGRAFE_TRAS_COMILLA_DE_CIERRE = "epigrafe-tras-comilla-de-cierre"
+    EPIGRAFE_PARTIDO_TRAS_PARTICULA = "epigrafe-partido-tras-particula"
+    NOTA_SIN_FECHA_NO_ES_NOTA = "nota-sin-fecha-no-es-nota"
     # --- notas dentro de un bloque de encabezado ----------------------------
     NOTA_DE_ENCABEZADO_TRAS_ARTICULO = "nota-de-encabezado-tras-articulo"
     NOTA_SIGUE_EN_BLOQUE = "nota-sigue-en-bloque"
@@ -64,6 +67,9 @@ class Rasgo(Enum):
     BIS_ANTES_DE_SU_BASE = "bis-antes-de-su-base"
     CITA_DE_ESTE_CODIGO = "cita-de-este-codigo"
     ORDINAL_SIN_O = "ordinal-sin-o"
+    # --- dónde empieza la ley -----------------------------------------------
+    PREAMBULO_ANTES_DEL_ARTICULO_1 = "preambulo-antes-del-articulo-1"
+    INTERLINEADO_DE_LA_LEY = "interlineado-de-la-ley"
 
 
 @dataclass(frozen=True)

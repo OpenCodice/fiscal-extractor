@@ -13,6 +13,19 @@ notas de reforma van en un renglón propio, después de lo que anotan:
 import re
 
 from . import ley
+from ..perfil import ESTATAL_BASE, Rasgo
+
+# Cada PDF abre con portada, índice ('ARTÍCULO 1. Objeto' … 'TRANSITORIOS') y el
+# decreto de expedición con su exposición de motivos: la ley empieza después.
+# Tras los transitorios, los decretos de reforma van a interlineado más cerrado
+# que la ley (ver `articulado._interlineado_de_la_ley`). Sus notas siempre
+# llevan fecha, y un epígrafe puede seguir a una oración que cierra con comilla
+# ('…la partición.”'), o partirse tras una partícula ('…erigido como' /
+# 'Tribunal Constitucional').
+PERFIL = ESTATAL_BASE.con(Rasgo.PREAMBULO_ANTES_DEL_ARTICULO_1, Rasgo.INTERLINEADO_DE_LA_LEY,
+                          Rasgo.EPIGRAFE_TRAS_COMILLA_DE_CIERRE,
+                          Rasgo.EPIGRAFE_PARTIDO_TRAS_PARTICULA,
+                          Rasgo.NOTA_SIN_FECHA_NO_ES_NOTA)
 
 MEDIO = "Diario Oficial del Gobierno del Estado de Yucatán"
 _BASE = "https://www.congresoyucatan.gob.mx/legislacion/"
@@ -26,7 +39,10 @@ _OBJETO = (r"(?:n[uú]meral(?:es)?|art[íi]u?c?u?los?|p[áa]rrafos?|fracci[óo]n
            r"denominaci[óo]n|ep[íi]grafe|subincisos?|disposici[óo]n|transitorios?|letras?|"
            r"se\s+(?:modifica|recorre|adiciona|reforma|deroga)|nota\s+aclaratoria|"
            r"fe\s+de\s+erratas)")
-NOTAS = (r"^(?i:(?!art[íi]culo\s+\d)" + _OBJETO + r"\b[^\n]{0,100}?\bD\.?\s?O\.?\s*\d[^\n]{0,80})$")
+# Algunas omiten 'D.O.' ('Artículo reformado 28-08-2025') o el día ('Párrafo
+# adicionado D.O. XX-09-2021').
+NOTAS = (r"^(?i:(?!art[íi]culo\s+\d)" + _OBJETO
+         + r"\b[^\n]{0,100}?(?:\bD\.?\s?O\.?\s*(?:\d|XX\b)[^\n]{0,80}|\s\d{1,2}-\d{1,2}-\d{4}))$")
 
 
 def _yuc(nombre: str, sigla: str, carpeta: str, archivo: str, **kw) -> object:
