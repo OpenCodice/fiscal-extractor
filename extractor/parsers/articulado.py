@@ -437,10 +437,11 @@ _MEMBRETE_COMPLETO_RE = re.compile(
 
 
 # En el membrete, a 'Secretaría General' no le sigue nada o le sigue otro
-# nombre propio. Seguida de minúscula es una frase de la ley que cayó en el
-# primer renglón de la página ('Secretaría General de Gobierno o cualquier
-# otra oficina…', CNPCF 810).
-_FRASE_TRAS_SECRETARIA_RE = re.compile(r"Secretaría General\s+[a-záéíóúñ]")
+# nombre propio. Seguida de minúscula, con o sin coma, es una frase de la ley
+# que cayó en el primer renglón de la página ('Secretaría General de Gobierno
+# o cualquier otra oficina…', CNPCF 810; 'Secretaría General, de las
+# Secretarías de Servicios Parlamentarios y de Servicios', LOCG 38).
+_FRASE_TRAS_SECRETARIA_RE = re.compile(r"Secretaría General,?\s+[a-záéíóúñ]")
 
 
 def _es_membrete(s: str, prefijos: tuple[str, ...], arriba: bool) -> bool:
